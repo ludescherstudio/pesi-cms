@@ -1,0 +1,12 @@
+# Normalise line endings to LF in the repository.
+# pesi rewrites PHP source files at runtime; without this, a Windows checkout
+# would turn every save into a whole-file diff.
+* text=auto eol=lf
+
+*.php  text eol=lf
+*.md   text eol=lf
+LICENSE text eol=lf
+
+# The vendored Quill blob in pesi.php is one ~210 KB minified line.
+# Keep diffs readable by not attempting to merge it.
+pesi.php merge=binary linguist-vendored=false

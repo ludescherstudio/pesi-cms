@@ -1,0 +1,25 @@
+# ── pesi runtime artifacts — NEVER commit these ──────────────
+# Backups are byte-for-byte copies of your page source. Committing one to a
+# public repo leaks the full PHP source including PESI_PASSWORD.
+*.pesi-backup.*
+.pesi-throttle
+
+# Client uploads belong to the site, not to the pesi package.
+uploads/
+
+# Manual pre-change backups (see AGENTS.md)
+*.old
+
+# ── Local tooling / editor config ────────────────────────────
+.claude/
+.vscode/
+.idea/
+*.code-workspace
+
+# ── OS / sync junk ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+._sync_*.db
+.owncloudsync.log
+*.~lock.*
