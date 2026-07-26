@@ -2,11 +2,31 @@
 
 You are integrating **pesi**, a minimal inline CMS, into a finished PHP website.
 
+> **This is the installation guide.** It tells an agent how to add pesi *to a
+> customer site*. If you were sent here to change pesi's own source code, you
+> want `AGENTS.md` in the pesi repository instead.
+>
+> You do **not** need to copy this file into the customer project. Read it while
+> integrating, then leave it behind — only `pesi-core.php` and `pesi.php` belong
+> in the customer site (see the file structure below). If you do keep a copy
+> there, never rename it to `AGENTS.md`: most projects already have one of their
+> own, and it would collide with or overwrite it.
+
 ## What pesi cms does
 
 pesi cms lets clients edit text content via a web dashboard at `/pesi`. Edits are written directly into the PHP source files — no database, no JSON, no sync issues. The PHP file is always the single source of truth.
 
 Editable fields are marked in PHP with the `pesi()` function. The dashboard reads these markers, shows them as form fields, and writes changes back into the same PHP file.
+
+Three things you place in the markup, and what the client gets from each:
+
+| You write | Client can |
+|---|---|
+| `pesi('id', …)` | edit that text or swap that image |
+| `<!-- pesi:item team:1 -->…` | add / duplicate / reorder / delete entries in a list |
+| `<!-- pesi:toggle urlaub -->…` | show or hide that whole section |
+
+The client can never create pages, menu entries or layout — that stays your job.
 
 ## File structure
 
@@ -29,8 +49,16 @@ site/
 |-------|----------|-------------|
 | `$id` | yes | Unique field ID per file. snake_case, `[a-z0-9_]` only |
 | `$default` | yes | Content shown on the page. This IS the content — no separate storage |
-| `$type` | yes | `text`, `textarea`, or `richtext` |
-| `$label` | yes | Human-readable label shown in dashboard. **Always German.** |
+| `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, or `image` |
+| `$label` | optional in code — **always pass it** | Human-readable label shown in dashboard. **Always German.** Omit it and the client sees the raw field ID (`footer_firma`) instead of a readable name. |
+
+Duplicate IDs within one file are **not** an error — the parser silently keeps
+only the first occurrence, and the second location becomes uneditable. Keep them
+unique.
+
+The parser scans the **raw source text**, not executed code. A `pesi()` call
+inside an HTML comment or a commented-out PHP block is still picked up and shown
+in the dashboard. Delete dead code instead of commenting it out.
 
 ### Types
 
@@ -63,7 +91,16 @@ Richtext content always contains HTML. **Always use heredoc syntax:**
 PESI, 'richtext', 'Über-uns-Text') ?>
 ```
 
-**CRITICAL:** The closing `PESI` must start at column 0 (no indentation). It will visually break out of surrounding HTML indentation. This is correct and required by PHP.
+**CRITICAL — two things break this silently:**
+
+1. **The closing `PESI` must start at column 0** (no indentation). It will
+   visually break out of surrounding HTML indentation. This is correct and
+   required by PHP.
+2. **The opening marker must be `<<<'PESI'` — with the quotes.** `<<<PESI`
+   (without quotes) is valid PHP but pesi does **not** recognise it: the field
+   never appears in the dashboard, and there is no error message anywhere. The
+   quotes make it a *nowdoc*, which is what keeps `$` and `\` in client content
+   from being interpreted.
 
 ```php
 <!-- WRONG — indented closing tag causes PHP parse error -->
@@ -86,6 +123,39 @@ For `text` and `textarea`, use normal string syntax:
 ```php
 <?= pesi('phone', '+43 5522 12345', 'text', 'Telefonnummer') ?>
 ```
+
+### What richtext does to your markup — read before choosing it
+
+`richtext` content is **sanitised on every render**, not just on save. Only these
+tags survive:
+
+```
+p  br  strong  b  em  i  u  s  a  ul  ol  li  blockquote  h2  h3
+```
+
+Everything else is **unwrapped** — the tag disappears, its text content stays.
+`<script>`, `<style>`, `<iframe>`, `<object>` and `<embed>` are removed entirely,
+along with all `on*` handlers and any non-`http(s)`/`mailto:`/`tel:`/`/`/`#` link.
+On `<a>` only `href`, `title`, `target` and `rel` survive — **no `class`**.
+
+Consequences you must design around:
+
+- `<h1>`, `<div class="card">`, `<span>`, `<img>`, `<table>`, `<section>` inside a
+  richtext field are **destroyed on output**. Never put layout inside richtext.
+- Output is wrapped in `<div class="pesi-richtext">…</div>`, and a small `<style>`
+  block is injected once per page. A CSS rule like `.about > p` will no longer
+  match — write `.about p` or style `.pesi-richtext p`.
+- Need a styled box, a grid or an image? Build it in **static HTML** and put
+  `pesi()` fields *inside* it. Use `image` for pictures, never an `<img>` typed
+  into a richtext editor.
+
+This matters most for the pure-text pages below: an Impressum containing a
+`<table>` or `<h1>` will lose it. Convert those to `<h2>`/`<p>` first, or keep the
+table static outside the richtext field.
+
+For `text` and `textarea` the value is **HTML-escaped** on output — `<b>bold</b>`
+in such a field renders as visible `&lt;b&gt;` text, it does not format. That is
+intentional: use `richtext` when formatting is needed.
 
 ---
 
@@ -121,6 +191,16 @@ Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrit
 3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#c47a2a`.
 4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo.
 5. **`LANG`** — `'de'` for German-speaking clients (default), `'en'` if the site is clearly English-only.
+
+Leave these alone unless the site needs it — the defaults are sane:
+
+| Define | Default | Change it when |
+|---|---|---|
+| `PESI_UPLOAD_DIR` | `'uploads'` | the site already has a media folder you want to reuse. Relative to the root, no leading slash, no `..` |
+| `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size` |
+| `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
+| `PESI_BACKUP_ENABLED` | `true` | never in production. This is the rollback safety net |
+| `PESI_SYNTAX_CHECK` | `true` | never in production. Without it a broken save is not rolled back |
 
 ### Step 3 — Inventory pages
 
@@ -216,6 +296,93 @@ Replace each identified text with a `pesi()` call.
 - Contains HTML tags or needs formatting → `richtext` (always with heredoc)
 - Swappable photo (path is an image file) → `image`
 
+### Step 6b — Repeatable blocks and visibility toggles
+
+**Do not skip this step.** Both features exist only if *you* write the markers
+into the markup — the client can never create them from the dashboard. Skip it
+and the client simply never gets "add another team member" or "hide the holiday
+notice", even though pesi fully supports both.
+
+Both markers are plain HTML comments and are invisible in the rendered page.
+
+#### Repeatable blocks — `pesi:item`
+
+Use for any list the client should be able to grow or shrink: team members,
+services, testimonials, gallery entries, opening-hour rows, FAQ entries.
+
+Wrap **one** entry. pesi does the rest:
+
+```php
+<section class="team">
+<!-- pesi:item team:1 -->
+  <article class="member">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
+    <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
+  </article>
+<!-- /pesi:item -->
+</section>
+```
+
+Three rules — break any one of them and the feature fails silently:
+
+1. **Marker format** is `<!-- pesi:item GROUP:N -->` … `<!-- /pesi:item -->`.
+   `GROUP` matches `[a-z0-9_]+`, `N` is a number. Write the first entry as `:1`.
+2. **Every field ID inside the block must start with `GROUP_N_`** —
+   `team_1_name`, `team_1_rolle`, `team_1_foto`. Duplicating rewrites exactly
+   this prefix (`team_1_` → `team_2_`). A field without the prefix gets cloned
+   with an *identical* ID, and the parser then keeps only the first copy — the
+   duplicated entry appears half-empty and uneditable.
+3. **Write exactly one entry into the source, not three.** Entry `:1` is the
+   template that "+ Eintrag hinzufügen" clones. The client creates the rest.
+
+The dashboard then renders each entry as its own card with ↑ ↓ · Duplizieren ·
+Löschen, plus one "+ Eintrag hinzufügen" button under the group. pesi refuses to
+delete the last remaining entry, so the template can never be lost.
+
+Instance numbers are **stable and never renumbered**. After deleting `:2` you
+legitimately have `team:1` and `team:3`; new entries continue at `max + 1`. Do
+not renumber them by hand — the numbers only need to be unique within the group.
+
+#### Visibility toggle — `pesi:toggle`
+
+Use for content that is seasonally on and off: holiday notices, a temporary
+banner, "currently accepting new clients", a Christmas opening-hours box.
+
+```php
+<!-- pesi:toggle urlaub -->
+<div class="notice">
+  <p><?= pesi('urlaub_text', 'Vom 1.–15. August im Urlaub.', 'text', 'Urlaubshinweis') ?></p>
+</div>
+<!-- /pesi:toggle -->
+```
+
+The dashboard shows a "Sichtbarkeit" panel with an Einblenden/Ausblenden button
+per group. Hiding wraps the body in `<?php if (false): ?> … <?php endif; ?>`, so
+the content stays in the file and stays editable — it is only not rendered.
+
+- Group name matches `[a-z0-9_]+` and is shown to the client with underscores
+  turned into spaces and **only the first letter capitalised** — `urlaub` →
+  "Urlaub", `neue_klienten` → "Neue klienten". Pick single words that read well.
+- **Never hand-write the `if (false)` wrapper.** pesi matches those two strings
+  literally, including the exact spacing. Always ship the section *visible* and
+  let the client hide it.
+- Do not nest a toggle inside another toggle.
+- Fields inside a hidden section still appear in the dashboard. That is
+  intentional: the client prepares next year's notice while it stays invisible.
+
+A toggle **may** contain `pesi:item` blocks — that combination works in both
+states. The reverse (a toggle inside a block) is not supported.
+
+#### When to use which
+
+| Client need | Solution |
+|---|---|
+| "Sometimes I have 3 team members, sometimes 5" | `pesi:item` block |
+| "This notice should only show in summer" | `pesi:toggle` |
+| "The text changes, the structure never does" | plain `pesi()` field |
+| "I want a new page / new menu entry" | **none** — that is developer work |
+
 ### Step 7 — Register pages in pesi-core.php
 
 Open `pesi-core.php`, find `$PESI_PAGES`, replace with all pages that have pesi fields:
@@ -236,6 +403,7 @@ Values (right side) are German display names for the dashboard sidebar.
 
 ```apache
 # pesi CMS
+RewriteEngine On
 RewriteRule ^pesi$  pesi.php [L]
 RewriteRule ^cms$   pesi.php [L]
 <Files "pesi-core.php">
@@ -245,6 +413,9 @@ RewriteRule ^cms$   pesi.php [L]
     Require all denied
 </FilesMatch>
 ```
+
+Keep `RewriteEngine On` unless an earlier block in the same file already enables
+it. Without it the two `RewriteRule` lines are inert and `/pesi` returns 404.
 
 The `^\.pesi-` pattern covers every internal pesi file: the rotated backups
 (`page.php.pesi-backup.1`/`.2`) **and** the login-throttle register
@@ -319,8 +490,20 @@ Disallow: /cms
 
 ### Step 10 — Validate
 
+**First, check write permissions.** pesi rewrites the page files in place; this
+is the single most common reason a fresh install "saves nothing". Verify that
+the PHP user can write:
 
-Run through this checklist. Report any failures:
+- every file listed in `$PESI_PAGES`
+- the project root (pesi creates `page.php.pesi-backup.1/.2` next to each page,
+  plus a `.pesi-throttle` register)
+- the upload folder (`PESI_UPLOAD_DIR`), if any `image` field exists
+
+On a typical shared host the FTP user and the PHP user are the same and this is
+already true. If you cannot verify it from your environment, say so explicitly in
+the report instead of assuming it works.
+
+Then run through this checklist. Report any failures:
 
 - Every file in `$PESI_PAGES` exists in root
 - Every registered file has `require_once 'pesi-core.php'` at the top
@@ -328,7 +511,11 @@ Run through this checklist. Report any failures:
 - All field IDs match `[a-z0-9_]+`
 - All labels are German and non-technical
 - All `richtext` fields use heredoc syntax
-- All heredoc closing `PESI` tags are at column 0
+- All heredoc openers are `<<<'PESI'` **with quotes**, closing `PESI` at column 0
+- No `richtext` field contains layout tags (`div`, `span`, `img`, `table`, `h1`, `section`) — they are stripped on render
+- Repeatable lists (team, services, testimonials, FAQ) are wrapped in `pesi:item` blocks, with exactly one entry in the source
+- Every field ID inside a block carries the `GROUP_N_` prefix
+- Seasonal/temporary sections are wrapped in `pesi:toggle` and shipped **visible**
 - `BRAND_NAME` is set in `pesi-core.php`
 - `BRAND_COLOR` is set in `pesi-core.php` (matched to site's primary color)
 - `.htaccess` contains rewrite rules for both `pesi` and `cms`
@@ -349,17 +536,24 @@ Output a summary:
 ```
 pesi integration complete.
 
-Pages: X registered
-Fields: Y total (Z text, W textarea, V richtext, U image)
+Pages:    X registered
+Fields:   Y total (Z text, W textarea, V richtext, U image)
+Blocks:   N repeatable groups (team, leistungen, …)
+Toggles:  M switchable sections (urlaub, …)
 robots.txt: updated
-.htaccess: updated
+.htaccess:  updated
+
+Dashboard password: <the plaintext password — stored hashed in pesi-core.php>
 
 Next steps:
-- Password is already set (reported above)
-- Verify file write permissions
-- Verify file write permissions
 - Test dashboard: domain.at/pesi
+- Write permissions verified: yes / no / could not check
+- Known issues found in the existing site: …
 ```
+
+Always report the **plaintext** password here even when you stored a hash — it is
+the only copy the client has. Also state honestly whether write permissions were
+verified or merely assumed.
 
 ---
 
@@ -401,8 +595,6 @@ Next steps:
     <h2><?= pesi('about_titel', 'Über mich', 'text', 'Überschrift Über-mich') ?></h2>
     <?= pesi('about_text', <<<'PESI'
 <p>Ich bin <strong>Dr. Maria Müller</strong>, klinische Psychologin.</p>
-<p>Seit 2015 in eigener Praxis.</p>
-PESI, 'richtext', 'Über-mich-Text') ?>
 </section>
 
 <footer>
@@ -415,3 +607,34 @@ Key decisions:
 - `about_text` → `richtext` (contains `<strong>`, multiple `<p>`)
 - `href="/kontakt"` → untouched (structure, not content)
 - `class="btn"` → untouched (attribute, not content)
+
+### Example — a repeated structure and a seasonal section
+
+Whenever the original markup contains the **same structure more than once**, do
+not turn each copy into its own fields. Wrap **one** copy in a block:
+
+```php
+<!-- pesi:toggle urlaub -->
+<div class="notice">
+  <p><?= pesi('urlaub_text', 'Vom 1.–15. August im Urlaub.', 'text', 'Urlaubshinweis') ?></p>
+</div>
+<!-- /pesi:toggle -->
+
+<section class="team">
+<!-- pesi:item team:1 -->
+  <article class="member">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
+    <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
+  </article>
+<!-- /pesi:item -->
+</section>
+```
+
+The original site may show three team members — you still write **one** entry.
+The client adds the other two in the dashboard and can reorder or delete them
+later without calling you. The holiday notice ships **visible**; the client hides
+it in August and shows it again next year, with the text preserved in between.
+
+This is the difference between a site the client can actually maintain and one
+where they call you for every change.
