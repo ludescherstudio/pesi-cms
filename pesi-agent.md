@@ -3,14 +3,14 @@
 You are integrating **pesi**, a minimal inline CMS, into a finished PHP website.
 
 > **This is the installation guide.** It tells an agent how to add pesi *to a
-> customer site*. If you were sent here to change pesi's own source code, you
-> want `AGENTS.md` in the pesi repository instead.
+> customer site*. It is not a guide to modifying pesi itself — for that, read
+> `README.md` and the source.
 >
 > You do **not** need to copy this file into the customer project. Read it while
 > integrating, then leave it behind — only `pesi-core.php` and `pesi.php` belong
 > in the customer site (see the file structure below). If you do keep a copy
-> there, never rename it to `AGENTS.md`: most projects already have one of their
-> own, and it would collide with or overwrite it.
+> there, never rename it to `AGENTS.md` or `CLAUDE.md`: most projects already
+> have one of their own, and it would collide with or overwrite it.
 
 ## What pesi cms does
 

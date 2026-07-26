@@ -7,8 +7,14 @@
 # Client uploads belong to the site, not to the pesi package.
 uploads/
 
-# Manual pre-change backups (see AGENTS.md)
+# Manual pre-change backups
 *.old
+
+# ── Maintainer-only, never published ─────────────────────────
+# Private dev guide: names unreleased sibling projects and internal
+# conventions. Public positioning lives in README.md instead.
+CLAUDE.md
+AGENTS.md
 
 # ── Local tooling / editor config ────────────────────────────
 .claude/
