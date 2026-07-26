@@ -27,6 +27,22 @@ Built for developers who maintain static client websites and want the client to 
 
 The difference from everything else: **no sync problems.** What you see in the PHP file via FTP is exactly what the client last saved. No parallel database, no JSON files alongside, no "which version is current?"
 
+### What pesi refuses to be
+
+pesi's value is what it leaves out. **It is not a small WordPress**, and it will
+not grow into one. Four rules hold, and features that break them are rejected:
+
+- **No database, no external store.** Content lives in the page's PHP source.
+- **You design the markup; the client only edits content.** pesi never generates
+  layout and never lets a client create pages, menus or structure through a UI.
+- **The safety net is not optional.** Every write is preceded by a rotating
+  backup and followed by `php -l`, with automatic rollback on a syntax error.
+- **Self-contained.** No CDN, no Composer, no build step. Quill is vendored.
+
+If something needs its own management UI, its own URLs, or has to scale to
+hundreds of entries, it does not belong in pesi — that is what a real CMS is for.
+pesi handles small, page-bound content, and stops there.
+
 ---
 
 ## What's in this repository
@@ -412,8 +428,9 @@ The client then edits the whole body in a single Quill editor, rather than deali
 ## Security
 
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
-- `.pesi-backup` files are blocked via `.htaccess`
-- The dashboard is password-protected (session-based)
+- `.pesi-*` files (rotated backups and the login-throttle register) are blocked via `.htaccess`. **On Nginx you must add the equivalent `deny` rules yourself** — it never reads `.htaccess`, and a backup file is a plain copy of your page source including the password
+- The dashboard is password-protected (session-based); `PESI_PASSWORD` accepts a `password_hash()` value, which is what you should use
+- Failed logins are slowed down twice: per session, and per client in a small `.pesi-throttle` file so that discarding cookies does not reset the delay
 - Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS)
 - Session ID is regenerated on login to prevent session fixation
 - CSRF tokens protect every form submission
@@ -422,9 +439,18 @@ The client then edits the whole body in a single Quill editor, rather than deali
 - Image uploads are checked by real MIME type, size, and extension; upload directories must stay inside the project root
 - Before every save, a rotated backup is created (`page.php.pesi-backup.1` = last save, `.2` = previous)
 - After saving, `php -l` runs automatically — on a syntax error, pesi rolls back from `.pesi-backup.1`
-- File locking plus a file mtime/hash check prevents stale overwrites without IP tracking
+- File locking plus a file mtime/hash check prevents stale overwrites
 
 **Important:** always run pesi over HTTPS. The login password is sent via POST — over plain HTTP it would be readable in transit. Most hosts offer free SSL certificates; make sure yours is active.
+
+**What pesi stores about visitors:** nothing. The only exception is the login
+throttle, which keeps a **SHA-256 hash** of the client IP (never the address
+itself) plus a counter in `.pesi-throttle`, and drops entries an hour after they
+expire. Nothing is written for ordinary page visitors, and there is no logging,
+tracking or analytics anywhere in pesi.
+
+Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md).
+Do not open a public issue.
 
 ---
 
@@ -530,13 +556,6 @@ Your site's CSS reset removes default list and link styles. pesi automatically w
 - Apache with `.htaccess` support — or, on Nginx, the equivalent `deny` rules from Step 3
 - Web server write access to your editable PHP files (standard on all major hosts)
 - HTTPS (strongly recommended)
-
----
-
-## Security
-
-Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md).
-Do not open a public issue.
 
 ---
 
