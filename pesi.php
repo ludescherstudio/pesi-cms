@@ -612,6 +612,38 @@ function _pesi_toggle_parse(string $file): array {
     return $out;
 }
 
+/**
+ * Ordnet Feld-IDs ihrem Sichtbarkeits-Bereich zu:
+ *   id => ['group' => 'urlaubshinweis', 'visible' => false]
+ *
+ * Ohne diese Zuordnung stehen die Felder eines versteckten Bereichs mitten in
+ * der Liste, voll bearbeitbar und ohne jeden Hinweis darauf, dass ihr Inhalt
+ * gerade gar nicht auf der Website steht. Die Kundin schreibt dann in gutem
+ * Glauben einen Text, den niemand sieht. Der Schalter allein — weit oben im
+ * Panel — stellt diese Verbindung nicht her.
+ *
+ * Es genügt, den Rumpf jedes Toggles nach pesi()-Aufrufen abzusuchen; echte
+ * Offsets braucht es dafür nicht. Taucht eine ID in mehreren Bereichen auf,
+ * gewinnt der erste — verschachtelte Toggles sind ohnehin gesperrt.
+ */
+function _pesi_field_toggles(string $file): array {
+    $src = (string)file_get_contents($file);
+    if ($src === '') return [];
+    if (!preg_match_all(_pesi_toggle_re(), $src, $m, PREG_SET_ORDER)) return [];
+    $out = [];
+    foreach ($m as $x) {
+        if (!preg_match_all('/pesi\s*\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]/', $x['body'] ?? '', $ids)) {
+            continue;
+        }
+        foreach ($ids[1] as $id) {
+            if (!isset($out[$id])) {
+                $out[$id] = ['group' => $x['g'], 'visible' => ($x['off'] ?? '') === ''];
+            }
+        }
+    }
+    return $out;
+}
+
 function _pesi_toggle_op(string $file, string $group): array {
     global $t;
     $src = (string)file_get_contents($file);
@@ -1043,6 +1075,8 @@ function _pesi_strings(): array { return [
         'tgl_section'       => 'Sichtbarkeit',
         'tgl_visible'       => 'sichtbar',
         'tgl_hidden'        => 'versteckt',
+        'fc_in_section'     => 'gehört zum Bereich „%s“',
+        'fc_in_hidden'      => 'gehört zum Bereich „%s“ — steht derzeit nicht auf der Website',
         'tgl_show'          => 'Einblenden',
         'tgl_hide'          => 'Ausblenden',
         'tgl_done'          => 'Sichtbarkeit geändert.',
@@ -1125,6 +1159,8 @@ function _pesi_strings(): array { return [
         'tgl_section'       => 'Visibility',
         'tgl_visible'       => 'visible',
         'tgl_hidden'        => 'hidden',
+        'fc_in_section'     => 'belongs to the "%s" section',
+        'fc_in_hidden'      => 'belongs to the "%s" section — currently not on the website',
         'tgl_show'          => 'Show',
         'tgl_hide'          => 'Hide',
         'tgl_done'          => 'Visibility changed.',
@@ -1300,6 +1336,17 @@ body.tech .fc-meta{display:flex}
 .fc-label{margin-bottom:.7rem}
 body.tech .fc-label{margin-bottom:.15rem}
 .fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.72rem;color:var(--tx3)}
+
+/* Zugehörigkeit zu einem Sichtbarkeits-Bereich. Bewusst OHNE opacity auf der
+   Karte: das Feld gehört weiterhin bearbeitet, und abgesenkter Kontrast wäre
+   für die Zielgruppe das falsche Signal. Stattdessen eine Randmarkierung und
+   ein Punkt in derselben Farbe wie im Panel oben — so gehören die beiden
+   Anzeigen sichtbar zusammen. */
+.fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--tx2);margin:-.1rem 0 .6rem}
+.fc-tgl-dot{width:8px;height:8px;border-radius:50%;background:#1f9d55;flex:0 0 auto}
+.fc-off{border-left:3px solid #9aa0a6}
+.fc-off .fc-tgl{color:#8a5a00;font-weight:600}
+.fc-off .fc-tgl-dot{background:#9aa0a6}
 .fc-badge{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:.12rem .4rem;border-radius:3px;background:var(--sf);color:var(--tx3);border:1px solid var(--bd)}
 
 .fi{width:100%;padding:.7rem .85rem;background:var(--bg3);border:1px solid var(--bd);border-radius:var(--r2);color:var(--tx);font-family:inherit;font-size:.9rem;outline:0;transition:border .2s}
@@ -1607,7 +1654,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         <div class="cnt-wrap">
           <?php if ($msg): ?><div class="ms <?=$msgType?>"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success'): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
 
-          <?php $toggles = _pesi_toggle_parse($pageAbs); $tglNested = $toggles && _pesi_toggle_nested($pageAbs); ?>
+          <?php
+            $toggles     = _pesi_toggle_parse($pageAbs);
+            $tglNested   = $toggles && _pesi_toggle_nested($pageAbs);
+            $fieldToggle = $toggles ? _pesi_field_toggles($pageAbs) : [];
+          ?>
           <?php if ($toggles): ?>
             <div class="tgl-sec">
               <div class="tgl-sec-h"><?=$t['tgl_section']?></div>
@@ -1675,12 +1726,21 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                 <div class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></div>
                 <div class="blk-fields">
             <?php endif; $curBlk = $bk; endif; ?>
-              <?php $fid = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $id); ?>
-              <div class="fc">
+              <?php
+                $fid = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $id);
+                $ft  = $fieldToggle[$id] ?? null;
+              ?>
+              <div class="fc<?=$ft && !$ft['visible'] ? ' fc-off' : ''?>">
                 <?php if ($fld['type'] === 'richtext'): ?>
                   <div class="fc-label"><?=htmlspecialchars($label)?></div>
                 <?php else: ?>
                   <label class="fc-label" for="<?=$fid?>"><?=htmlspecialchars($label)?></label>
+                <?php endif; ?>
+                <?php if ($ft): ?>
+                  <span class="fc-tgl"><span class="fc-tgl-dot"></span><?=htmlspecialchars(sprintf(
+                      $ft['visible'] ? $t['fc_in_section'] : $t['fc_in_hidden'],
+                      _pesi_human($ft['group'])
+                  ))?></span>
                 <?php endif; ?>
                 <div class="fc-meta">
                   <span class="fc-id"><?=htmlspecialchars($id)?></span>
