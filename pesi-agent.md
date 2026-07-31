@@ -399,6 +399,18 @@ $PESI_PAGES = [
 
 Values (right side) are German display names for the dashboard sidebar.
 
+**Group slugs become visible names.** A `pesi:item` group `team_mitglieder` is
+shown to the client as "Team mitglieder", a `pesi:toggle` group
+`urlaubs_hinweis` as "Urlaubs hinweis" — underscores become spaces and only the
+first letter is capitalised. Choose single-word slugs (`team`, `urlaub`,
+`leistungen`) so the dashboard reads well.
+
+**Optional — adjust the wording.** The shipped German uses formal address
+(*Sie*). To change tone, form of address or vocabulary for this client, add a
+`$PESI_STRINGS` array to `pesi-core.php` overriding individual keys (see the
+commented example in the config file and the full list in `_pesi_strings()`).
+Never edit `pesi.php` for this — it would make the next pesi update a merge.
+
 ### Step 8 — Update .htaccess
 
 **Append** these rules to the existing root `.htaccess`. Do NOT overwrite existing rules:

@@ -284,6 +284,74 @@ $onlyEn = array_diff(array_keys($s['en']), array_keys($s['de']));
 ok('keine DE-only Keys', !$onlyDe, implode(', ', $onlyDe));
 ok('keine EN-only Keys', !$onlyEn, implode(', ', $onlyEn));
 
+// Platzhalter müssen übereinstimmen — sonst wirft sprintf() zur Laufzeit,
+// und zwar nur in der Sprache, die gerade niemand testet.
+$mismatch = [];
+foreach ($s['de'] as $k => $v) {
+    if (!isset($s['en'][$k])) continue;
+    preg_match_all('/%[a-z]/i', $v, $a);
+    preg_match_all('/%[a-z]/i', $s['en'][$k], $b);
+    if ($a[0] !== $b[0]) $mismatch[] = $k . ' (de: ' . implode('', $a[0]) . ' / en: ' . implode('', $b[0]) . ')';
+}
+ok('gleiche %-Platzhalter in beiden Sprachen', !$mismatch, implode('; ', $mismatch));
+
+// Tote Keys: gepflegt, übersetzt — und nirgends verwendet. Der Fehler, der bei
+// zweisprachigen Strings am leichtesten unbemerkt bleibt.
+$strBlock = '';
+if (preg_match('/function _pesi_strings.*?\n\]; \}/s', $src, $sb)) $strBlock = $sb[0];
+$outside = str_replace($strBlock, '', $src);
+$dead = [];
+foreach (array_keys($s['de']) as $k) {
+    if (strpos($outside, "'" . $k . "'") === false) $dead[] = $k;
+}
+ok('keine ungenutzten Keys', !$dead, implode(', ', $dead));
+
+// Jede Meldung, die die Kundin nicht selbst beheben kann, trägt einen Code.
+grp('i18n — Fehlercodes');
+foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
+          'err_file_missing', 'err_marker', 'up_err_dir', 'up_err_dir_invalid',
+          'blk_notfound', 'tgl_notfound', 'tgl_nested', 'warn_default_pw',
+          'warn_no_exec'] as $k) {
+    foreach (['de', 'en'] as $l) {
+        ok("$l/$k trägt einen Code", (bool)preg_match('/\(Code [ST]\d+/', $s[$l][$k]),
+            $s[$l][$k]);
+    }
+}
+
+// ── $PESI_STRINGS-Override ───────────────────────────────────
+// Öffentliche Oberfläche für Integratorinnen: einzelne Texte umformulieren,
+// ohne pesi.php zu forken. Der echte Block aus pesi.php, nicht nachgebaut.
+grp('$PESI_STRINGS — Override');
+if (!preg_match('/if \(isset\(\$PESI_STRINGS\).*?\n\}\n/s', $src, $om)) {
+    ok('Override-Block in pesi.php gefunden', false, 'Muster passt nicht mehr — Test anpassen');
+} else {
+    $t = _pesi_strings()['de'];
+    $PESI_STRINGS = [
+        'save_btn'   => 'Übernehmen',
+        'gibtsnicht' => 'wird ignoriert',
+        'blk_entry'  => 42,          // kein String → ignorieren
+    ];
+    eval($om[0]);
+    ok('bekannter Key wird überschrieben', $t['save_btn'] === 'Übernehmen', $t['save_btn']);
+    ok('unbekannter Key wird ignoriert', !array_key_exists('gibtsnicht', $t));
+    ok('Nicht-String wird ignoriert', $t['blk_entry'] === 'Eintrag', var_export($t['blk_entry'], true));
+    $t = _pesi_strings()['de'];   // Harness-Zustand zurücksetzen
+    $GLOBALS['t'] = $t;
+}
+
+// ── Anzeigenamen ─────────────────────────────────────────────
+grp('_pesi_human');
+foreach ([
+    'team'             => 'Team',
+    'team_mitglieder'  => 'Team mitglieder',
+    'sommer-aktion'    => 'Sommer aktion',
+    'urlaub'           => 'Urlaub',
+    'öffnungszeiten'   => 'Öffnungszeiten',
+    ''                 => '',
+] as $in => $want) {
+    ok('human(' . json_encode($in) . ')', _pesi_human($in) === $want, 'bekam: ' . _pesi_human($in));
+}
+
 // ── Aufräumen ────────────────────────────────────────────────
 foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
     foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }

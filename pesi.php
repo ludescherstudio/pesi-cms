@@ -48,6 +48,17 @@ require_once $corePath;
 $lang = defined('LANG') ? LANG : 'de';
 $t    = _pesi_strings()[$lang] ?? _pesi_strings()['de'];
 
+// Projektspezifische Formulierungen: pesi-core.php darf einzelne Texte per
+// $PESI_STRINGS überschreiben. Damit lassen sich Anrede, Tonfall und
+// Fachbegriffe an die jeweilige Kundschaft anpassen, ohne pesi.php zu forken —
+// ein Update bleibt so ein reiner Dateitausch. Unbekannte Keys werden
+// ignoriert, damit ein Tippfehler nicht stillschweigend Text verschluckt.
+if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
+    foreach ($PESI_STRINGS as $k => $v) {
+        if (is_string($v) && array_key_exists($k, $t)) $t[$k] = $v;
+    }
+}
+
 $basePath = realpath(__DIR__);
 $sk = 'pesi_auth';
 
@@ -637,6 +648,18 @@ function _pesi_esc(string $v): string {
     return str_replace(["\\", "'"], ["\\\\", "\\'"], $v);
 }
 
+/**
+ * Slug einer Gruppe (Block oder Toggle) als Anzeigename für die Kundin.
+ * 'team_mitglieder' → 'Team mitglieder'. Eine einzige Stelle dafür, weil die
+ * Block-Überschrift und die Sichtbarkeits-Liste sonst denselben Namen
+ * unterschiedlich formatieren — das ist im Dashboard direkt nebeneinander
+ * sichtbar und wirkt schlampig.
+ */
+function _pesi_human(string $slug): string {
+    $s = trim(str_replace(['_', '-'], ' ', $slug));
+    return $s === '' ? '' : mb_strtoupper(mb_substr($s, 0, 1)) . mb_substr($s, 1);
+}
+
 // ── Brute-Force-Bremse (dateibasiert, IP-gebunden) ───────────
 // Das reine Session-Backoff im Login-Handler ist umgehbar: Wer die Cookies
 // verwirft, bekommt pro Versuch eine frische Session → das Backoff akkumuliert
@@ -859,38 +882,60 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
 
 // ── i18n ─────────────────────────────────────────────────────
 // Funktion (wird gehoisted) → bereits vor der POST-Verarbeitung nutzbar.
+//
+// TONFALL — das Dashboard gehört der Kundin, nicht der Entwicklerin.
+// Sie ist der einzige Mensch, der diese Texte täglich liest, und sie ist
+// nicht technisch. Darum:
+//
+//   1. Meldungen benennen die FOLGE, nie den Mechanismus. Nicht „PHP-Fehler
+//      erkannt — Rollback!", sondern „Ihre Seite ist unverändert geblieben."
+//   2. Was sie selbst beheben kann (Bild zu groß, falsches Format), sagt ihr
+//      genau das — ohne Code, denn sie braucht niemanden dafür.
+//   3. Was sie NICHT beheben kann, bekommt einen kurzen Code (S… = Struktur
+//      der Seite, T… = Technik/Server) und die Bitte, ihn weiterzugeben. Sie
+//      liest vier Zeichen vor, die Betreuung schlägt sie in der README nach.
+//      Nur so bleibt sie handlungsfähig, ohne den Mechanismus zu sehen.
+//   4. Deutsch siezt. Die Zielgruppe sind Praxen, Kanzleien, Therapeutinnen.
+//      Wer duzen will, überschreibt einzelne Texte per $PESI_STRINGS in
+//      pesi-core.php — ohne diese Datei anzufassen.
+//
+// Beide Sprachen müssen dieselben Keys und dieselben %-Platzhalter tragen;
+// dev/test-engine.php prüft das.
 function _pesi_strings(): array { return [
     'de' => [
-        'err_not_readable'  => 'Datei nicht lesbar.',
-        'err_backup'        => 'Backup fehlgeschlagen.',
-        'err_no_changes'    => 'Keine Änderungen.',
-        'err_locked'        => 'Datei gesperrt.',
-        'err_php_rollback'  => 'PHP-Fehler erkannt — Rollback!',
-        'err_session'       => 'Sitzung abgelaufen. Bitte Seite neu laden.',
-        'err_file_missing'  => 'Datei nicht gefunden: ',
-        'err_stale'         => 'Diese Seite wurde seit dem Öffnen geändert. Bitte neu laden und erneut speichern.',
-        'err_marker'        => 'Nicht gespeichert — %s enthält eine pesi-Struktur-Markierung (pesi:item, pesi:toggle oder if(false)). Bitte diesen Text entfernen.',
-        'saved_one'         => '1 Feld gespeichert.',
-        'saved_many'        => '%d Felder gespeichert.',
-        'wrong_password'    => 'Falsches Passwort.',
+        'err_not_readable'  => 'Diese Seite lässt sich gerade nicht lesen. Ihre Inhalte sind unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T1)',
+        'err_backup'        => 'Die Sicherheitskopie ließ sich nicht anlegen, deshalb wurde nichts geändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T2)',
+        'err_no_changes'    => 'Es gab nichts zu speichern — Sie haben nichts geändert.',
+        'err_locked'        => 'Die Seite wird gerade von jemand anderem bearbeitet. Bitte versuchen Sie es in einem Moment noch einmal. (Code T3)',
+        'err_php_rollback'  => 'Diese Änderung konnte nicht übernommen werden. Ihre Seite ist unverändert geblieben — es ist nichts kaputtgegangen. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S1)',
+        'err_session'       => 'Sie waren zu lange angemeldet. Bitte laden Sie die Seite neu und melden Sie sich erneut an.',
+        'err_file_missing'  => 'Diese Seite ist nicht mehr auffindbar. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T4) Betroffen: ',
+        'err_stale'         => 'Diese Seite wurde zwischenzeitlich an anderer Stelle geändert. Bitte laden Sie sie neu und speichern Sie danach noch einmal.',
+        'err_marker'        => 'Nicht gespeichert: %s enthält Text, den pesi nicht verarbeiten kann. Ihre Seite ist unverändert. Bitte entfernen Sie zuletzt eingefügte Sonderzeichen oder melden Sie sich bei Ihrer Website-Betreuung. (Code S2)',
+        'saved_one'         => '1 Änderung gespeichert.',
+        'saved_many'        => '%d Änderungen gespeichert.',
+        'wrong_password'    => 'Das Passwort stimmt nicht.',
         'password_ph'       => 'Passwort',
         'login_btn'         => 'Anmelden',
+        'login_help'        => 'Passwort vergessen? Ihre Website-Betreuung kann es neu setzen.',
         'nav_pages'         => 'Seiten',
         'to_website'        => '↗ Zur Website',
         'logout'            => 'Abmelden',
-        'no_fields'         => 'Keine editierbaren Felder in <strong>%s</strong> gefunden.',
-        'save_hint'         => 'Änderungen erst mit „Speichern" übernehmen — „↩ Letzte Version" macht alles rückgängig.',
+        'no_fields'         => 'Auf dieser Seite gibt es nichts zum Bearbeiten.',
+        'save_hint'         => 'Ihre Änderungen werden erst mit „Speichern“ übernommen. „↩ Letzte Version“ stellt den Stand davor wieder her.',
         'save_btn'          => 'Speichern',
         'welcome_title'     => 'Willkommen',
-        'welcome_hint'      => 'Wähle links eine Seite, um Inhalte zu bearbeiten.',
-        'warn_default_pw'   => '⚠ Standard-Passwort aktiv — bitte in pesi-core.php sofort ändern.',
-        'warn_no_exec'      => '⚠ Syntax-Check aktiv, aber php -l ist nicht ausführbar (exec() gesperrt oder PHP-CLI nicht im PATH) — kein Auto-Rollback bei PHP-Fehlern.',
-        'up_err_failed'     => 'Upload von „%s" fehlgeschlagen.',
-        'up_err_size'       => 'Bild „%s" ist zu groß (max. %s MB).',
-        'up_err_type'       => 'Bild „%s": Dateityp nicht erlaubt (JPG, PNG, WebP, AVIF, GIF).',
-        'up_err_dir'        => 'Upload-Ordner „%s" nicht beschreibbar.',
-        'up_err_dir_invalid'=> 'Upload-Ordner ungültig. Bitte PESI_UPLOAD_DIR prüfen.',
-        'img_hint'          => 'Neues Bild wählen oder Pfad eintragen. Ersetzte Bilder werden automatisch gelöscht.',
+        'welcome_hint'      => 'Wählen Sie links eine Seite aus, um deren Inhalte zu bearbeiten.',
+        'diag_summary'      => '⚙ Technischer Hinweis für Ihre Website-Betreuung — für Sie ist nichts zu tun',
+        'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
+        'warn_default_pw'   => 'Es ist noch das Auslieferungs-Passwort gesetzt. In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
+        'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Damit entfällt das automatische Zurückrollen bei fehlerhaften Seiten. (Code T7)',
+        'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
+        'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
+        'up_err_type'       => 'Das Bild für „%s“ hat ein Format, das nicht unterstützt wird. Möglich sind JPG, PNG, WebP, AVIF und GIF.',
+        'up_err_dir'        => 'Bilder lassen sich gerade nicht speichern. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T5, Ordner „%s“)',
+        'up_err_dir_invalid'=> 'Der Ordner für Bilder ist nicht richtig eingerichtet. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T6)',
+        'img_hint'          => 'Neues Bild auswählen oder einen Pfad eintragen. Das bisherige Bild wird dabei ersetzt.',
         'blk_entry'         => 'Eintrag',
         'blk_up'            => '↑',
         'blk_down'          => '↓',
@@ -902,72 +947,75 @@ function _pesi_strings(): array { return [
         'blk_added'         => 'Eintrag hinzugefügt.',
         'blk_deleted'       => 'Eintrag gelöscht.',
         'blk_moved'         => 'Reihenfolge geändert.',
-        'blk_min_one'       => 'Mindestens ein Eintrag muss bestehen bleiben.',
-        'blk_edge'          => 'Eintrag ist bereits am Rand.',
-        'blk_notfound'      => 'Block nicht gefunden.',
+        'blk_min_one'       => 'Der letzte Eintrag lässt sich nicht löschen — es muss einer bestehen bleiben.',
+        'blk_edge'          => 'Dieser Eintrag steht bereits ganz oben bzw. ganz unten.',
+        'blk_notfound'      => 'Dieser Eintrag ließ sich nicht finden. Bitte laden Sie die Seite neu. Bleibt es dabei, melden Sie sich bitte bei Ihrer Website-Betreuung. (Code S3)',
         'last_mod'          => 'zuletzt geändert: %s',
         'view_live'         => '↗ Seite ansehen',
         'saved_view'        => 'Gespeichert — Seite ansehen ↗',
         'pv_btn'            => 'Vorschau',
         'pv_label'          => 'Vorschau – verkleinert, zeigt gespeicherten Stand',
         'pv_title'          => 'Seitenvorschau',
-        'safe_hint'         => 'Automatische Sicherung aktiv — „↩ Letzte Version" macht alles rückgängig.',
+        'tech_btn'          => 'Technische Ansicht',
         'dirty_one'         => '● %d ungespeicherte Änderung',
         'dirty_many'        => '● %d ungespeicherte Änderungen',
-        'ob_title'          => 'So funktioniert\'s',
-        'ob_step1'          => 'Links eine Seite wählen',
-        'ob_step2'          => 'Texte & Bilder direkt ändern',
-        'ob_step3'          => 'Unten „Speichern" — fertig',
+        'ob_title'          => 'So funktioniert es',
+        'ob_step1'          => 'Links eine Seite auswählen',
+        'ob_step2'          => 'Texte und Bilder direkt ändern',
+        'ob_step3'          => 'Unten auf „Speichern“ — fertig',
         'ob_dismiss'        => 'Verstanden',
         'img_drop'          => 'Bild hierher ziehen oder klicken zum Auswählen',
         'img_current'       => 'Aktuelles Bild:',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
         'rst_btn'           => '↩ Letzte Version',
-        'rst_confirm'       => 'Diese Seite auf die letzte Sicherung zurücksetzen?',
-        'rst_done'          => 'Letzte Sicherung wiederhergestellt.',
-        'rst_none'          => 'Keine Sicherung vorhanden.',
-        'rst_same'          => 'Aktueller Stand entspricht bereits der Sicherung.',
+        'rst_confirm'       => 'Diese Seite auf die letzte gespeicherte Version zurücksetzen?',
+        'rst_done'          => 'Die letzte Version wurde wiederhergestellt.',
+        'rst_none'          => 'Es gibt noch keine frühere Version.',
+        'rst_same'          => 'Der aktuelle Stand ist bereits die letzte Version.',
         'tgl_section'       => 'Sichtbarkeit',
         'tgl_visible'       => 'sichtbar',
         'tgl_hidden'        => 'versteckt',
         'tgl_show'          => 'Einblenden',
         'tgl_hide'          => 'Ausblenden',
         'tgl_done'          => 'Sichtbarkeit geändert.',
-        'tgl_notfound'      => 'Bereich nicht gefunden.',
-        'tgl_nested'        => 'Verschachtelte Sichtbarkeits-Bereiche — Umschalten gesperrt. Ein pesi:toggle darf keinen zweiten enthalten; bitte im Seitenquelltext auflösen.',
-        'unsaved_warn'      => 'Es gibt ungespeicherte Änderungen. Verwerfen?',
+        'tgl_notfound'      => 'Dieser Bereich ließ sich nicht finden. Bitte laden Sie die Seite neu. Bleibt es dabei, melden Sie sich bitte bei Ihrer Website-Betreuung. (Code S4)',
+        'tgl_nested'        => 'Diese Bereiche lassen sich hier nicht ein- und ausblenden, weil sie ineinander verschachtelt sind. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S5)',
+        'unsaved_warn'      => 'Es gibt ungespeicherte Änderungen. Möchten Sie diese verwerfen?',
     ],
     'en' => [
-        'err_not_readable'  => 'File not readable.',
-        'err_backup'        => 'Backup failed.',
-        'err_no_changes'    => 'No changes.',
-        'err_locked'        => 'File locked.',
-        'err_php_rollback'  => 'PHP error detected — rolled back!',
-        'err_session'       => 'Session expired. Please reload the page.',
-        'err_file_missing'  => 'File not found: ',
-        'err_stale'         => 'This page changed since you opened it. Please reload and save again.',
-        'err_marker'        => 'Not saved — %s contains a pesi structure marker (pesi:item, pesi:toggle or if(false)). Please remove that text.',
-        'saved_one'         => '1 field saved.',
-        'saved_many'        => '%d fields saved.',
-        'wrong_password'    => 'Wrong password.',
+        'err_not_readable'  => 'This page cannot be read right now. Your content is unchanged. Please contact whoever looks after your website. (Code T1)',
+        'err_backup'        => 'The safety copy could not be created, so nothing was changed. Please contact whoever looks after your website. (Code T2)',
+        'err_no_changes'    => 'There was nothing to save — you did not change anything.',
+        'err_locked'        => 'Someone else is editing this page right now. Please try again in a moment. (Code T3)',
+        'err_php_rollback'  => 'This change could not be applied. Your page is unchanged — nothing is broken. Please contact whoever looks after your website. (Code S1)',
+        'err_session'       => 'You were signed in for too long. Please reload the page and sign in again.',
+        'err_file_missing'  => 'This page can no longer be found. Please contact whoever looks after your website. (Code T4) Affected: ',
+        'err_stale'         => 'This page was changed elsewhere in the meantime. Please reload it and save again.',
+        'err_marker'        => 'Not saved: %s contains text pesi cannot process. Your page is unchanged. Please remove any special characters you pasted recently, or contact whoever looks after your website. (Code S2)',
+        'saved_one'         => '1 change saved.',
+        'saved_many'        => '%d changes saved.',
+        'wrong_password'    => 'That password is not correct.',
         'password_ph'       => 'Password',
-        'login_btn'         => 'Login',
+        'login_btn'         => 'Sign in',
+        'login_help'        => 'Forgot your password? Whoever looks after your website can reset it.',
         'nav_pages'         => 'Pages',
         'to_website'        => '↗ Visit Website',
-        'logout'            => 'Log out',
-        'no_fields'         => 'No editable fields found in <strong>%s</strong>.',
-        'save_hint'         => 'Changes take effect only after "Save" — "↩ Last version" undoes everything.',
+        'logout'            => 'Sign out',
+        'no_fields'         => 'There is nothing to edit on this page.',
+        'save_hint'         => 'Your changes only take effect once you click "Save". "↩ Last version" restores the state before that.',
         'save_btn'          => 'Save',
         'welcome_title'     => 'Welcome',
         'welcome_hint'      => 'Select a page on the left to edit its content.',
-        'warn_default_pw'   => '⚠ Default password in use — change it in pesi-core.php immediately.',
-        'warn_no_exec'      => '⚠ Syntax check enabled, but php -l cannot run (exec() disabled or PHP CLI not in PATH) — no auto-rollback on PHP errors.',
-        'up_err_failed'     => 'Upload of "%s" failed.',
-        'up_err_size'       => 'Image "%s" is too large (max. %s MB).',
-        'up_err_type'       => 'Image "%s": file type not allowed (JPG, PNG, WebP, AVIF, GIF).',
-        'up_err_dir'        => 'Upload folder "%s" is not writable.',
-        'up_err_dir_invalid'=> 'Invalid upload folder. Please check PESI_UPLOAD_DIR.',
-        'img_hint'          => 'Choose a new image or enter a path. Replaced images are deleted automatically.',
+        'diag_summary'      => '⚙ Technical note for whoever looks after your website — nothing for you to do',
+        'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
+        'warn_default_pw'   => 'The shipped default password is still in use. Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
+        'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Automatic rollback of a broken page is therefore unavailable. (Code T7)',
+        'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
+        'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
+        'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
+        'up_err_dir'        => 'Images cannot be saved right now. Please contact whoever looks after your website. (Code T5, folder "%s")',
+        'up_err_dir_invalid'=> 'The folder for images is not set up correctly. Please contact whoever looks after your website. (Code T6)',
+        'img_hint'          => 'Choose a new image or enter a path. This replaces the current image.',
         'blk_entry'         => 'Entry',
         'blk_up'            => '↑',
         'blk_down'          => '↓',
@@ -979,40 +1027,40 @@ function _pesi_strings(): array { return [
         'blk_added'         => 'Entry added.',
         'blk_deleted'       => 'Entry deleted.',
         'blk_moved'         => 'Order changed.',
-        'blk_min_one'       => 'At least one entry must remain.',
-        'blk_edge'          => 'Entry is already at the edge.',
-        'blk_notfound'      => 'Block not found.',
+        'blk_min_one'       => 'The last entry cannot be deleted — one has to remain.',
+        'blk_edge'          => 'This entry is already at the top or the bottom.',
+        'blk_notfound'      => 'This entry could not be found. Please reload the page. If it persists, contact whoever looks after your website. (Code S3)',
         'last_mod'          => 'last edited: %s',
         'view_live'         => '↗ View page',
         'saved_view'        => 'Saved — view page ↗',
         'pv_btn'            => 'Preview',
         'pv_label'          => 'Preview – scaled, shows the saved state',
         'pv_title'          => 'Page preview',
-        'safe_hint'         => 'Automatic backup is on — "↩ Last version" undoes everything.',
+        'tech_btn'          => 'Technical view',
         'dirty_one'         => '● %d unsaved change',
         'dirty_many'        => '● %d unsaved changes',
         'ob_title'          => 'How it works',
         'ob_step1'          => 'Pick a page on the left',
-        'ob_step2'          => 'Edit texts & images directly',
-        'ob_step3'          => 'Hit "Save" at the bottom — done',
+        'ob_step2'          => 'Edit texts and images directly',
+        'ob_step3'          => 'Click "Save" at the bottom — done',
         'ob_dismiss'        => 'Got it',
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
         'img_advanced'      => 'Advanced: path / external URL',
         'rst_btn'           => '↩ Last version',
-        'rst_confirm'       => 'Reset this page to the last backup?',
-        'rst_done'          => 'Last backup restored.',
-        'rst_none'          => 'No backup available.',
-        'rst_same'          => 'Current state already matches the backup.',
+        'rst_confirm'       => 'Reset this page to the last saved version?',
+        'rst_done'          => 'The last version has been restored.',
+        'rst_none'          => 'There is no earlier version yet.',
+        'rst_same'          => 'The current state is already the last version.',
         'tgl_section'       => 'Visibility',
         'tgl_visible'       => 'visible',
         'tgl_hidden'        => 'hidden',
         'tgl_show'          => 'Show',
         'tgl_hide'          => 'Hide',
         'tgl_done'          => 'Visibility changed.',
-        'tgl_notfound'      => 'Section not found.',
-        'tgl_nested'        => 'Nested visibility sections — switching is disabled. A pesi:toggle must not contain another one; please unnest them in the page source.',
-        'unsaved_warn'      => 'There are unsaved changes. Discard them?',
+        'tgl_notfound'      => 'This section could not be found. Please reload the page. If it persists, contact whoever looks after your website. (Code S4)',
+        'tgl_nested'        => 'These sections cannot be shown or hidden here because they are nested inside one another. Please contact whoever looks after your website. (Code S5)',
+        'unsaved_warn'      => 'There are unsaved changes. Do you want to discard them?',
     ],
 ]; }
 $lang = defined('LANG') ? LANG : 'de';
@@ -1088,6 +1136,19 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .L-b{width:100%;padding:.8rem;margin-top:.75rem;background:var(--b);color:#fff;border:0;border-radius:var(--r);font-family:inherit;font-size:.93rem;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
 .L-b:hover{opacity:.88}
 .L-b:active{transform:scale(.98)}
+.L-help{margin-top:1rem;font-size:.78rem;color:var(--tx3);line-height:1.5}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* ───── DIAGNOSE (Einrichtung — Adressat ist die Betreuung) ───── */
+.dg{margin:1rem 2rem 0;border:1px solid var(--bd);border-radius:var(--r2);background:var(--bg2);font-size:.82rem}
+.dg summary{cursor:pointer;padding:.6rem .9rem;color:var(--tx2);user-select:none;list-style:none}
+.dg summary::-webkit-details-marker{display:none}
+.dg summary::before{content:'▸ ';color:var(--tx3)}
+.dg[open] summary::before{content:'▾ '}
+.dg summary:hover{color:var(--tx)}
+.dg-in{padding:0 .9rem;color:var(--tx3);font-size:.78rem}
+.dg-l{margin:.5rem 0 .3rem;padding:0 .9rem .7rem 2rem;color:var(--tx2);line-height:1.55}
+.dg-l li{list-style:disc;margin-bottom:.35rem}
 
 /* ───── APP SHELL ───── */
 
@@ -1155,8 +1216,14 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .fc:nth-child(8){animation-delay:.21s}
 .fc:focus-within{border-color:var(--b);box-shadow:0 0 0 3px var(--b-g)}
 
-.fc-label{font-size:.92rem;font-weight:600;color:var(--tx);margin-bottom:.15rem}
-.fc-meta{display:flex;align-items:center;gap:.5rem;margin-bottom:.7rem}
+.fc-label{display:block;font-size:.92rem;font-weight:600;color:var(--tx);margin-bottom:.15rem}
+label.fc-label{cursor:pointer}
+/* Technische Metadaten (Feld-ID, Typ) gehören der Betreuung, nicht der Kundin —
+   nur sichtbar, wenn die technische Ansicht eingeschaltet ist. */
+.fc-meta{display:none;align-items:center;gap:.5rem;margin-bottom:.7rem}
+body.tech .fc-meta{display:flex}
+.fc-label{margin-bottom:.7rem}
+body.tech .fc-label{margin-bottom:.15rem}
 .fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.72rem;color:var(--tx3)}
 .fc-badge{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:.12rem .4rem;border-radius:3px;background:var(--sf);color:var(--tx3);border:1px solid var(--bd)}
 
@@ -1209,6 +1276,9 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .ob-steps li{list-style:decimal}
 .ob-x{font:inherit;font-size:.8rem;font-weight:600;padding:.45rem 1rem;background:var(--b);color:#fff;border:0;border-radius:var(--r2);cursor:pointer;flex:0 0 auto}
 .ob-x:hover{opacity:.9}
+.top-tech{display:inline-flex;align-items:center;gap:.3rem;margin-left:.4rem;padding:.4rem .8rem;font:inherit;font-size:.74rem;font-weight:600;background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;opacity:.6}
+.top-tech:hover{border-color:var(--b);color:var(--b)}
+.top-tech[aria-pressed="true"]{opacity:1;border-color:var(--b);color:var(--b)}
 /* ── Vorschau-Split (nur Desktop) ── */
 .top-pv{display:none}
 .ws{display:block}
@@ -1348,9 +1418,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <form method="POST">
       <input type="hidden" name="pesi_login" value="1">
       <input type="hidden" name="pesi_csrf" value="<?=htmlspecialchars($csrf)?>">
-      <input type="password" name="pesi_password" class="L-i" placeholder="<?=$t['password_ph']?>" autofocus required>
+      <label for="pesi_pw" class="sr"><?=htmlspecialchars($t['password_ph'])?></label>
+      <input type="password" id="pesi_pw" name="pesi_password" class="L-i" placeholder="<?=$t['password_ph']?>" autocomplete="current-password" autofocus required>
       <button type="submit" class="L-b"><?=$t['login_btn']?></button>
     </form>
+    <p class="L-help"><?=htmlspecialchars($t['login_help'])?></p>
   </div>
 </div>
 
@@ -1396,17 +1468,34 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
   </nav>
 
   <div class="M">
-    <?php if (in_array((string)PESI_PASSWORD, ['demo123', 'demo1234'], true)): ?>
-      <div style="background:#f87171;color:#fff;padding:.65rem 2rem;font-size:.85rem;font-weight:600;text-align:center"><?=$t['warn_default_pw']?></div>
-    <?php endif; ?>
     <?php
+      // ── Diagnose ──────────────────────────────────────────────
+      // Einrichtungsprobleme betreffen die Betreuung, nicht die Kundin. Ein
+      // roter Vollbreiten-Alarm mit einer Anweisung, die sie gar nicht
+      // ausführen kann ("bitte in pesi-core.php ändern"), erzeugt nur Angst
+      // und einen Anruf. Darum eine ruhige, zugeklappte Zeile, die ihr sagt,
+      // dass für sie nichts zu tun ist — die Details stehen einen Klick tief
+      // für die Person, die sie beheben kann.
+      //
       // Probe gegen eine garantiert gültige Datei: schlägt sie fehl, ist der
       // Linter nicht nutzbar (exec gesperrt ODER kein PHP-CLI im PATH). Nur
       // auf exec() zu prüfen hätte den zweiten, häufigeren Fall verschwiegen.
-      $lintOk = _pesi_lint($corePath) !== null;
-      if (PESI_SYNTAX_CHECK && !$lintOk):
+      $diag = [];
+      if (in_array((string)PESI_PASSWORD, ['demo123', 'demo1234'], true)) {
+          $diag[] = $t['warn_default_pw'];
+      }
+      if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
+          $diag[] = $t['warn_no_exec'];
+      }
+      if ($diag):
     ?>
-      <div style="background:#f59e0b;color:#fff;padding:.65rem 2rem;font-size:.85rem;font-weight:600;text-align:center"><?=$t['warn_no_exec']?></div>
+      <details class="dg">
+        <summary><?=htmlspecialchars($t['diag_summary'])?></summary>
+        <p class="dg-in"><?=htmlspecialchars($t['diag_intro'])?></p>
+        <ul class="dg-l">
+          <?php foreach ($diag as $d): ?><li><?=htmlspecialchars($d)?></li><?php endforeach; ?>
+        </ul>
+      </details>
     <?php endif; ?>
     <div class="ob" id="ob" hidden>
       <div class="ob-in">
@@ -1431,6 +1520,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         <?php if ($mtime): ?><span class="top-m"><?=sprintf($t['last_mod'], date('d.m.Y H:i', $mtime))?></span><?php endif; ?>
         <a class="top-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=$t['view_live']?></a>
         <button type="button" class="top-pv" id="pvToggle" aria-pressed="true" title="<?=htmlspecialchars($t['pv_btn'])?>"><?=htmlspecialchars($t['pv_btn'])?></button>
+        <button type="button" class="top-tech" id="techToggle" aria-pressed="false" title="<?=htmlspecialchars($t['tech_btn'])?>"><?=htmlspecialchars($t['tech_btn'])?></button>
       </div>
 
       <div class="ws" id="ws">
@@ -1452,7 +1542,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
               <?php foreach ($toggles as $g => $vis): ?>
                 <div class="tgl <?=$vis?'is-on':'is-off'?>">
                   <span class="tgl-dot"></span>
-                  <span class="tgl-name"><?=htmlspecialchars(ucfirst(str_replace('_',' ',$g)))?></span>
+                  <span class="tgl-name"><?=htmlspecialchars(_pesi_human($g))?></span>
                   <span class="tgl-state"><?=$vis?$t['tgl_visible']:$t['tgl_hidden']?></span>
                   <button class="tgl-b" formnovalidate name="pesi_toggle" value="<?=htmlspecialchars($g)?>"<?=$tglNested?' disabled':''?>><?=$vis?htmlspecialchars($t['tgl_hide']):htmlspecialchars($t['tgl_show'])?></button>
                 </div>
@@ -1463,7 +1553,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           <?php if (empty($fields) && empty($toggles)): ?>
             <div class="W">
               <div class="W-in">
-                <p style="color:var(--tx2)"><?=sprintf($t['no_fields'], htmlspecialchars($page))?></p>
+                <p style="color:var(--tx2)"><?=htmlspecialchars($t['no_fields'])?></p>
               </div>
             </div>
           <?php else: ?>
@@ -1507,21 +1597,26 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   $bm = $blkMeta[$bk];
             ?>
               <div class="blk">
-                <div class="blk-head"><?=htmlspecialchars(ucfirst($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></div>
+                <div class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></div>
                 <div class="blk-fields">
             <?php endif; $curBlk = $bk; endif; ?>
+              <?php $fid = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $id); ?>
               <div class="fc">
-                <div class="fc-label"><?=htmlspecialchars($label)?></div>
+                <?php if ($fld['type'] === 'richtext'): ?>
+                  <div class="fc-label"><?=htmlspecialchars($label)?></div>
+                <?php else: ?>
+                  <label class="fc-label" for="<?=$fid?>"><?=htmlspecialchars($label)?></label>
+                <?php endif; ?>
                 <div class="fc-meta">
                   <span class="fc-id"><?=htmlspecialchars($id)?></span>
                   <span class="fc-badge"><?=htmlspecialchars($fld['type'])?></span>
                 </div>
 
                 <?php if ($fld['type'] === 'text'): ?>
-                  <input type="text" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi">
+                  <input type="text" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi">
 
                 <?php elseif ($fld['type'] === 'textarea'): ?>
-                  <textarea name="pesi_field_<?=htmlspecialchars($id)?>" class="fi" rows="4"><?=htmlspecialchars($fld['value'])?></textarea>
+                  <textarea id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" class="fi" rows="4"><?=htmlspecialchars($fld['value'])?></textarea>
 
                 <?php elseif ($fld['type'] === 'image'): ?>
                   <?php $hasImg = trim($fld['value']) !== ''; ?>
@@ -1531,7 +1626,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                       <figcaption class="img-name"><?=htmlspecialchars($t['img_current'])?> <span data-img-name><?=$hasImg?htmlspecialchars(basename($fld['value'])):''?></span></figcaption>
                     </figure>
                     <label class="img-drop" data-img-drop>
-                      <input type="file" name="pesi_upload_<?=htmlspecialchars($id)?>" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" data-img-input hidden>
+                      <input type="file" id="<?=$fid?>" name="pesi_upload_<?=htmlspecialchars($id)?>" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" data-img-input hidden>
                       <span><?=htmlspecialchars($t['img_drop'])?></span>
                     </label>
                     <details class="img-adv">
@@ -1626,6 +1721,26 @@ function closeMobileNav(){
   btn.addEventListener('click',function(){
     off=!off;
     try{ localStorage.setItem('pesi_pv_off', off?'1':'0'); }catch(e){}
+    apply();
+  });
+})();
+
+// ── Technische Ansicht (Feld-IDs + Typen) ein/aus ──
+// Standard: aus. Die Kundin sieht nur Beschriftung und Eingabefeld; wer
+// Feld-IDs braucht, schaltet sie einmal ein und der Zustand bleibt.
+(function(){
+  var btn=document.getElementById('techToggle');
+  if(!btn) return;
+  var on=false;
+  try{ on=localStorage.getItem('pesi_tech')==='1'; }catch(e){}
+  function apply(){
+    document.body.classList.toggle('tech',on);
+    btn.setAttribute('aria-pressed', on?'true':'false');
+  }
+  apply();
+  btn.addEventListener('click',function(){
+    on=!on;
+    try{ localStorage.setItem('pesi_tech', on?'1':'0'); }catch(e){}
     apply();
   });
 })();
