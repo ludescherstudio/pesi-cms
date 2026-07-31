@@ -79,6 +79,14 @@ if (!is_string($selfUrl) || $selfUrl === '' || $selfUrl[0] !== '/'
 $PESI_LOGO_B64 = 'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iRWJlbmVfMiIgZGF0YS1uYW1lPSJFYmVuZSAyIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNDIuNDYgNTYuNDYiPjxkZWZzPjxzdHlsZT4uY2xzLTF7ZmlsbDojZjNmM2YzfS5jbHMtMntmaWxsOiNjNDdhMmF9PC9zdHlsZT48L2RlZnM+PGcgaWQ9IkViZW5lXzEtMiIgZGF0YS1uYW1lPSJFYmVuZSAxIj48Zz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0wLDEyLjEyaDUuNDZ2NC41YzEuMjgtMS42NCwyLjg5LTIuOTIsNC44My0zLjg0LDEuOTQtLjkyLDQuMTEtMS4zOCw2LjUxLTEuMzgsMywwLDUuNzIuNzQsOC4xNiwyLjIyLDIuNDQsMS40OCw0LjM2LDMuNTEsNS43Niw2LjA5LDEuNCwyLjU4LDIuMSw1LjQ1LDIuMSw4LjYxcy0uNyw2LjAyLTIuMSw4LjU4Yy0xLjQsMi41Ni0zLjMyLDQuNTgtNS43Niw2LjA2LTIuNDQsMS40OC01LjE4LDIuMjItOC4yMiwyLjIyLTIuMzIsMC00LjQ1LS40NS02LjM5LTEuMzVzLTMuNTMtMi4xOS00Ljc3LTMuODd2MTYuNUgwVjEyLjEyWk02Ljk5LDM0LjE3Yy45NCwxLjc0LDIuMjMsMy4xMSwzLjg3LDQuMTEsMS42NCwxLDMuNDYsMS41LDUuNDYsMS41czMuODEtLjUsNS40My0xLjVjMS42Mi0xLDIuODgtMi4zNywzLjc4LTQuMTEuOS0xLjc0LDEuMzUtMy42OSwxLjM1LTUuODVzLS40Ni00LjEyLTEuMzgtNS44OGMtLjkyLTEuNzYtMi4xOC0zLjE0LTMuNzgtNC4xNC0xLjYtMS0zLjQtMS41LTUuNC0xLjVzLTMuODIuNS01LjQ2LDEuNWMtMS42NCwxLTIuOTMsMi4zOC0zLjg3LDQuMTQtLjk0LDEuNzYtMS40MSwzLjcyLTEuNDEsNS44OHMuNDcsNC4xMSwxLjQxLDUuODVaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNDYuMTQsNDIuOTZjLTIuNDgtMS40OC00LjQyLTMuNTEtNS44Mi02LjA5LTEuNC0yLjU4LTIuMS01LjQ3LTIuMS04LjY3cy42OS02LjA4LDIuMDctOC42NGMxLjM4LTIuNTYsMy4yNi00LjU2LDUuNjQtNiwyLjM4LTEuNDQsNS4wNS0yLjE2LDguMDEtMi4xNnM1Ljc3LjcyLDguMDcsMi4xNmMyLjMsMS40NCw0LjA2LDMuMzUsNS4yOCw1LjczLDEuMjIsMi4zOCwxLjgzLDQuOTMsMS44Myw3LjY1LDAsLjkyLS4xLDEuOTItLjMsM2gtMjQuNzJjLjA4LDIuMDQuNiwzLjgyLDEuNTYsNS4zNC45NiwxLjUyLDIuMjEsMi43LDMuNzUsMy41NCwxLjU0Ljg0LDMuMjMsMS4yNiw1LjA3LDEuMjYsMy45MiwwLDYuOTQtMS43OCw5LjA2LTUuMzRsNC42OCwyLjRjLTEuMDQsMi4zMi0yLjgsNC4yNC01LjI4LDUuNzYtMi40OCwxLjUyLTUuMzIsMi4yOC04LjUyLDIuMjhzLTUuOC0uNzQtOC4yOC0yLjIyWk02My4wNiwyNS4xNGMtLjA4LTIuNTItLjk5LTQuNjEtMi43My02LjI3LTEuNzQtMS42Ni0zLjg3LTIuNDktNi4zOS0yLjQ5cy00LjYyLjc5LTYuNDIsMi4zN2MtMS44LDEuNTgtMi45LDMuNzEtMy4zLDYuMzloMTguODRaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNzkuMDgsNDIuODdjLTIuNC0xLjU0LTQuMTItMy42My01LjE2LTYuMjdsNC41LTIuMjhjLjkyLDEuODgsMi4xOCwzLjM2LDMuNzgsNC40NCwxLjYsMS4wOCwzLjM0LDEuNjIsNS4yMiwxLjYyczMuMjgtLjQyLDQuNDQtMS4yNmMxLjE2LS44NCwxLjc0LTEuOTQsMS43NC0zLjNzLS41Mi0yLjM5LTEuNTYtMy4yMWMtMS4wNC0uODItMi4xNi0xLjMxLTMuMzYtMS40N2wtNC44Ni0uNjZjLTIuODgtLjcyLTUuMDQtMS45Mi02LjQ4LTMuNi0xLjQ0LTEuNjgtMi4xNi0zLjY2LTIuMTYtNS45NCwwLTEuODguNDktMy41NCwxLjQ3LTQuOTguOTgtMS40NCwyLjM0LTIuNTYsNC4wOC0zLjM2LDEuNzQtLjgsMy42Ny0xLjIsNS43OS0xLjIsMi44LDAsNS4zMS43LDcuNTMsMi4xLDIuMjIsMS40LDMuODEsMy4zNCw0Ljc3LDUuODJsLTQuNDQsMi4yOGMtLjgtMS42NC0xLjkxLTIuOTQtMy4zMy0zLjktMS40Mi0uOTYtMi45OS0xLjQ0LTQuNzEtMS40NHMtMi45Ni40LTMuOTYsMS4yYy0xLC44LTEuNSwxLjg0LTEuNSwzLjEycy40NywyLjM3LDEuNDEsMy4xNWMuOTQuNzgsMS45NywxLjI3LDMuMDksMS40N2w1LjM0LjcyYzIuNjguNzIsNC43NywxLjk1LDYuMjcsMy42OSwxLjUsMS43NCwyLjI1LDMuNzUsMi4yNSw2LjAzLDAsMS44NC0uNSwzLjQ4LTEuNSw0LjkyLTEsMS40NC0yLjQsMi41Ny00LjIsMy4zOS0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTEwNi4xNC45NmMuNjQtLjY0LDEuNDgtLjk2LDIuNTItLjk2czEuODguMzIsMi41Mi45NmMuNjQuNjQuOTYsMS40OC45NiwyLjUycy0uMzIsMS44OC0uOTYsMi41MmMtLjY0LjY0LTEuNDguOTYtMi41Mi45NnMtMS44OC0uMzItMi41Mi0uOTZjLS42NC0uNjQtLjk2LTEuNDgtLjk2LTIuNTJzLjMyLTEuODguOTYtMi41MlpNMTA1Ljg0LDE3LjQ2aDUuNTh2MjdoLTUuNTh2LTI3WiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTEzNS43Miw0Mi45NmMtMi41Mi0xLjQ4LTQuNDgtMy41MS01Ljg4LTYuMDktMS40LTIuNTgtMi4xLTUuNDUtMi4xLTguNjFzLjctNi4wOCwyLjEtOC42NGMxLjQtMi41NiwzLjM1LTQuNTcsNS44NS02LjAzLDIuNS0xLjQ2LDUuMzUtMi4xOSw4LjU1LTIuMTlzNS45Ny44MSw4LjU1LDIuNDMsNC40MSwzLjcxLDUuNDksNi4yN2wtNS4wNCwyLjRjLS43Ni0xLjcyLTEuOTUtMy4xLTMuNTctNC4xNC0xLjYyLTEuMDQtMy40My0xLjU2LTUuNDMtMS41NnMtMy43NS41LTUuMzcsMS41Yy0xLjYyLDEtMi44OSwyLjM3LTMuODEsNC4xMS0uOTIsMS43NC0xLjM4LDMuNzEtMS4zOCw1Ljkxcy40Nyw0LjExLDEuNDEsNS44NWMuOTQsMS43NCwyLjIxLDMuMTEsMy44MSw0LjExLDEuNiwxLDMuMzgsMS41LDUuMzQsMS41czMuODYtLjUyLDUuNDYtMS41NmMxLjYtMS4wNCwyLjc4LTIuNDYsMy41NC00LjI2bDUuMDQsMi41MmMtMS4wNCwyLjUyLTIuODYsNC42LTUuNDYsNi4yNC0yLjYsMS42NC01LjQ2LDIuNDYtOC41OCwyLjQ2cy02LS43NC04LjUyLTIuMjJaIi8+PHBhdGggY2xhc3M9ImNscy0yIiBkPSJNMTY0LjgyLDEyLjEyaDUuNDZ2NC4wMmMuOTItMS41MiwyLjE3LTIuNjksMy43NS0zLjUxLDEuNTgtLjgyLDMuMzMtMS4yMyw1LjI1LTEuMjMsMi4yLDAsNC4yMS41Myw2LjAzLDEuNTksMS44MiwxLjA2LDMuMjEsMi40OSw0LjE3LDQuMjksMS4wNC0xLjg4LDIuNDUtMy4zMyw0LjIzLTQuMzUsMS43OC0xLjAyLDMuNzUtMS41Myw1LjkxLTEuNTNzNC4yMi41Myw2LjA2LDEuNTljMS44NCwxLjA2LDMuMywyLjUxLDQuMzgsNC4zNSwxLjA4LDEuODQsMS42MiwzLjksMS42Miw2LjE4djIwLjk0aC01LjY0di0xOS4xNGMwLTIuNjQtLjY5LTQuNzItMi4wNy02LjI0LTEuMzgtMS41Mi0zLjE3LTIuMjgtNS4zNy0yLjI4cy00LjA2Ljc3LTUuNDYsMi4zMWMtMS40LDEuNTQtMi4xLDMuNjEtMi4xLDYuMjF2MTkuMTRoLTUuNjR2LTE5LjE0YzAtMi42NC0uNjgtNC43Mi0yLjA0LTYuMjQtMS4zNi0xLjUyLTMuMTYtMi4yOC01LjQtMi4yOHMtNC4wMS43Ny01LjQzLDIuMzFjLTEuNDIsMS41NC0yLjEzLDMuNjEtMi4xMyw2LjIxdjE5LjE0aC01LjU4VjEyLjEyWiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTIyMi4zLDQyLjg3Yy0yLjQtMS41NC00LjEyLTMuNjMtNS4xNi02LjI3bDQuNS0yLjI4Yy45MiwxLjg4LDIuMTgsMy4zNiwzLjc4LDQuNDQsMS42LDEuMDgsMy4zNCwxLjYyLDUuMjIsMS42MnMzLjI4LS40Miw0LjQ0LTEuMjZjMS4xNi0uODQsMS43NC0xLjk0LDEuNzQtMy4zcy0uNTItMi4zOS0xLjU2LTMuMjFjLTEuMDQtLjgyLTIuMTYtMS4zMS0zLjM2LTEuNDdsLTQuODYtLjY2Yy0yLjg4LS43Mi01LjA0LTEuOTItNi40OC0zLjYtMS40NC0xLjY4LTIuMTYtMy42Ni0yLjE2LTUuOTQsMC0xLjg4LjQ5LTMuNTQsMS40Ny00Ljk4czIuMzQtMi41Niw0LjA4LTMuMzZjMS43NC0uOCwzLjY3LTEuMiw1Ljc5LTEuMiwyLjgsMCw1LjMxLjcsNy41MywyLjEsMi4yMiwxLjQsMy44MSwzLjM0LDQuNzcsNS44MmwtNC40NCwyLjI4Yy0uOC0xLjY0LTEuOTEtMi45NC0zLjMzLTMuOS0xLjQyLS45Ni0yLjk5LTEuNDQtNC43MS0xLjQ0cy0yLjk2LjQtMy45NiwxLjJjLTEsLjgtMS41LDEuODQtMS41LDMuMTJzLjQ3LDIuMzcsMS40MSwzLjE1Yy45NC43OCwxLjk3LDEuMjcsMy4wOSwxLjQ3bDUuMzQuNzJjMi42OC43Miw0Ljc3LDEuOTUsNi4yNywzLjY5LDEuNSwxLjc0LDIuMjUsMy43NSwyLjI1LDYuMDMsMCwxLjg0LS41LDMuNDgtMS41LDQuOTJzLTIuNCwyLjU3LTQuMiwzLjM5Yy0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjwvZz48L2c+PC9zdmc+';
 $PESI_LOGO = 'data:image/svg+xml;base64,' . $PESI_LOGO_B64;
 
+// Variante für hellen Hintergrund (Login). Dieselbe Grafik, nur der hellgraue
+// Wortteil „pesi" in Dunkel — auf Weiß wäre #f3f3f3 praktisch unsichtbar.
+// Zur Laufzeit abgeleitet statt als zweiter Base64-Block: ein Blob, der nicht
+// mit dem ersten aus dem Tritt geraten kann, wenn das Logo einmal getauscht wird.
+$PESI_LOGO_LIGHT = 'data:image/svg+xml;base64,' . base64_encode(
+    str_replace('#f3f3f3', '#1a1a1a', (string)base64_decode($PESI_LOGO_B64))
+);
+
 // ── Auth ─────────────────────────────────────────────────────
 if (isset($_GET['logout'])) {
     unset($_SESSION[$sk]);
@@ -1236,18 +1244,22 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 
 /* ───── LOGIN ───── */
 
-.L{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:radial-gradient(ellipse at 30% 40%,<?=$bc?>0a,transparent 60%),var(--bg)}
-.L-c{width:100%;max-width:340px;animation:up .45s ease-out}
+.L{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:radial-gradient(ellipse at 30% 40%,<?=$bc?>0f,transparent 60%),var(--bg)}
+/* Karte auf hellem Grund — gleiche Anmutung wie der Login von the shared design */
+.L-c{width:100%;max-width:340px;animation:up .45s ease-out;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:2rem;box-shadow:0 4px 24px rgba(26,32,44,.06)}
 .L-logo{display:block;height:42px;width:auto;margin-bottom:.15rem}
 .L-c .sub{font-size:.8rem;color:var(--tx2);margin:.25rem 0 2rem}
-.L-c .err{padding:.6rem .85rem;background:var(--er-b);border:1px solid #f8717118;border-radius:var(--r2);color:var(--er);font-size:.84rem;margin-bottom:1rem}
+/* Eigene Rot- und Grautöne statt var(--er)/var(--tx3): die stammen aus der
+   Dunkel-Palette und erreichen auf der weissen Karte nur 2,8:1 bzw. 2,5:1 —
+   unter WCAG AA, und das bei der wichtigsten Zeile des Bildschirms. */
+.L-c .err{padding:.6rem .85rem;background:var(--er-b);border:1px solid #f8717130;border-radius:var(--r2);color:#c0392b;font-size:.84rem;margin-bottom:1rem}
 .L-i{width:100%;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:inherit;font-size:.93rem;outline:0;transition:border .2s,box-shadow .2s}
 .L-i:focus{border-color:var(--b);box-shadow:0 0 0 3px var(--b-g)}
 .L-i::placeholder{color:var(--tx3)}
 .L-b{width:100%;padding:.8rem;margin-top:.75rem;background:var(--b);color:#fff;border:0;border-radius:var(--r);font-family:inherit;font-size:.93rem;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
 .L-b:hover{opacity:.88}
 .L-b:active{transform:scale(.98)}
-.L-help{margin-top:1rem;font-size:.78rem;color:var(--tx3);line-height:1.5}
+.L-help{margin-top:1rem;font-size:.78rem;color:var(--tx2);line-height:1.5;text-align:center}
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* ───── DIAGNOSE (Einrichtung — Adressat ist die Betreuung) ───── */
@@ -1480,8 +1492,11 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
   .sv-h{display:none}
 }
 
-/* ═══ DASHBOARD: LIGHT MODE ═══ */
-body.dash{
+/* ═══ LIGHT MODE — Login wie Dashboard ═══ */
+/* Der Login lief bisher dunkel, das Dashboard hell: derselbe Nutzer sah beim
+   Anmelden zwei verschiedene Produkte. Beide teilen sich jetzt die Palette,
+   analog zu the shared design. */
+body.dash,body.login{
   --bg:  #f0f2f5;
   --bg2: #ffffff;
   --bg3: #f5f6f7;
@@ -1524,7 +1539,7 @@ body.dash .fc .ql-snow .ql-tooltip{background:#fff;border-color:#ddd;color:#333;
 body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-color:#ddd;color:#333}
 </style>
 </head>
-<body<?= $auth ? ' class="dash"' : '' ?>>
+<body class="<?= $auth ? 'dash' : 'login' ?>">
 
 <?php if (!$auth): ?>
 <!-- ═══════ LOGIN ═══════ -->
@@ -1533,7 +1548,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <?php if ($logo): ?>
     <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="L-logo">
     <?php else: ?>
-    <img src="<?=$PESI_LOGO?>" alt="pesi cms" class="L-logo">
+    <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi cms" class="L-logo">
     <?php endif; ?>
     <p class="sub"><?=htmlspecialchars($sn)?></p>
     <?php if ($loginError): ?><div class="err"><?=$t['wrong_password']?></div><?php endif; ?>
