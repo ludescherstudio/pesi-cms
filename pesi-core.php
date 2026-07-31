@@ -1,6 +1,6 @@
 <?php
 // pesi CMS v0.3 — Core · ludescher.studio
-// Dokumentation: SETUP.md
+// Dokumentation: README.md
 
 // ── Config ───────────────────────────────────────────────────
 

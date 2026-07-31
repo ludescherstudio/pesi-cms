@@ -36,6 +36,9 @@ alongside client work — timelines are best-effort, not contractual.
 - Missing `.htaccess` hardening. Blocking `pesi-core.php` and `.pesi-*` files is
   a documented install step, and on Nginx an equivalent `deny` rule is required
   (see README). A server that skips it is a deployment issue, not a pesi bug.
+  **In scope, however, is a shipped rule that does not do what it claims** — if
+  the documented pattern fails to block a file the docs say it blocks, that is a
+  pesi bug, not a deployment issue.
 - Anything requiring an already-compromised dashboard password, *unless* it
   crosses the content→code boundary described above.
 - Self-XSS, missing security headers on the customer's own site, or issues in
@@ -45,8 +48,11 @@ alongside client work — timelines are best-effort, not contractual.
 
 - Set a strong `PESI_PASSWORD`. `password_hash()` output is supported — see README.
 - Verify `.htaccess` (Apache) or the equivalent `deny` rules (Nginx) actually
-  block `pesi-core.php` and every `.pesi-*` file. Backups are plain copies of
-  your source, including the password.
+  block `pesi-core.php` and every `.pesi-*` file — by requesting
+  `/<page>.php.pesi-backup.1` in a browser and confirming a 403. Backups are
+  byte-for-byte copies of that page's source. Note that the `<FilesMatch>`
+  pattern must be **unanchored** (`\.pesi-`, not `^\.pesi-`): a backup is named
+  `index.php.pesi-backup.1` and does not start with `.pesi-`.
 - Keep `PESI_SYNTAX_CHECK` enabled so a broken save rolls back automatically.
 - Serve the dashboard over HTTPS — session cookies only get the `secure` flag
   when the request is HTTPS.
