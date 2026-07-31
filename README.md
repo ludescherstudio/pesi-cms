@@ -474,6 +474,8 @@ install does. Both are your job, not the client's.
 | `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
 | `T7` | `php -l` cannot run, so broken saves are not rolled back automatically | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
 | `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
+| `T9` | The page could not be written completely — almost always a full disk or an exhausted hosting quota. pesi restored the previous state | Free up space or raise the quota, then have the client save again |
+| `T10` | A write failed **and** the restore from `.pesi-backup.1` failed too. The page on the server may be incomplete | Act immediately: restore the page from `.pesi-backup.1`/`.2` or your own backup by hand |
 
 ### Rewording the interface
 
@@ -504,7 +506,8 @@ cannot silently blank out a label. Updating pesi stays a file swap.
 - CSRF tokens protect every form submission
 - `text`, `textarea`, and `image` output is HTML-escaped; image URLs reject script/data-style schemes
 - `richtext` output is sanitized through a small server-side HTML allowlist before it is saved or rendered
-- Image uploads are checked by real MIME type, size, and extension; upload directories must stay inside the project root
+- Image uploads are checked by real MIME type, size, and extension; upload directories must stay inside the project root. The type is read from the file's content, never from its name — via `finfo` where available, otherwise `getimagesize()`; if neither can identify the file, the upload is rejected rather than trusted
+- Writes are verified: a partial write (full disk, exhausted quota) restores the previous state instead of leaving a half-written page behind
 - Before every save, a rotated backup is created (`page.php.pesi-backup.1` = last save, `.2` = previous)
 - After saving, `php -l` runs automatically — on a syntax error, pesi rolls back from `.pesi-backup.1`
 - File locking plus a file mtime/hash check prevents stale overwrites
