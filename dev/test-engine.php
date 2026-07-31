@@ -211,6 +211,71 @@ _pesi_toggle_op($p, 'urlaub');
 ok('wieder sichtbar', _pesi_toggle_parse($p) === ['urlaub' => true]);
 ok('gerendert wieder sichtbar', strpos(render($p), 'URLAUBSHINWEIS') !== false);
 
+// ── Verschachtelte Toggles: erkennen statt still falsch schalten
+grp('Toggle — Verschachtelung');
+$p = page("<?php ?>\n<!-- pesi:toggle aussen -->\nA\n<!-- pesi:toggle innen -->\nB\n<!-- /pesi:toggle -->\nC\n<!-- /pesi:toggle -->\nD\n");
+ok('Verschachtelung erkannt', _pesi_toggle_nested($p) === true);
+$before = file_get_contents($p);
+$r = _pesi_toggle_op($p, 'aussen');
+ok('Operation verweigert', $r['type'] === 'error', json_encode($r, JSON_UNESCAPED_UNICODE));
+ok('Datei unangetastet', file_get_contents($p) === $before);
+$out = render($p);
+ok('C bleibt sichtbar (nichts halb versteckt)', strpos($out, 'C') !== false, $out);
+
+$p = page("<?php ?>\n<!-- pesi:toggle eins -->\nA\n<!-- /pesi:toggle -->\n<!-- pesi:toggle zwei -->\nB\n<!-- /pesi:toggle -->\n");
+ok('zwei Geschwister sind nicht verschachtelt', _pesi_toggle_nested($p) === false);
+ok('Geschwister lassen sich schalten', _pesi_toggle_op($p, 'zwei')['type'] === 'success');
+ok('nur der zweite versteckt', _pesi_toggle_parse($p) === ['eins' => true, 'zwei' => false]);
+
+// ── Bild-Cleanup: fest verdrahtete Referenzen überleben ──────
+grp('Bild-Cleanup');
+$site = $scratch . '/site';
+@mkdir($site . '/uploads', 0777, true);
+file_put_contents($site . '/uploads/benutzt.jpg', 'x');
+file_put_contents($site . '/uploads/verwaist.jpg', 'x');
+file_put_contents(
+    $site . '/index.php',
+    "<?php ?>\n<meta property=\"og:image\" content=\"/uploads/benutzt.jpg\">\n"
+    . "<?= pesi('bild', '/uploads/neu.jpg', 'image', 'Bild') ?>\n"
+);
+_pesi_cleanup_old($site, [
+    'pesi_field_a' => '/uploads/benutzt.jpg',
+    'pesi_field_b' => '/uploads/verwaist.jpg',
+], ['index.php' => 'Start']);
+ok('fest im Markup referenziertes Bild bleibt', is_file($site . '/uploads/benutzt.jpg'));
+ok('wirklich verwaistes Bild gelöscht', !is_file($site . '/uploads/verwaist.jpg'));
+
+// Traversal-Schutz: ein Pfad ausserhalb des Upload-Ordners wird nie gelöscht
+file_put_contents($site . '/wichtig.php', 'BLEIBT');
+_pesi_cleanup_old($site, ['pesi_field_c' => '/uploads/../wichtig.php'], ['index.php' => 'Start']);
+ok('kein Löschen ausserhalb des Upload-Ordners', is_file($site . '/wichtig.php'));
+
+// ── Redirect-Ziel: kein Open Redirect über REQUEST_URI ───────
+// Top-Level-Code, den der Engine-Slice nicht erfasst — darum den echten Block
+// aus pesi.php herausschneiden und ausführen, statt ihn hier nachzubauen.
+grp('$selfUrl — Redirect-Ziel');
+if (!preg_match('/\$selfUrl = strtok.*?\n\}\n/s', $src, $sm)) {
+    ok('Guard-Block in pesi.php gefunden', false, 'Muster passt nicht mehr — Test anpassen');
+} else {
+    $guard = $sm[0];
+    $cases = [
+        '/pesi'                 => '/pesi',   // normal
+        '/cms?x=1'              => '/cms',    // Query wird abgeschnitten
+        '//evil.example/pesi'   => '/pesi',   // protokollrelativ → verworfen
+        '/\\evil.example'       => '/pesi',   // Backslash-Variante → verworfen
+        "/pesi\r\nX-Inject: 1"  => '/pesi',   // Steuerzeichen → verworfen
+        'pesi'                  => '/pesi',   // ohne führenden Slash → verworfen
+        ''                      => '/pesi',   // leer → Fallback
+    ];
+    foreach ($cases as $in => $want) {
+        $_SERVER['REQUEST_URI'] = $in;
+        $selfUrl = null;
+        eval($guard);
+        ok('REQUEST_URI ' . json_encode($in) . ' → ' . $want, $selfUrl === $want,
+            'bekam: ' . json_encode($selfUrl));
+    }
+}
+
 // ── i18n-Parität ─────────────────────────────────────────────
 grp('i18n — DE/EN');
 $s = _pesi_strings();
@@ -220,7 +285,11 @@ ok('keine DE-only Keys', !$onlyDe, implode(', ', $onlyDe));
 ok('keine EN-only Keys', !$onlyEn, implode(', ', $onlyEn));
 
 // ── Aufräumen ────────────────────────────────────────────────
-foreach (glob($scratch . '/*') as $f) @unlink($f);
+foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
+    foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }
+}
+@rmdir($scratch . '/site/uploads');
+@rmdir($scratch . '/site');
 @rmdir($scratch);
 
 echo "\n" . str_repeat('─', 46) . "\n";
