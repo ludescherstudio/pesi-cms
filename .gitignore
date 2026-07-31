@@ -16,6 +16,12 @@ uploads/
 CLAUDE.md
 AGENTS.md
 
+# Regression suite. Deliberately not shipped: the repository shows users the
+# files they install and the docs to read, nothing else. The suite still
+# matters — see the Testing section in CLAUDE.md for how to restore it from
+# git history and when to run it.
+dev/
+
 # ── Local tooling / editor config ────────────────────────────
 .claude/
 .vscode/

@@ -39,11 +39,9 @@ site/
 └── [page].php      # Editable pages
 ```
 
-**Upload only those files.** Everything else in the pesi repository —
-`dev/`, `*.md`, `LICENSE` — is development material and has no place on a
-customer webspace. `dev/test-engine.php` in particular writes files and calls
-`shell_exec()`; it refuses to run over HTTP and is excluded from release
-archives, but the simplest protection is not uploading it in the first place.
+**Upload only those files.** Everything else in the pesi repository — every
+`*.md` file and `LICENSE` — is documentation and has no place on a customer
+webspace. Copy `pesi.php` and `pesi-core.php`, nothing more.
 
 ## The pesi() function
 

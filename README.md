@@ -47,7 +47,21 @@ pesi handles small, page-bound content, and stops there.
 
 ## What's in this repository
 
-Only the files you actually need:
+**Two files are the product. Everything else is documentation.**
+
+| File | What it is |
+|------|------------|
+| **`pesi.php`** | The dashboard your client logs into. Upload as-is, never edit. |
+| **`pesi-core.php`** | Settings + the `pesi()` helper. Upload it, then change the settings at the top — password, brand name, page list. |
+| `README.md` | You are reading it. Continue with *Installation* right below. |
+| `pesi-agent.md` | The same installation, written for an AI coding agent (Claude Code, Cursor, …). Point your agent at this file and it does the integration for you. Ignore it if you install by hand. |
+| `SECURITY.md` | How to report a security problem. |
+| `THIRD-PARTY.md` | The licence notice for the bundled Quill editor. Ships with every copy you pass on. |
+| `LICENSE` | MIT. |
+
+**Only the two `.php` files belong on your webspace.** The `.md` files stay here on GitHub.
+
+After installation your webroot looks like this:
 
 ```
 your-webroot/

@@ -10,8 +10,3 @@ LICENSE text eol=lf
 # The vendored Quill blob in pesi.php is one ~210 KB minified line.
 # Keep diffs readable by not attempting to merge it.
 pesi.php merge=binary linguist-vendored=false
-
-# Keep the test suite out of release archives (git archive, GitHub "Download
-# ZIP"). It belongs in the repository, but never in a customer installation —
-# it writes files and calls shell_exec(). It also refuses to run over HTTP.
-dev/ export-ignore
