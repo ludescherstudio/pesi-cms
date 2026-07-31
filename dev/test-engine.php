@@ -4,6 +4,13 @@
  *
  *   php dev/test-engine.php
  *
+ * NUR ÜBER DIE KOMMANDOZEILE. Dieses Skript legt Dateien an, ruft shell_exec()
+ * und eval() auf und gibt Interna aus — über HTTP erreichbar wäre es ein
+ * Einfallstor. `dev/` gehört nicht in eine Kundeninstallation (dorthin kommen
+ * nur pesi.php und pesi-core.php); die Sperre unten ist die Absicherung für
+ * den Fall, dass doch einmal der ganze Ordner auf den Webspace synchronisiert
+ * wird. .gitattributes hält den Ordner zusätzlich aus ZIP-Downloads heraus.
+ *
  * `pesi.php` lässt sich nicht einbinden (Session + Header laufen beim Include
  * los), darum schneidet dieses Skript den Funktionsblock heraus — dieselbe
  * Technik, die CLAUDE.md beschreibt — und testet ihn gegen ein Scratch-File.
@@ -14,6 +21,11 @@
  * Sanitizer, Struktur-Marker in Feldwerten). Wer Saver, Sanitizer oder die
  * strukturellen Features anfasst, lässt das hier vorher und nachher laufen.
  */
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
 
 $root    = dirname(__DIR__);
 $scratch = sys_get_temp_dir() . '/pesi-test-' . getmypid();
