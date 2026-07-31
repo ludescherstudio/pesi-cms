@@ -276,6 +276,140 @@ if (!preg_match('/\$selfUrl = strtok.*?\n\}\n/s', $src, $sm)) {
     }
 }
 
+// ── Upload: Dateiname-Erzeugung ──────────────────────────────
+// _pesi_slug() bestimmt, wie der Name auf dem Webspace landet. Alles, was
+// nicht [a-z0-9-] ist, muss verschwinden — sonst wandern Pfadtrenner,
+// Nullbytes oder eine zweite Endung in den Zielnamen.
+grp('Upload — _pesi_slug');
+foreach ([
+    'Urlaubsfoto.JPG'          => 'urlaubsfoto',
+    '../../etc/passwd'         => 'passwd',
+    'shell.php'                => 'shell',
+    'bild.php.jpg'             => 'bild-php',
+    "null\x00byte.png"         => 'null-byte',
+    'Ärztin Müller.jpeg'       => 'rztin-m-ller',
+    '....'                     => 'bild',
+    ''                         => 'bild',
+    '   '                      => 'bild',
+    str_repeat('a', 200) . '.png' => str_repeat('a', 50),
+] as $in => $want) {
+    $got = _pesi_slug($in);
+    ok('slug(' . json_encode($in) . ')', $got === $want, 'bekam: ' . json_encode($got));
+}
+ok('Slug enthält nie einen Pfadtrenner',
+    !preg_match('#[/\\\\]#', _pesi_slug('a/b\\c.png')));
+
+// ── Upload: Zielordner-Prüfung ───────────────────────────────
+grp('Upload — _pesi_upload_dir');
+foreach ([
+    'uploads'        => 'uploads',
+    '/uploads/'      => 'uploads',
+    'assets/bilder'  => 'assets/bilder',
+    '../geheim'      => '',
+    'uploads/../..'  => '',
+    './uploads'      => '',
+    ''               => '',
+    '/'              => '',
+    'uploads;rm -rf' => '',
+    'C:/windows'     => '',
+    "uploads\x00"    => '',
+] as $in => $want) {
+    $got = _pesi_upload_dir($in);
+    ok('dir(' . json_encode($in) . ')', $got === $want, 'bekam: ' . json_encode($got));
+}
+
+// ── Upload: Typ wird aus dem Inhalt bestimmt, nicht aus dem Namen
+grp('Upload — MIME statt Dateiendung');
+$map = _pesi_upload_map();
+$gif = $scratch . '/probe.gif';
+file_put_contents($gif, base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'));
+$png = $scratch . '/probe.png';
+file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
+$fake = $scratch . '/harmlos.jpg';           // PHP-Datei mit Bild-Endung
+file_put_contents($fake, "<?php system(\$_GET['c']); ?>");
+echo '  (finfo ' . (class_exists('finfo') ? 'vorhanden' : 'FEHLT → getimagesize-Fallback') . ")\n";
+foreach ([$gif => 'image/gif', $png => 'image/png'] as $f => $wantMime) {
+    $m = _pesi_image_mime($f);
+    ok(basename($f) . ' → ' . $wantMime, $m === $wantMime, 'erkannt: ' . json_encode($m));
+    ok(basename($f) . ' ist in der Allowlist', isset($map[$m]));
+    ok(basename($f) . ' bekommt Endung aus dem MIME', in_array($map[$m][0] ?? '', ['gif', 'png'], true));
+}
+$fm = _pesi_image_mime($fake);
+ok('als .jpg getarntes PHP wird nicht als Bild erkannt', !isset($map[$fm]), 'erkannt: ' . json_encode($fm));
+ok('unlesbare Datei liefert leeren Typ, nicht geraten', _pesi_image_mime($fake) === '' || !isset($map[$fm]));
+ok('SVG ist bewusst nicht erlaubt', !isset($map['image/svg+xml']));
+ok('nicht existierende Datei stürzt nicht ab', _pesi_image_mime($scratch . '/gibtsnicht.png') === '');
+
+// ── Upload-Handler: Ablehnungen vor dem Schreiben ────────────
+grp('Upload — Handler lehnt ab');
+$imgField = ['bild' => ['id' => 'bild', 'value' => '/uploads/alt.jpg', 'type' => 'image', 'label' => 'Titelbild']];
+$maxCfg   = defined('PESI_UPLOAD_MAX_BYTES') ? (int)PESI_UPLOAD_MAX_BYTES : 5242880;
+
+$r = _pesi_handle_uploads($imgField, ['pesi_upload_bild' => ['error' => UPLOAD_ERR_NO_FILE, 'size' => 0, 'name' => '', 'tmp_name' => '']], [], $scratch);
+ok('kein neues Bild → keine Meldung, kein Eingriff', !$r['errors'] && !$r['old']);
+
+$r = _pesi_handle_uploads($imgField, ['pesi_upload_bild' => ['error' => UPLOAD_ERR_OK, 'size' => $maxCfg + 1, 'name' => 'gross.jpg', 'tmp_name' => $png]], [], $scratch);
+ok('zu großes Bild wird abgelehnt', count($r['errors']) === 1, json_encode($r['errors'], JSON_UNESCAPED_UNICODE));
+ok('Ablehnung nennt die Beschriftung, nicht die Feld-ID',
+    strpos($r['errors'][0] ?? '', 'Titelbild') !== false, $r['errors'][0] ?? '');
+
+$r = _pesi_handle_uploads($imgField, ['pesi_upload_bild' => ['error' => UPLOAD_ERR_PARTIAL, 'size' => 10, 'name' => 'x.jpg', 'tmp_name' => $png]], [], $scratch);
+ok('abgebrochener Upload wird abgelehnt', count($r['errors']) === 1);
+
+// Der entscheidende Schutz: eine Datei, die nicht per HTTP hochgeladen wurde,
+// darf der Handler niemals verschieben — sonst wäre jeder Pfad auf dem Server
+// als „Upload" ausgebbar.
+$r = _pesi_handle_uploads($imgField, ['pesi_upload_bild' => ['error' => UPLOAD_ERR_OK, 'size' => 68, 'name' => 'echt.png', 'tmp_name' => $png]], [], $scratch);
+ok('nicht-hochgeladene Datei wird verweigert (is_uploaded_file)',
+    count($r['errors']) === 1 && !isset($r['post']['pesi_field_bild']),
+    json_encode($r, JSON_UNESCAPED_UNICODE));
+ok('dabei wird nichts verschoben', is_file($png));
+
+// ── Brute-Force-Bremse ───────────────────────────────────────
+grp('Login-Bremse');
+$thr = _pesi_throttle_file();   // liegt neben der Engine, also im Scratch
+@unlink($thr);
+$_SERVER['REMOTE_ADDR'] = '203.0.113.7';
+ok('frischer Client ist nicht gesperrt', _pesi_throttle_check() === 0);
+_pesi_throttle_fail();
+$w1 = _pesi_throttle_check();
+ok('nach einem Fehlversuch gesperrt', $w1 > 0, "wait=$w1");
+_pesi_throttle_fail();
+_pesi_throttle_fail();
+$w3 = _pesi_throttle_check();
+ok('Sperre wächst exponentiell', $w3 > $w1, "1.: $w1 s, 3.: $w3 s");
+ok('Sperre ist gedeckelt', $w3 <= 300, "wait=$w3");
+
+$_SERVER['REMOTE_ADDR'] = '198.51.100.42';
+ok('andere IP bleibt frei', _pesi_throttle_check() === 0);
+$_SERVER['REMOTE_ADDR'] = '203.0.113.7';
+ok('erste IP weiterhin gesperrt', _pesi_throttle_check() > 0);
+_pesi_throttle_reset();
+ok('erfolgreicher Login löscht den Zähler', _pesi_throttle_check() === 0);
+
+$raw = (string)file_get_contents($thr);
+ok('Register enthält keine Klartext-IP', strpos($raw, '203.0.113.7') === false, $raw);
+ok('Register ist gültiges JSON', is_array(json_decode($raw, true)), $raw);
+@unlink($thr);
+
+// ── Teilschreibung: Rollback statt halber Seite ──────────────
+grp('Commit — unvollständiger Schreibvorgang');
+$p = page("<?php\n\$x = pesi('f', 'ORIGINAL', 'text', 'L');\n");
+_pesi_backup($p);
+ok('Backup wurde vollständig angelegt',
+    is_file($p . '.pesi-backup.1') && filesize($p . '.pesi-backup.1') === filesize($p));
+// Echten Syntaxfehler committen → Rollback-Pfad inkl. Meldung prüfen
+$r = _pesi_commit($p, "<?php\n\$x = ;;;\n");
+ok('Rollback meldet Fehler', $r !== null && $r['type'] === 'error');
+ok('Meldung ist die Rollback-Meldung, nicht die fatale',
+    $r['msg'] === $GLOBALS['t']['err_php_rollback'], $r['msg']);
+ok('Originalinhalt ist zurück', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
+// Ohne Backup kann nicht zurückgerollt werden → dringlichere Meldung
+@unlink($p . '.pesi-backup.1');
+@unlink($p . '.pesi-backup.2');
+$r = _pesi_commit($p, "<?php\n\$x = ;;;\n");
+ok('ohne Backup: fatale Meldung', $r !== null && $r['msg'] === $GLOBALS['t']['err_write_fatal'], $r['msg'] ?? '');
+
 // ── i18n-Parität ─────────────────────────────────────────────
 grp('i18n — DE/EN');
 $s = _pesi_strings();
@@ -309,7 +443,8 @@ ok('keine ungenutzten Keys', !$dead, implode(', ', $dead));
 // Jede Meldung, die die Kundin nicht selbst beheben kann, trägt einen Code.
 grp('i18n — Fehlercodes');
 foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
-          'err_file_missing', 'err_marker', 'up_err_dir', 'up_err_dir_invalid',
+          'err_file_missing', 'err_marker', 'err_write', 'err_write_fatal',
+          'up_err_dir', 'up_err_dir_invalid',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'warn_default_pw',
           'warn_no_exec'] as $k) {
     foreach (['de', 'en'] as $l) {
@@ -356,6 +491,7 @@ foreach ([
 foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
     foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }
 }
+@unlink($scratch . '/.pesi-throttle');   // glob() übergeht Dateien mit führendem Punkt
 @rmdir($scratch . '/site/uploads');
 @rmdir($scratch . '/site');
 @rmdir($scratch);

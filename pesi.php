@@ -274,7 +274,13 @@ function _pesi_backup(string $file): bool {
     $b1 = $file . '.pesi-backup.1';
     $b2 = $file . '.pesi-backup.2';
     if (file_exists($b1)) @rename($b1, $b2);
-    return copy($file, $b1);
+    if (!copy($file, $b1)) return false;
+    // Auf vollem Webspace kann copy() erfolgreich melden und trotzdem kürzen.
+    // Ein gekürztes Backup ist schlimmer als keines: der Rollback unten würde
+    // die Seite der Kundin damit überschreiben.
+    clearstatcache(true, $b1);
+    clearstatcache(true, $file);
+    return filesize($b1) === filesize($file);
 }
 
 // Schreibt $mod atomar und rollt bei PHP-Syntaxfehler aufs Backup zurück.
@@ -299,19 +305,38 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
             return ['msg' => $t['err_stale'], 'type' => 'error'];
         }
     }
-    ftruncate($fp, 0);
-    rewind($fp);
-    fwrite($fp, $mod);
-    fflush($fp);
+    // Schreiben — und prüfen, dass wirklich alles ankam. Auf vollem Webspace
+    // oder bei erreichter Quota schreibt fwrite() nur einen Teil und meldet das
+    // ausschließlich über den Rückgabewert. Ungeprüft bliebe die Seite der
+    // Kundin halb geschrieben zurück; der Syntax-Check unten fängt das meist,
+    // aber ausgerechnet dann nicht, wenn er selbst nicht läuft (Code T7).
+    $want    = strlen($mod);
+    $written = (ftruncate($fp, 0) && rewind($fp)) ? fwrite($fp, $mod) : false;
+    $ok      = ($written === $want) && fflush($fp);
     flock($fp, LOCK_UN);
     fclose($fp);
 
+    if (!$ok) return _pesi_rollback($file, $t['err_write']);
+
     if (PESI_SYNTAX_CHECK && _pesi_lint($file) === false) {
-        $b1 = $file . '.pesi-backup.1';
-        if (PESI_BACKUP_ENABLED && is_file($b1)) copy($b1, $file);
-        return ['msg' => $t['err_php_rollback'], 'type' => 'error'];
+        return _pesi_rollback($file, $t['err_php_rollback']);
     }
     return null;
+}
+
+/**
+ * Stellt die Seite aus .pesi-backup.1 wieder her und liefert die passende
+ * Meldung. Schlägt die Wiederherstellung selbst fehl, liegt die Seite der
+ * Kundin beschädigt auf dem Server — das braucht eine eigene, dringlichere
+ * Meldung, damit niemand denkt, es sei nichts passiert.
+ */
+function _pesi_rollback(string $file, string $msg): array {
+    global $t;
+    $b1 = $file . '.pesi-backup.1';
+    if (PESI_BACKUP_ENABLED && is_file($b1) && copy($b1, $file)) {
+        return ['msg' => $msg, 'type' => 'error'];
+    }
+    return ['msg' => $t['err_write_fatal'], 'type' => 'error'];
 }
 
 /**
@@ -695,14 +720,20 @@ function _pesi_throttle_write(callable $mutate): void {
     $now = time();
     // Abgelaufene Einträge entfernen und die Map gegen unbegrenztes Wachstum
     // (DoS durch viele Quell-IPs) deckeln.
+    // (Schreibprüfung siehe unten — halb geschriebenes JSON ließe die Bremse
+    //  beim nächsten Lesen lautlos auf „leer" zurückfallen.)
     foreach ($data as $k => $v) {
         if ((int)($v['until'] ?? 0) < $now - 3600) unset($data[$k]);
     }
     if (count($data) > 500) $data = array_slice($data, -500, null, true);
     $data = $mutate($data, $now);
+    $json = (string)json_encode($data);
     rewind($fp);
     ftruncate($fp, 0);
-    fwrite($fp, json_encode($data));
+    // Teilschreibung ergäbe kaputtes JSON. json_decode() liefert dann null,
+    // das Register gilt als leer und die Brute-Force-Bremse ist stillschweigend
+    // aus. Lieber sauber leeren als korrupt zurücklassen.
+    if (fwrite($fp, $json) !== strlen($json)) ftruncate($fp, 0);
     fflush($fp);
     flock($fp, LOCK_UN);
     fclose($fp);
@@ -742,8 +773,34 @@ function _pesi_upload_map(): array {
     ];
 }
 
-function _pesi_upload_dir(): string {
-    $dir = str_replace('\\', '/', (string)(defined('PESI_UPLOAD_DIR') ? PESI_UPLOAD_DIR : 'uploads'));
+// $dir überschreibt die Konstante — nur damit dev/test-engine.php die
+// Ablehnungspfade durchspielen kann, ohne PESI_UPLOAD_DIR neu zu definieren.
+// Im Produktivcode immer ohne Argument aufrufen.
+/**
+ * Bestimmt den MIME-Typ aus dem Dateiinhalt — niemals aus dem Dateinamen.
+ *
+ * finfo ist nicht überall vorhanden: die Fileinfo-Erweiterung lässt sich
+ * abschalten, und manche Shared-Hostings tun das. Ein ungeprüftes
+ * `new finfo()` beendet den Upload dort mit einem Fatal Error — die Kundin
+ * sieht eine weiße Seite und verliert die ungespeicherten Änderungen des
+ * ganzen Formulars. getimagesize() steckt dagegen im PHP-Kern, liest ebenfalls
+ * den Dateikopf und bestätigt zusätzlich, dass die Datei als Bild lesbar ist.
+ *
+ * Liefert '' wenn nichts Verwertbares herauskommt. Der Aufrufer lehnt dann ab
+ * — im Zweifel kein Upload statt einem ungeprüften.
+ */
+function _pesi_image_mime(string $path): string {
+    if (class_exists('finfo')) {
+        $m = (new finfo(FILEINFO_MIME_TYPE))->file($path);
+        if (is_string($m) && $m !== '') return strtolower($m);
+    }
+    $info = @getimagesize($path);
+    if (is_array($info) && !empty($info['mime'])) return strtolower((string)$info['mime']);
+    return '';
+}
+
+function _pesi_upload_dir(?string $dir = null): string {
+    $dir = str_replace('\\', '/', $dir ?? (string)(defined('PESI_UPLOAD_DIR') ? PESI_UPLOAD_DIR : 'uploads'));
     $dir = trim($dir, "/\\");
     if ($dir === '') return '';
     if (preg_match('#(^|/)\.\.?($|/)#', $dir)) return '';
@@ -796,8 +853,7 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
             continue;
         }
 
-        $fi   = new finfo(FILEINFO_MIME_TYPE);
-        $mime = (string)$fi->file($f['tmp_name']);
+        $mime = _pesi_image_mime($f['tmp_name']);
         if (!isset($map[$mime])) {
             $errors[] = sprintf($t['up_err_type'], $fld['label'] ?: $id);
             continue;
@@ -908,6 +964,8 @@ function _pesi_strings(): array { return [
         'err_no_changes'    => 'Es gab nichts zu speichern — Sie haben nichts geändert.',
         'err_locked'        => 'Die Seite wird gerade von jemand anderem bearbeitet. Bitte versuchen Sie es in einem Moment noch einmal. (Code T3)',
         'err_php_rollback'  => 'Diese Änderung konnte nicht übernommen werden. Ihre Seite ist unverändert geblieben — es ist nichts kaputtgegangen. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S1)',
+        'err_write'         => 'Die Änderung konnte nicht vollständig gespeichert werden, vermutlich ist der Speicherplatz voll. Ihre Seite wurde auf den Stand davor zurückgesetzt. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T9)',
+        'err_write_fatal'   => 'Beim Speichern ist etwas schiefgegangen und die Seite konnte nicht zurückgesetzt werden. Bitte ändern Sie jetzt nichts weiter und melden Sie sich umgehend bei Ihrer Website-Betreuung. (Code T10)',
         'err_session'       => 'Sie waren zu lange angemeldet. Bitte laden Sie die Seite neu und melden Sie sich erneut an.',
         'err_file_missing'  => 'Diese Seite ist nicht mehr auffindbar. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T4) Betroffen: ',
         'err_stale'         => 'Diese Seite wurde zwischenzeitlich an anderer Stelle geändert. Bitte laden Sie sie neu und speichern Sie danach noch einmal.',
@@ -988,6 +1046,8 @@ function _pesi_strings(): array { return [
         'err_no_changes'    => 'There was nothing to save — you did not change anything.',
         'err_locked'        => 'Someone else is editing this page right now. Please try again in a moment. (Code T3)',
         'err_php_rollback'  => 'This change could not be applied. Your page is unchanged — nothing is broken. Please contact whoever looks after your website. (Code S1)',
+        'err_write'         => 'The change could not be saved completely, most likely because the disk is full. Your page has been reset to its previous state. Please contact whoever looks after your website. (Code T9)',
+        'err_write_fatal'   => 'Something went wrong while saving and the page could not be reset. Please do not change anything else and contact whoever looks after your website right away. (Code T10)',
         'err_session'       => 'You were signed in for too long. Please reload the page and sign in again.',
         'err_file_missing'  => 'This page can no longer be found. Please contact whoever looks after your website. (Code T4) Affected: ',
         'err_stale'         => 'This page was changed elsewhere in the meantime. Please reload it and save again.',
