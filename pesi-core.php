@@ -64,6 +64,18 @@ if (!function_exists('pesi')) {
 
         $clean = function ($node) use (&$clean, $allowed): void {
             foreach (iterator_to_array($node->childNodes) as $child) {
+                /* Processing-Instructions (PHP-Tags) und HTML-Kommentare
+                   entfernen. Beide überleben DOMDocument als eigener Knotentyp,
+                   nicht als Element — die Allowlist unten sieht sie also nie und
+                   saveHTML() schreibt sie wortwörtlich zurück. Im Seitenquelltext
+                   wären das dann echte pesi:item-/pesi:toggle-Marker bzw. ein
+                   if(false)-Endif, die den Block- und Toggle-Parser fehlleiten.
+                   (Kein //-Kommentar hier: ein schließendes PHP-Tag im Text
+                   würde PHP selbst in einem Zeilenkommentar beenden.) */
+                if ($child->nodeType === XML_PI_NODE || $child->nodeType === XML_COMMENT_NODE) {
+                    $child->parentNode->removeChild($child);
+                    continue;
+                }
                 if ($child->nodeType !== XML_ELEMENT_NODE) continue;
                 $name = strtolower($child->nodeName);
                 if (!isset($allowed[$name])) {
