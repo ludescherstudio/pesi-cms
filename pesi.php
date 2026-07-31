@@ -251,7 +251,11 @@ function _pesi_backup(string $file): bool {
 // Rückgabe: null bei Erfolg, sonst Fehler-Array.
 function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): ?array {
     global $t;
-    $fp = fopen($file, 'c');
+    // 'c+' (lesen UND schreiben), nicht 'c': 'c' ist write-only, das
+    // stream_get_contents() im Stale-Check unten läse dann immer '' und der
+    // Hash-Vergleich schlüge grundsätzlich fehl — jeder Feld-Save endete mit
+    // „Seite wurde geändert". Beide Modi legen an und truncaten nicht.
+    $fp = fopen($file, 'c+');
     if (!$fp || !flock($fp, LOCK_EX)) {
         if ($fp) fclose($fp);
         return ['msg' => $t['err_locked'], 'type' => 'error'];
@@ -272,17 +276,50 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
     flock($fp, LOCK_UN);
     fclose($fp);
 
-    if (PESI_SYNTAX_CHECK && function_exists('exec')) {
-        $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-        if (!in_array('exec', $disabled, true)) {
-            exec('php -l ' . escapeshellarg($file) . ' 2>&1', $out, $ex);
-            if ($ex !== 0) {
-                if (PESI_BACKUP_ENABLED) copy($file . '.pesi-backup.1', $file);
-                return ['msg' => $t['err_php_rollback'], 'type' => 'error'];
-            }
-        }
+    if (PESI_SYNTAX_CHECK && _pesi_lint($file) === false) {
+        $b1 = $file . '.pesi-backup.1';
+        if (PESI_BACKUP_ENABLED && is_file($b1)) copy($b1, $file);
+        return ['msg' => $t['err_php_rollback'], 'type' => 'error'];
     }
     return null;
+}
+
+/**
+ * Führt `php -l` aus. true = syntaktisch ok, false = echter Syntaxfehler,
+ * null = Linter nicht verfügbar (exec gesperrt oder kein PHP-CLI im PATH).
+ *
+ * WICHTIG: Ein Exitcode != 0 allein beweist keinen Syntaxfehler. Fehlt das
+ * CLI-Binary, antwortet die Shell mit 127 („command not found", unter Windows
+ * auch 1). Wer das als Syntaxfehler wertet, rollt auf solchen Hosts *jeden*
+ * Speichervorgang zurück und meldet dem Kunden einen PHP-Fehler, den es nie
+ * gab. Als Fehler zählt darum nur eine echte Lint-Diagnose auf stdout/stderr.
+ */
+function _pesi_lint(string $file): ?bool {
+    if (!function_exists('exec')) return null;
+    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+    if (in_array('exec', $disabled, true)) return null;
+
+    $out = [];
+    $ex  = 0;
+    @exec('php -l ' . escapeshellarg($file) . ' 2>&1', $out, $ex);
+    if ($ex === 0) return true;
+    if (preg_match('/(parse|fatal) error|errors parsing/i', implode("\n", $out))) return false;
+    return null;
+}
+
+/**
+ * Erkennt pesi-Struktur-Markierungen in einem Feldwert.
+ *
+ * Ein gespeicherter Wert landet als Literal im Seitenquelltext. Enthielte er
+ * einen pesi:item-/pesi:toggle-Marker oder den if(false)-Wrapper, läsen Block-
+ * und Toggle-Parser ihn als echte Struktur und schnitten ihre Spannen falsch.
+ * Das Ergebnis bleibt dabei oft `php -l`-sauber — das Sicherheitsnetz greift
+ * also nicht, der Kunde sieht nur noch Müll auf der Seite. Lieber die
+ * Speicherung sauber ablehnen als still korrumpieren.
+ */
+function _pesi_has_marker(string $v): bool {
+    return (bool)preg_match('#<!--\s*/?\s*pesi:(item|toggle)\b#i', $v)
+        || (bool)preg_match('#<\?php\s+(if\s*\(\s*false\s*\)\s*:|endif\s*;)#i', $v);
 }
 
 function _pesi_save(string $file, array $fields, array $post): array {
@@ -294,6 +331,7 @@ function _pesi_save(string $file, array $fields, array $post): array {
 
     $mod = $src;
     $n = 0;
+    $blocked = [];
     foreach ($fields as $id => $fld) {
         $k = 'pesi_field_' . $id;
         if (!isset($post[$k])) continue;
@@ -305,9 +343,12 @@ function _pesi_save(string $file, array $fields, array $post): array {
             $nv = _pesi_safe_asset_url($nv);
         }
         if ($nv === $fld['value']) continue;
+        if (_pesi_has_marker($nv)) { $blocked[] = $fld['label'] ?: $id; continue; }
         $mod = _pesi_replace($mod, $id, $nv);
         $n++;
     }
+    // Vor dem ersten Schreibzugriff abbrechen — ein Save ist ganz oder gar nicht.
+    if ($blocked) return ['msg' => sprintf($t['err_marker'], implode(', ', $blocked)), 'type' => 'error'];
     if ($n === 0) return ['msg' => $t['err_no_changes'], 'type' => 'info'];
 
     if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
@@ -770,6 +811,7 @@ function _pesi_strings(): array { return [
         'err_session'       => 'Sitzung abgelaufen. Bitte Seite neu laden.',
         'err_file_missing'  => 'Datei nicht gefunden: ',
         'err_stale'         => 'Diese Seite wurde seit dem Öffnen geändert. Bitte neu laden und erneut speichern.',
+        'err_marker'        => 'Nicht gespeichert — %s enthält eine pesi-Struktur-Markierung (pesi:item, pesi:toggle oder if(false)). Bitte diesen Text entfernen.',
         'saved_one'         => '1 Feld gespeichert.',
         'saved_many'        => '%d Felder gespeichert.',
         'wrong_password'    => 'Falsches Passwort.',
@@ -784,7 +826,7 @@ function _pesi_strings(): array { return [
         'welcome_title'     => 'Willkommen',
         'welcome_hint'      => 'Wähle links eine Seite, um Inhalte zu bearbeiten.',
         'warn_default_pw'   => '⚠ Standard-Passwort aktiv — bitte in pesi-core.php sofort ändern.',
-        'warn_no_exec'      => '⚠ Syntax-Check aktiv, aber exec() nicht verfügbar — kein Auto-Rollback bei PHP-Fehlern.',
+        'warn_no_exec'      => '⚠ Syntax-Check aktiv, aber php -l ist nicht ausführbar (exec() gesperrt oder PHP-CLI nicht im PATH) — kein Auto-Rollback bei PHP-Fehlern.',
         'up_err_failed'     => 'Upload von „%s" fehlgeschlagen.',
         'up_err_size'       => 'Bild „%s" ist zu groß (max. %s MB).',
         'up_err_type'       => 'Bild „%s": Dateityp nicht erlaubt (JPG, PNG, WebP, AVIF, GIF).',
@@ -845,6 +887,7 @@ function _pesi_strings(): array { return [
         'err_session'       => 'Session expired. Please reload the page.',
         'err_file_missing'  => 'File not found: ',
         'err_stale'         => 'This page changed since you opened it. Please reload and save again.',
+        'err_marker'        => 'Not saved — %s contains a pesi structure marker (pesi:item, pesi:toggle or if(false)). Please remove that text.',
         'saved_one'         => '1 field saved.',
         'saved_many'        => '%d fields saved.',
         'wrong_password'    => 'Wrong password.',
@@ -859,7 +902,7 @@ function _pesi_strings(): array { return [
         'welcome_title'     => 'Welcome',
         'welcome_hint'      => 'Select a page on the left to edit its content.',
         'warn_default_pw'   => '⚠ Default password in use — change it in pesi-core.php immediately.',
-        'warn_no_exec'      => '⚠ Syntax check enabled, but exec() unavailable — no auto-rollback on PHP errors.',
+        'warn_no_exec'      => '⚠ Syntax check enabled, but php -l cannot run (exec() disabled or PHP CLI not in PATH) — no auto-rollback on PHP errors.',
         'up_err_failed'     => 'Upload of "%s" failed.',
         'up_err_size'       => 'Image "%s" is too large (max. %s MB).',
         'up_err_type'       => 'Image "%s": file type not allowed (JPG, PNG, WebP, AVIF, GIF).',
@@ -1297,8 +1340,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       <div style="background:#f87171;color:#fff;padding:.65rem 2rem;font-size:.85rem;font-weight:600;text-align:center"><?=$t['warn_default_pw']?></div>
     <?php endif; ?>
     <?php
-      $execOk = function_exists('exec') && !in_array('exec', array_map('trim', explode(',', (string)ini_get('disable_functions'))), true);
-      if (PESI_SYNTAX_CHECK && !$execOk):
+      // Probe gegen eine garantiert gültige Datei: schlägt sie fehl, ist der
+      // Linter nicht nutzbar (exec gesperrt ODER kein PHP-CLI im PATH). Nur
+      // auf exec() zu prüfen hätte den zweiten, häufigeren Fall verschwiegen.
+      $lintOk = _pesi_lint($corePath) !== null;
+      if (PESI_SYNTAX_CHECK && !$lintOk):
     ?>
       <div style="background:#f59e0b;color:#fff;padding:.65rem 2rem;font-size:.85rem;font-weight:600;text-align:center"><?=$t['warn_no_exec']?></div>
     <?php endif; ?>
