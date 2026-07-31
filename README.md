@@ -138,7 +138,7 @@ RewriteRule ^cms$   pesi.php [L]
 <Files "pesi-core.php">
     Require all denied
 </Files>
-<FilesMatch "^\.pesi-">
+<FilesMatch "\.pesi-">
     Require all denied
 </FilesMatch>
 ```
@@ -151,7 +151,13 @@ What each line does:
 | `RewriteRule ^pesi$ pesi.php [L]`                 | Maps `/pesi` → `pesi.php` (the dashboard URL)                        |
 | `RewriteRule ^cms$ pesi.php [L]`                  | Second, optional URL `/cms`                                          |
 | `<Files "pesi-core.php">…`                        | Blocks web access to your password                                   |
-| `<FilesMatch "^\.pesi-">…`                        | Blocks pesi's internal files (`.pesi-backup.1/.2`, `.pesi-throttle`) |
+| `<FilesMatch "\.pesi-">…`                         | Blocks pesi's internal files (`.pesi-backup.1/.2`, `.pesi-throttle`) |
+
+> **⚠ Using an older copy of these instructions?** Earlier versions anchored the
+> pattern as `^\.pesi-`. `<FilesMatch>` matches the *file name*, and a backup is
+> called `index.php.pesi-backup.1` — it does not start with `.pesi-`, so the
+> anchored pattern blocked only `.pesi-throttle` and left every backup publicly
+> downloadable. If your `.htaccess` still carries `^\.pesi-`, drop the `^`.
 
 > **Older Apache (2.2)?** Replace `Require all denied` with:
 > ```apache
@@ -163,12 +169,14 @@ What each line does:
 
 > **⚠ Nginx / no `.htaccess` support?** Nginx **ignores `.htaccess` entirely**, so the
 > rules above do nothing there. The backup files (`page.php.pesi-backup.1`) would then be
-> served as **plain text — leaking your full PHP source, including the password**. On Nginx
+> served as **plain text — leaking the full source of that page**. On Nginx
 > add this to your `server {}` block instead:
 > ```nginx
-> location ~ /\.pesi-  { deny all; }
+> location ~ \.pesi-  { deny all; }
 > location = /pesi-core.php { deny all; }
 > ```
+> The pattern must not be anchored to a leading `/` either — `/index.php.pesi-backup.1`
+> contains no `/.pesi-` sequence.
 
 **Important — a known pitfall:**
 
@@ -428,7 +436,7 @@ The client then edits the whole body in a single Quill editor, rather than deali
 ## Security
 
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
-- `.pesi-*` files (rotated backups and the login-throttle register) are blocked via `.htaccess`. **On Nginx you must add the equivalent `deny` rules yourself** — it never reads `.htaccess`, and a backup file is a plain copy of your page source including the password
+- `.pesi-*` files (rotated backups and the login-throttle register) are blocked via `.htaccess`. **On Nginx you must add the equivalent `deny` rules yourself** — it never reads `.htaccess`, and a backup file is a byte-for-byte copy of that page's source. (The password itself lives in `pesi-core.php`, which pages only `require`, so a page backup does not contain it — but the source disclosure alone is reason enough to block these files.)
 - The dashboard is password-protected (session-based); `PESI_PASSWORD` accepts a `password_hash()` value, which is what you should use
 - Failed logins are slowed down twice: per session, and per client in a small `.pesi-throttle` file so that discarding cookies does not reset the delay
 - Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS)

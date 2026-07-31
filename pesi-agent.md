@@ -409,7 +409,7 @@ RewriteRule ^cms$   pesi.php [L]
 <Files "pesi-core.php">
     Require all denied
 </Files>
-<FilesMatch "^\.pesi-">
+<FilesMatch "\.pesi-">
     Require all denied
 </FilesMatch>
 ```
@@ -417,20 +417,28 @@ RewriteRule ^cms$   pesi.php [L]
 Keep `RewriteEngine On` unless an earlier block in the same file already enables
 it. Without it the two `RewriteRule` lines are inert and `/pesi` returns 404.
 
-The `^\.pesi-` pattern covers every internal pesi file: the rotated backups
+The `\.pesi-` pattern covers every internal pesi file: the rotated backups
 (`page.php.pesi-backup.1`/`.2`) **and** the login-throttle register
 (`.pesi-throttle`). Backups are byte-for-byte copies of the page source, so a
-leak would expose the full PHP source (incl. the password) — blocking them is
+leak would expose that page's full PHP source — blocking them is
 security-critical, not cosmetic.
+
+**Do not anchor the pattern.** `<FilesMatch>` matches the *file name*, and a
+backup is named `index.php.pesi-backup.1`, which does **not** start with
+`.pesi-`. A pattern of `^\.pesi-` therefore blocks only `.pesi-throttle` and
+leaves every backup downloadable. If you find `^\.pesi-` in an existing
+`.htaccess`, remove the `^`.
 
 > **⚠ Nginx (or any server that does not read `.htaccess`).** The block above is
 > inert on Nginx — it never reads `.htaccess`. The `.pesi-backup.*` files would
 > then be served as **plain-text source code**. Add this to the `server {}` block
 > instead:
 > ```nginx
-> location ~ /\.pesi-        { deny all; }
+> location ~ \.pesi-         { deny all; }
 > location = /pesi-core.php  { deny all; }
 > ```
+> Same trap here: `location ~ /\.pesi-` does not match
+> `/index.php.pesi-backup.1`, because that path contains no `/.pesi-` sequence.
 
 **Do NOT** add any rule that denies access to the upload folder (`uploads/`, or whatever `PESI_UPLOAD_DIR` is set to) — uploaded photos must stay publicly reachable, otherwise images break on the live site.
 
@@ -519,7 +527,8 @@ Then run through this checklist. Report any failures:
 - `BRAND_NAME` is set in `pesi-core.php`
 - `BRAND_COLOR` is set in `pesi-core.php` (matched to site's primary color)
 - `.htaccess` contains rewrite rules for both `pesi` and `cms`
-- `.htaccess` denies direct access to `pesi-core.php` and all `.pesi-*` files (`^\.pesi-`: backups **and** `.pesi-throttle`)
+- `.htaccess` denies direct access to `pesi-core.php` and all `.pesi-*` files (pattern `\.pesi-`, **unanchored** — `^\.pesi-` would miss `page.php.pesi-backup.1`)
+- Verified by hand: requesting `/<page>.php.pesi-backup.1` in a browser returns 403, not the source
 - On Nginx/non-Apache: equivalent `deny` rules exist in the server config (`.htaccess` is ignored there)
 - `.htaccess` does **not** block the upload folder; `uploads/.htaccess` exists and disables script execution
 - `PESI_UPLOAD_DIR` is a relative folder inside the project root, without `..` segments
