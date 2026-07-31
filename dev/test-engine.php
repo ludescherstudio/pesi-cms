@@ -27,7 +27,21 @@ if (PHP_SAPI !== 'cli') {
     exit;
 }
 
-$root    = dirname(__DIR__);
+// Zu prüfende Arbeitskopie. Ohne Argument die eigene — mit Argument eine
+// beliebige andere. Das ist der Grund, warum die Trennung main/dev nicht weh
+// tut: die Suite liegt auf dem dev-Branch (oder in einem Worktree davon) und
+// prüft trotzdem genau das pesi.php, an dem gerade gearbeitet wird, ohne
+// Branch-Wechsel und ohne Merge.
+//
+//   php dev/test-engine.php                    # diese Arbeitskopie
+//   php ../pesi-cms-dev/dev/test-engine.php .  # aus einem Worktree heraus
+$root = isset($argv[1]) ? rtrim($argv[1], "/\\") : dirname(__DIR__);
+if (!is_file($root . '/pesi.php') || !is_file($root . '/pesi-core.php')) {
+    fwrite(STDERR, "Kein pesi.php/pesi-core.php in: $root\n");
+    fwrite(STDERR, "Aufruf: php test-engine.php [pfad-zur-arbeitskopie]\n");
+    exit(2);
+}
+echo "Prüfe: $root\n";
 $scratch = sys_get_temp_dir() . '/pesi-test-' . getmypid();
 @mkdir($scratch, 0777, true);
 
