@@ -146,6 +146,16 @@ if ($auth) {
         }
     }
 
+    // Strukturelle Aktion? Die Block-, Toggle- und Wiederherstellen-Buttons
+    // liegen im selben Formular wie die Felder, und 'pesi_save' ist ein
+    // verstecktes Feld — es wird also bei JEDEM Absenden mitgeschickt, auch
+    // beim Klick auf „Duplizieren". Ohne diese Unterscheidung liefe der
+    // Save-Handler danach ebenfalls, fände die von der Operation gerade
+    // geänderte Dateizeit vor und überschriebe die Erfolgsmeldung mit
+    // „Seite wurde zwischenzeitlich geändert". Eine Anfrage, eine Aktion.
+    $structural = isset($_POST['pesi_block']) || isset($_POST['pesi_toggle'])
+               || isset($_POST['pesi_restore']);
+
     // Block-Operation (Duplizieren / Löschen / Sortieren)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_block']) && $page) {
         if (!$csrfOk) {
@@ -188,8 +198,8 @@ if ($auth) {
         }
     }
 
-    // Save
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_save']) && $page) {
+    // Save — nur wenn wirklich der Speichern-Button gedrückt wurde
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_save']) && $page && !$structural) {
         if (!$csrfOk) {
             $msg = $t['err_session'];
             $msgType = 'error';
@@ -1158,6 +1168,11 @@ foreach ($fields as $f) { if ($f['type'] === 'richtext') { $hasRt = true; break;
 <?php endif; ?>
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+/* Das hidden-Attribut wirkt nur über display:none aus dem Browser-Stylesheet —
+   jede eigene display-Regel schlägt es. .ob hat display:flex, der Onboarding-
+   Kasten liess sich deshalb nicht wegklicken. Global absichern, damit hidden
+   überall verlässlich versteckt. */
+[hidden]{display:none!important}
 
 :root{
   --b: <?=$bc?>;
