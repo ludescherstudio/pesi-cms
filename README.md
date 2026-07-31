@@ -551,6 +551,8 @@ Your site's CSS reset removes default list and link styles. pesi automatically w
 ## Honest limitations
 
 - **No media library** — image upload only swaps page-bound `image` fields; decorative assets stay an FTP job
+- **Replaced images are deleted**, and pesi only looks at the pages listed in `$PESI_PAGES` to decide whether a file is still in use. It checks both the `pesi()` field values and the raw markup of those pages, but it cannot see includes, partials or templates that are not registered pages. If you reference an uploaded file from an unregistered file, register that file too or keep the asset outside `PESI_UPLOAD_DIR`
+- **Toggles must not be nested** — a `pesi:toggle` inside another one is rejected; the dashboard disables switching and says so
 - **No multi-user system** — one password for everyone
 - **No version history** beyond the last two backups (`.pesi-backup.1` / `.2`)
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content

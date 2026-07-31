@@ -367,7 +367,9 @@ the content stays in the file and stays editable — it is only not rendered.
 - **Never hand-write the `if (false)` wrapper.** pesi matches those two strings
   literally, including the exact spacing. Always ship the section *visible* and
   let the client hide it.
-- Do not nest a toggle inside another toggle.
+- Do not nest a toggle inside another toggle. pesi detects this and disables
+  switching for the whole page rather than producing a wrong result, so a nested
+  pair costs the client the feature entirely.
 - Fields inside a hidden section still appear in the dashboard. That is
   intentional: the client prepares next year's notice while it stays invisible.
 
@@ -454,6 +456,14 @@ RemoveType .php .phtml .php3 .php4 .php5 .php7 .phps
 ```
 
 If `uploads/` does not exist yet, create it (pesi also creates it on first upload).
+
+**Every file that references an uploaded image must be a registered page.** When
+the client replaces an image, pesi deletes the old file unless it still appears
+in one of the pages listed in `$PESI_PAGES` — checked against both the `pesi()`
+values and the raw markup of those pages. An include, partial or template that is
+not a registered page is invisible to that check, so a shared header referencing
+`/uploads/logo-ab12cd34.png` would lose its image. Either register the file in
+`$PESI_PAGES` or keep such assets outside `PESI_UPLOAD_DIR`.
 
 **While reading the file, also check for these two known bugs and fix them in-place if found:**
 

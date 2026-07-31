@@ -4,6 +4,18 @@
  * URL: domain.at/pesi
  */
 
+// ── Schutz-Header (nur fürs Dashboard, nicht für die Kundenseite) ──
+// Das Dashboard trägt destruktive Ein-Klick-Aktionen (Eintrag löschen,
+// Wiederherstellen). CSRF-Token schützen davor nicht: beim Clickjacking klickt
+// das Opfer den echten Button in einem unsichtbaren Frame, das Token wird
+// gültig mitgeschickt. 'frame-ancestors' ist die moderne Form, X-Frame-Options
+// die für ältere Browser — beide kosten nichts und brechen die Vorschau nicht,
+// denn die rahmt die Seite ein, nicht umgekehrt.
+header('X-Frame-Options: DENY');
+header("Content-Security-Policy: frame-ancestors 'none'");
+header('X-Content-Type-Options: nosniff');
+header('Referrer-Policy: no-referrer');
+
 // ── Session: sichere Cookie-Flags ────────────────────────────
 $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
     || (($_SERVER['SERVER_PORT'] ?? 0) == 443)
@@ -43,7 +55,14 @@ $sk = 'pesi_auth';
 // 'Location: ./' wäre bei extensionsloser URL falsch: relativ zu '/pesi'
 // (ohne Slash) löst './' zu '/' auf → Redirect auf die Mutterseite.
 $selfUrl = strtok($_SERVER['REQUEST_URI'] ?? '/pesi', '?');
-if ($selfUrl === false || $selfUrl === '') $selfUrl = '/pesi';
+// Muss mit genau EINEM Slash beginnen. '//host' und '/\host' liest der Browser
+// als protokollrelative URL — ein 'Location:' darauf wäre ein Open Redirect auf
+// eine fremde Domain. Steuerzeichen fliegen gleich mit raus.
+if (!is_string($selfUrl) || $selfUrl === '' || $selfUrl[0] !== '/'
+    || (isset($selfUrl[1]) && ($selfUrl[1] === '/' || $selfUrl[1] === '\\'))
+    || preg_match('/[\x00-\x1F\x7F]/', $selfUrl)) {
+    $selfUrl = '/pesi';
+}
 
 // pesi Logo (dunkler Hintergrund) — "pesi" in hellgrau, "cms" in Markenfarbe #c47a2a
 $PESI_LOGO_B64 = 'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iRWJlbmVfMiIgZGF0YS1uYW1lPSJFYmVuZSAyIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNDIuNDYgNTYuNDYiPjxkZWZzPjxzdHlsZT4uY2xzLTF7ZmlsbDojZjNmM2YzfS5jbHMtMntmaWxsOiNjNDdhMmF9PC9zdHlsZT48L2RlZnM+PGcgaWQ9IkViZW5lXzEtMiIgZGF0YS1uYW1lPSJFYmVuZSAxIj48Zz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0wLDEyLjEyaDUuNDZ2NC41YzEuMjgtMS42NCwyLjg5LTIuOTIsNC44My0zLjg0LDEuOTQtLjkyLDQuMTEtMS4zOCw2LjUxLTEuMzgsMywwLDUuNzIuNzQsOC4xNiwyLjIyLDIuNDQsMS40OCw0LjM2LDMuNTEsNS43Niw2LjA5LDEuNCwyLjU4LDIuMSw1LjQ1LDIuMSw4LjYxcy0uNyw2LjAyLTIuMSw4LjU4Yy0xLjQsMi41Ni0zLjMyLDQuNTgtNS43Niw2LjA2LTIuNDQsMS40OC01LjE4LDIuMjItOC4yMiwyLjIyLTIuMzIsMC00LjQ1LS40NS02LjM5LTEuMzVzLTMuNTMtMi4xOS00Ljc3LTMuODd2MTYuNUgwVjEyLjEyWk02Ljk5LDM0LjE3Yy45NCwxLjc0LDIuMjMsMy4xMSwzLjg3LDQuMTEsMS42NCwxLDMuNDYsMS41LDUuNDYsMS41czMuODEtLjUsNS40My0xLjVjMS42Mi0xLDIuODgtMi4zNywzLjc4LTQuMTEuOS0xLjc0LDEuMzUtMy42OSwxLjM1LTUuODVzLS40Ni00LjEyLTEuMzgtNS44OGMtLjkyLTEuNzYtMi4xOC0zLjE0LTMuNzgtNC4xNC0xLjYtMS0zLjQtMS41LTUuNC0xLjVzLTMuODIuNS01LjQ2LDEuNWMtMS42NCwxLTIuOTMsMi4zOC0zLjg3LDQuMTQtLjk0LDEuNzYtMS40MSwzLjcyLTEuNDEsNS44OHMuNDcsNC4xMSwxLjQxLDUuODVaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNDYuMTQsNDIuOTZjLTIuNDgtMS40OC00LjQyLTMuNTEtNS44Mi02LjA5LTEuNC0yLjU4LTIuMS01LjQ3LTIuMS04LjY3cy42OS02LjA4LDIuMDctOC42NGMxLjM4LTIuNTYsMy4yNi00LjU2LDUuNjQtNiwyLjM4LTEuNDQsNS4wNS0yLjE2LDguMDEtMi4xNnM1Ljc3LjcyLDguMDcsMi4xNmMyLjMsMS40NCw0LjA2LDMuMzUsNS4yOCw1LjczLDEuMjIsMi4zOCwxLjgzLDQuOTMsMS44Myw3LjY1LDAsLjkyLS4xLDEuOTItLjMsM2gtMjQuNzJjLjA4LDIuMDQuNiwzLjgyLDEuNTYsNS4zNC45NiwxLjUyLDIuMjEsMi43LDMuNzUsMy41NCwxLjU0Ljg0LDMuMjMsMS4yNiw1LjA3LDEuMjYsMy45MiwwLDYuOTQtMS43OCw5LjA2LTUuMzRsNC42OCwyLjRjLTEuMDQsMi4zMi0yLjgsNC4yNC01LjI4LDUuNzYtMi40OCwxLjUyLTUuMzIsMi4yOC04LjUyLDIuMjhzLTUuOC0uNzQtOC4yOC0yLjIyWk02My4wNiwyNS4xNGMtLjA4LTIuNTItLjk5LTQuNjEtMi43My02LjI3LTEuNzQtMS42Ni0zLjg3LTIuNDktNi4zOS0yLjQ5cy00LjYyLjc5LTYuNDIsMi4zN2MtMS44LDEuNTgtMi45LDMuNzEtMy4zLDYuMzloMTguODRaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNzkuMDgsNDIuODdjLTIuNC0xLjU0LTQuMTItMy42My01LjE2LTYuMjdsNC41LTIuMjhjLjkyLDEuODgsMi4xOCwzLjM2LDMuNzgsNC40NCwxLjYsMS4wOCwzLjM0LDEuNjIsNS4yMiwxLjYyczMuMjgtLjQyLDQuNDQtMS4yNmMxLjE2LS44NCwxLjc0LTEuOTQsMS43NC0zLjNzLS41Mi0yLjM5LTEuNTYtMy4yMWMtMS4wNC0uODItMi4xNi0xLjMxLTMuMzYtMS40N2wtNC44Ni0uNjZjLTIuODgtLjcyLTUuMDQtMS45Mi02LjQ4LTMuNi0xLjQ0LTEuNjgtMi4xNi0zLjY2LTIuMTYtNS45NCwwLTEuODguNDktMy41NCwxLjQ3LTQuOTguOTgtMS40NCwyLjM0LTIuNTYsNC4wOC0zLjM2LDEuNzQtLjgsMy42Ny0xLjIsNS43OS0xLjIsMi44LDAsNS4zMS43LDcuNTMsMi4xLDIuMjIsMS40LDMuODEsMy4zNCw0Ljc3LDUuODJsLTQuNDQsMi4yOGMtLjgtMS42NC0xLjkxLTIuOTQtMy4zMy0zLjktMS40Mi0uOTYtMi45OS0xLjQ0LTQuNzEtMS40NHMtMi45Ni40LTMuOTYsMS4yYy0xLC44LTEuNSwxLjg0LTEuNSwzLjEycy40NywyLjM3LDEuNDEsMy4xNWMuOTQuNzgsMS45NywxLjI3LDMuMDksMS40N2w1LjM0LjcyYzIuNjguNzIsNC43NywxLjk1LDYuMjcsMy42OSwxLjUsMS43NCwyLjI1LDMuNzUsMi4yNSw2LjAzLDAsMS44NC0uNSwzLjQ4LTEuNSw0LjkyLTEsMS40NC0yLjQsMi41Ny00LjIsMy4zOS0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTEwNi4xNC45NmMuNjQtLjY0LDEuNDgtLjk2LDIuNTItLjk2czEuODguMzIsMi41Mi45NmMuNjQuNjQuOTYsMS40OC45NiwyLjUycy0uMzIsMS44OC0uOTYsMi41MmMtLjY0LjY0LTEuNDguOTYtMi41Mi45NnMtMS44OC0uMzItMi41Mi0uOTZjLS42NC0uNjQtLjk2LTEuNDgtLjk2LTIuNTJzLjMyLTEuODguOTYtMi41MlpNMTA1Ljg0LDE3LjQ2aDUuNTh2MjdoLTUuNTh2LTI3WiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTEzNS43Miw0Mi45NmMtMi41Mi0xLjQ4LTQuNDgtMy41MS01Ljg4LTYuMDktMS40LTIuNTgtMi4xLTUuNDUtMi4xLTguNjFzLjctNi4wOCwyLjEtOC42NGMxLjQtMi41NiwzLjM1LTQuNTcsNS44NS02LjAzLDIuNS0xLjQ2LDUuMzUtMi4xOSw4LjU1LTIuMTlzNS45Ny44MSw4LjU1LDIuNDMsNC40MSwzLjcxLDUuNDksNi4yN2wtNS4wNCwyLjRjLS43Ni0xLjcyLTEuOTUtMy4xLTMuNTctNC4xNC0xLjYyLTEuMDQtMy40My0xLjU2LTUuNDMtMS41NnMtMy43NS41LTUuMzcsMS41Yy0xLjYyLDEtMi44OSwyLjM3LTMuODEsNC4xMS0uOTIsMS43NC0xLjM4LDMuNzEtMS4zOCw1Ljkxcy40Nyw0LjExLDEuNDEsNS44NWMuOTQsMS43NCwyLjIxLDMuMTEsMy44MSw0LjExLDEuNiwxLDMuMzgsMS41LDUuMzQsMS41czMuODYtLjUyLDUuNDYtMS41NmMxLjYtMS4wNCwyLjc4LTIuNDYsMy41NC00LjI2bDUuMDQsMi41MmMtMS4wNCwyLjUyLTIuODYsNC42LTUuNDYsNi4yNC0yLjYsMS42NC01LjQ2LDIuNDYtOC41OCwyLjQ2cy02LS43NC04LjUyLTIuMjJaIi8+PHBhdGggY2xhc3M9ImNscy0yIiBkPSJNMTY0LjgyLDEyLjEyaDUuNDZ2NC4wMmMuOTItMS41MiwyLjE3LTIuNjksMy43NS0zLjUxLDEuNTgtLjgyLDMuMzMtMS4yMyw1LjI1LTEuMjMsMi4yLDAsNC4yMS41Myw2LjAzLDEuNTksMS44MiwxLjA2LDMuMjEsMi40OSw0LjE3LDQuMjksMS4wNC0xLjg4LDIuNDUtMy4zMyw0LjIzLTQuMzUsMS43OC0xLjAyLDMuNzUtMS41Myw1LjkxLTEuNTNzNC4yMi41Myw2LjA2LDEuNTljMS44NCwxLjA2LDMuMywyLjUxLDQuMzgsNC4zNSwxLjA4LDEuODQsMS42MiwzLjksMS42Miw2LjE4djIwLjk0aC01LjY0di0xOS4xNGMwLTIuNjQtLjY5LTQuNzItMi4wNy02LjI0LTEuMzgtMS41Mi0zLjE3LTIuMjgtNS4zNy0yLjI4cy00LjA2Ljc3LTUuNDYsMi4zMWMtMS40LDEuNTQtMi4xLDMuNjEtMi4xLDYuMjF2MTkuMTRoLTUuNjR2LTE5LjE0YzAtMi42NC0uNjgtNC43Mi0yLjA0LTYuMjQtMS4zNi0xLjUyLTMuMTYtMi4yOC01LjQtMi4yOHMtNC4wMS43Ny01LjQzLDIuMzFjLTEuNDIsMS41NC0yLjEzLDMuNjEtMi4xMyw2LjIxdjE5LjE0aC01LjU4VjEyLjEyWiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTIyMi4zLDQyLjg3Yy0yLjQtMS41NC00LjEyLTMuNjMtNS4xNi02LjI3bDQuNS0yLjI4Yy45MiwxLjg4LDIuMTgsMy4zNiwzLjc4LDQuNDQsMS42LDEuMDgsMy4zNCwxLjYyLDUuMjIsMS42MnMzLjI4LS40Miw0LjQ0LTEuMjZjMS4xNi0uODQsMS43NC0xLjk0LDEuNzQtMy4zcy0uNTItMi4zOS0xLjU2LTMuMjFjLTEuMDQtLjgyLTIuMTYtMS4zMS0zLjM2LTEuNDdsLTQuODYtLjY2Yy0yLjg4LS43Mi01LjA0LTEuOTItNi40OC0zLjYtMS40NC0xLjY4LTIuMTYtMy42Ni0yLjE2LTUuOTQsMC0xLjg4LjQ5LTMuNTQsMS40Ny00Ljk4czIuMzQtMi41Niw0LjA4LTMuMzZjMS43NC0uOCwzLjY3LTEuMiw1Ljc5LTEuMiwyLjgsMCw1LjMxLjcsNy41MywyLjEsMi4yMiwxLjQsMy44MSwzLjM0LDQuNzcsNS44MmwtNC40NCwyLjI4Yy0uOC0xLjY0LTEuOTEtMi45NC0zLjMzLTMuOS0xLjQyLS45Ni0yLjk5LTEuNDQtNC43MS0xLjQ0cy0yLjk2LjQtMy45NiwxLjJjLTEsLjgtMS41LDEuODQtMS41LDMuMTJzLjQ3LDIuMzcsMS40MSwzLjE1Yy45NC43OCwxLjk3LDEuMjcsMy4wOSwxLjQ3bDUuMzQuNzJjMi42OC43Miw0Ljc3LDEuOTUsNi4yNywzLjY5LDEuNSwxLjc0LDIuMjUsMy43NSwyLjI1LDYuMDMsMCwxLjg0LS41LDMuNDgtMS41LDQuOTJzLTIuNCwyLjU3LTQuMiwzLjM5Yy0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjwvZz48L2c+PC9zdmc+';
@@ -399,6 +418,11 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
     global $t;
     $src = (string)file_get_contents($file);
     if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
+    // Wie beim Feld-Save: gegen den Stand committen, den wir gelesen haben.
+    // Sonst überschreibt eine Blockoperation stillschweigend, was zwischen
+    // Lesen und Schreiben von einer zweiten Sitzung gespeichert wurde — die
+    // Offsets unten stammen aus genau diesem Snapshot.
+    $srcHash = hash('sha256', $src);
 
     $all = _pesi_block_parse($file);
     $grp = array_values(array_filter($all, fn($b) => $b['group'] === $group));
@@ -446,7 +470,7 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
         }
         $mod  = substr($src, 0, $at) . $clone . substr($src, $at);
         if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
-        if ($c = _pesi_commit($file, $mod)) return $c;
+        if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t[$action === 'add' ? 'blk_added' : 'blk_duplicated'], 'type' => 'success'];
     }
 
@@ -454,7 +478,7 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
         if (count($grp) <= 1) return ['msg' => $t['blk_min_one'], 'type' => 'error'];
         $mod = substr($src, 0, $target['offset']) . substr($src, $target['offset'] + $target['len']);
         if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
-        if ($c = _pesi_commit($file, $mod)) return $c;
+        if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t['blk_deleted'], 'type' => 'success'];
     }
 
@@ -469,7 +493,7 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
              . $a['text']
              . substr($src, $b['offset'] + $b['len']);
         if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
-        if ($c = _pesi_commit($file, $mod)) return $c;
+        if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t['blk_moved'], 'type' => 'success'];
     }
 
@@ -486,9 +510,10 @@ function _pesi_restore(string $file): array {
     if (!is_file($b1)) return ['msg' => $t['rst_none'], 'type' => 'info'];
     $restore = file_get_contents($b1);
     if ($restore === false || $restore === '') return ['msg' => $t['rst_none'], 'type' => 'info'];
-    if (file_get_contents($file) === $restore) return ['msg' => $t['rst_same'], 'type' => 'info'];
+    $current = (string)file_get_contents($file);
+    if ($current === $restore) return ['msg' => $t['rst_same'], 'type' => 'info'];
     if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
-    if ($c = _pesi_commit($file, $restore)) return $c;
+    if ($c = _pesi_commit($file, $restore, hash('sha256', $current))) return $c;
     return ['msg' => $t['rst_done'], 'type' => 'success'];
 }
 
@@ -507,6 +532,30 @@ function _pesi_toggle_re(): string {
          . '(?:<\?php endif; \?>\s*)?<!--\s*\/pesi:toggle\s*-->/s';
 }
 
+/**
+ * Meldet true, sobald sich zwei pesi:toggle-Spannen schachteln.
+ *
+ * Schachtelung ist in pesi-agent.md verboten, scheiterte bisher aber lautlos:
+ * der Parser ist non-greedy und liest den *inneren* End-Marker als Ende der
+ * äußeren Spanne. Der if(false)-Wrapper landet dann mitten im Dokument, alles
+ * dahinter bleibt trotz „versteckt" sichtbar, und `php -l` findet daran nichts
+ * auszusetzen — das Sicherheitsnetz greift also nicht. Lieber die Operation
+ * verweigern und es im Dashboard anzeigen, als falsch zu schalten.
+ */
+function _pesi_toggle_nested(string $file): bool {
+    $src = (string)file_get_contents($file);
+    if (!preg_match_all('/<!--\s*(\/?)\s*pesi:toggle(?:\s+[a-z0-9_]+)?\s*-->/i', $src, $m, PREG_SET_ORDER)) {
+        return false;
+    }
+    $depth = 0;
+    foreach ($m as $x) {
+        if ($x[1] === '/') { $depth = max(0, $depth - 1); continue; }
+        if ($depth > 0) return true;
+        $depth++;
+    }
+    return false;
+}
+
 // group => bool (true = sichtbar)
 function _pesi_toggle_parse(string $file): array {
     $src = (string)file_get_contents($file);
@@ -521,6 +570,8 @@ function _pesi_toggle_op(string $file, string $group): array {
     global $t;
     $src = (string)file_get_contents($file);
     if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
+    if (_pesi_toggle_nested($file)) return ['msg' => $t['tgl_nested'], 'type' => 'error'];
+    $srcHash = hash('sha256', $src);
 
     $eg = preg_quote($group, '/');
     $re = '/(<!--\s*pesi:toggle\s+' . $eg . '\s*-->)'
@@ -541,7 +592,7 @@ function _pesi_toggle_op(string $file, string $group): array {
     }, $src, 1);
 
     if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
-    if ($c = _pesi_commit($file, $mod)) return $c;
+    if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
     return ['msg' => $t['tgl_done'], 'type' => 'success'];
 }
 
@@ -780,9 +831,11 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
 
     // Alle aktuell referenzierten Pfade über sämtliche Seiten sammeln
     $inUse = [];
+    $raw   = '';
     foreach (array_keys($pages) as $pg) {
         $pf = $basePath . '/' . $pg;
         if (!file_exists($pf)) continue;
+        $raw .= (string)file_get_contents($pf);
         foreach (_pesi_parse($pf) as $fld) {
             $inUse[ltrim($fld['value'], '/')] = true;
         }
@@ -792,6 +845,11 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
         $rel = ltrim($path, '/');
         if ($rel === '' || strncmp($rel, $dir . '/', strlen($dir) + 1) !== 0) continue; // nur eigener Ordner
         if (isset($inUse[$rel])) continue;                                                // noch in Verwendung
+        // Auch von Hand ins Markup geschriebene Referenzen zählen — ein
+        // og:image oder ein festes <img> steht in keinem pesi()-Feld, das Bild
+        // ist aber trotzdem in Gebrauch. Deckt nur registrierte Seiten ab;
+        // Includes/Partials sieht pesi nicht (siehe README, Limitations).
+        if (strpos($raw, basename($rel)) !== false) continue;
         $target = realpath($basePath . '/' . $rel);
         if ($target === false) continue;
         if (strncmp($target, $absDir . DIRECTORY_SEPARATOR, strlen($absDir) + 1) !== 0) continue; // kein Traversal
@@ -876,6 +934,7 @@ function _pesi_strings(): array { return [
         'tgl_hide'          => 'Ausblenden',
         'tgl_done'          => 'Sichtbarkeit geändert.',
         'tgl_notfound'      => 'Bereich nicht gefunden.',
+        'tgl_nested'        => 'Verschachtelte Sichtbarkeits-Bereiche — Umschalten gesperrt. Ein pesi:toggle darf keinen zweiten enthalten; bitte im Seitenquelltext auflösen.',
         'unsaved_warn'      => 'Es gibt ungespeicherte Änderungen. Verwerfen?',
     ],
     'en' => [
@@ -952,6 +1011,7 @@ function _pesi_strings(): array { return [
         'tgl_hide'          => 'Hide',
         'tgl_done'          => 'Visibility changed.',
         'tgl_notfound'      => 'Section not found.',
+        'tgl_nested'        => 'Nested visibility sections — switching is disabled. A pesi:toggle must not contain another one; please unnest them in the page source.',
         'unsaved_warn'      => 'There are unsaved changes. Discard them?',
     ],
 ]; }
@@ -1382,16 +1442,19 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         <div class="cnt-wrap">
           <?php if ($msg): ?><div class="ms <?=$msgType?>"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success'): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
 
-          <?php $toggles = _pesi_toggle_parse($pageAbs); ?>
+          <?php $toggles = _pesi_toggle_parse($pageAbs); $tglNested = $toggles && _pesi_toggle_nested($pageAbs); ?>
           <?php if ($toggles): ?>
             <div class="tgl-sec">
               <div class="tgl-sec-h"><?=$t['tgl_section']?></div>
+              <?php if ($tglNested): ?>
+                <div class="ms error" style="margin:10px 14px"><span><?=htmlspecialchars($t['tgl_nested'])?></span></div>
+              <?php endif; ?>
               <?php foreach ($toggles as $g => $vis): ?>
                 <div class="tgl <?=$vis?'is-on':'is-off'?>">
                   <span class="tgl-dot"></span>
                   <span class="tgl-name"><?=htmlspecialchars(ucfirst(str_replace('_',' ',$g)))?></span>
                   <span class="tgl-state"><?=$vis?$t['tgl_visible']:$t['tgl_hidden']?></span>
-                  <button class="tgl-b" formnovalidate name="pesi_toggle" value="<?=htmlspecialchars($g)?>"><?=$vis?htmlspecialchars($t['tgl_hide']):htmlspecialchars($t['tgl_show'])?></button>
+                  <button class="tgl-b" formnovalidate name="pesi_toggle" value="<?=htmlspecialchars($g)?>"<?=$tglNested?' disabled':''?>><?=$vis?htmlspecialchars($t['tgl_hide']):htmlspecialchars($t['tgl_show'])?></button>
                 </div>
               <?php endforeach; ?>
             </div>
