@@ -433,6 +433,66 @@ The client then edits the whole body in a single Quill editor, rather than deali
 
 ---
 
+## The dashboard belongs to your client, not to you
+
+pesi has two audiences and one interface. Your client — often a therapist, a
+practice, an artist, rarely technical — uses it every few weeks. You use it
+twice, during setup. The interface is designed for the first group, and the
+second group gets what it needs one click away:
+
+- **Messages name the consequence, never the mechanism.** Not "PHP error
+  detected — rolled back", but "Your page is unchanged — nothing is broken".
+- **Anything the client can fix herself** (image too large, wrong format) says
+  exactly that, with no error code — she does not need anyone.
+- **Anything she cannot fix** carries a short code and asks her to pass it on.
+  She stays in control, reads you four characters, and never sees a stack of
+  jargon. Codes are listed below.
+- **Setup problems are not her problem.** A default password or a missing
+  `php -l` shows up as one calm collapsed line ("nothing for you to do"), with
+  the technical detail inside for whoever reads it.
+- **Field IDs and types are hidden** behind the *Technical view* toggle in the
+  top bar. It remembers its state per browser, so switch it on once and it
+  stays on for you.
+
+### Error codes
+
+`S…` means the page structure needs attention, `T…` means the server or the
+install does. Both are your job, not the client's.
+
+| Code | What happened | What to do |
+|------|---------------|------------|
+| `S1` | A save produced a page PHP refused to parse; pesi rolled it back | Check the field content that was being saved; the page itself is intact |
+| `S2` | A field value contained a pesi structure marker (`pesi:item`, `pesi:toggle`, `if (false):`) and was rejected before writing | Remove that text from the field, or escape it in the template |
+| `S3` | A repeatable entry referenced by the dashboard was not found in the source | Usually a stale browser tab — reload. If it persists, the `pesi:item` markers were edited by hand |
+| `S4` | A visibility section was not found in the source | Same as `S3`, for `pesi:toggle` markers |
+| `S5` | Two `pesi:toggle` sections are nested; switching is disabled for the page | Unnest them — a toggle must not contain another toggle |
+| `T1` | The page file could not be read | Check file permissions and that the file still exists |
+| `T2` | The rotated backup could not be written | The web server needs write access to the project directory |
+| `T3` | The page file was locked by another request | Transient; if permanent, a stale lock or a hung process |
+| `T4` | A page listed in `$PESI_PAGES` does not exist | Fix the path in `pesi-core.php` or restore the file |
+| `T5` | The upload folder is not writable | `chmod` the folder named in the message |
+| `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
+| `T7` | `php -l` cannot run, so broken saves are not rolled back automatically | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
+| `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
+
+### Rewording the interface
+
+Every string the client reads lives in `_pesi_strings()` in `pesi.php`, in
+German and English. To adjust tone, form of address or industry vocabulary,
+**do not fork `pesi.php`** — override individual strings from `pesi-core.php`:
+
+```php
+$PESI_STRINGS = [
+    'welcome_hint' => 'Wähl links eine Seite aus, dann kannst du loslegen.',
+    'save_btn'     => 'Übernehmen',
+    'blk_entry'    => 'Behandlung',
+];
+```
+
+Shipped German uses formal address (*Sie*), which suits practices and firms;
+the example above switches it to informal. Unknown keys are ignored, so a typo
+cannot silently blank out a label. Updating pesi stays a file swap.
+
 ## Security
 
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
