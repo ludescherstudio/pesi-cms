@@ -1506,6 +1506,15 @@ body.dash,body.login{
   --tx:  #1a1a1a;
   --tx2: #555555;
   --tx3: #999999;
+  /* Meldungsfarben: die Dunkel-Palette erreicht auf Weiss nur 1,74:1 (--ok),
+     2,77:1 (--er) und 2,54:1 (--in) — die Rückmeldung nach jedem Speichern
+     wäre damit die am schlechtesten lesbare Zeile des Dashboards. Dunkle
+     Töne derselben Farbwinkel, alle über WCAG AA (4,5:1) auf #ffffff.
+     Rot ist derselbe Wert wie im Login, damit pesi nur ein Rot führt.
+     Die Tints (--ok-b/--er-b/--in-b) bleiben unverändert. */
+  --ok: #15803d;  /* 5,02:1 */
+  --er: #c0392b;  /* 5,44:1 */
+  --in: #1565c0;  /* 5,75:1 */
 }
 
 /* Sidebar: #333 vibe */
