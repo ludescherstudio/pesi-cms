@@ -490,6 +490,9 @@ install does. Both are your job, not the client's.
 | `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The page could not be written completely — almost always a full disk or an exhausted hosting quota. pesi restored the previous state | Free up space or raise the quota, then have the client save again |
 | `T10` | A write failed **and** the restore from `.pesi-backup.1` failed too. The page on the server may be incomplete | Act immediately: restore the page from `.pesi-backup.1`/`.2` or your own backup by hand |
+| `T11` | `PESI_SYNTAX_CHECK` is on while `PESI_BACKUP_ENABLED` is off — detection without recovery | Switch backups on, or accept knowingly that a broken save stays broken |
+| `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
+| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value | Use single quotes: `pesi('id', 'Text', …)`. Escape apostrophes as `\'` |
 
 ### Rewording the interface
 
@@ -631,7 +634,16 @@ Your site's CSS reset removes default list and link styles. pesi automatically w
 - **Replaced images are deleted**, and pesi only looks at the pages listed in `$PESI_PAGES` to decide whether a file is still in use. It checks both the `pesi()` field values and the raw markup of those pages, but it cannot see includes, partials or templates that are not registered pages. If you reference an uploaded file from an unregistered file, register that file too or keep the asset outside `PESI_UPLOAD_DIR`
 - **Toggles must not be nested** — a `pesi:toggle` inside another one is rejected; the dashboard disables switching and says so
 - **No multi-user system** — one password for everyone
-- **No version history** beyond the last two backups (`.pesi-backup.1` / `.2`)
+- **No version history.** pesi keeps two rotating backups per page and the
+  dashboard reaches exactly one of them: "↩ Letzte Version" restores
+  `.pesi-backup.1`, and because the current state is rotated into the backup
+  first, clicking it again goes forward. That covers the realistic mistake —
+  *"the previous text was better"* — and nothing beyond it. `.pesi-backup.2` is
+  reachable only by you, over FTP. **If someone notices on Friday that something
+  broke on Monday, pesi cannot help: that is what your host's backups are for.**
+  Check that they are actually enabled before go-live, and tell the client where
+  the boundary runs — she will otherwise assume the undo button goes deeper than
+  it does
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content
 - **Not meant for simultaneous heavy editing** — dashboard access is file-lock protected, but editing the same file via FTP and dashboard at the same time should be avoided
 

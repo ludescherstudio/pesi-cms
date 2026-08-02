@@ -56,6 +56,21 @@ webspace. Copy `pesi.php` and `pesi-core.php`, nothing more.
 | `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, or `image` |
 | `$label` | optional in code — **always pass it** | Human-readable label shown in dashboard. **Always German.** Omit it and the client sees the raw field ID (`footer_firma`) instead of a readable name. |
 
+> **Single quotes around the value — never double.** `pesi('id', 'Text', …)` is
+> parsed; `pesi("id", "Text", …)` is **not**. The page still renders exactly the
+> same, but the field never appears in the dashboard and the client cannot edit
+> it. Nothing in the page output hints at it.
+>
+> The trap springs precisely when the text contains an apostrophe — a normal PHP
+> habit is to switch to double quotes for `"Anna's Praxis"`. Escape it instead:
+> `'Anna\'s Praxis'`. Double quotes cannot simply be supported, because PHP
+> interpolates variables and escape sequences inside them: the parser would read
+> the source text while the page shows something else, and saving would write the
+> interpolation away.
+>
+> pesi detects this and reports it in the dashboard's diagnostics panel as code
+> `T13`, naming the affected field IDs. If you see it, the fix is the quotes.
+
 Duplicate IDs within one file are **not** an error — the parser silently keeps
 only the first occurrence, and the second location becomes uneditable. Keep them
 unique.
