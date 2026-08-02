@@ -4,9 +4,7 @@
  * URL: domain.at/pesi
  */
 
-// Schutz-Header, nur fürs Dashboard. Gegen Clickjacking helfen CSRF-Token
-// nicht: das Opfer klickt den echten „Löschen"-Button in einem unsichtbaren
-// Frame, das Token geht gültig mit.
+// Schutz-Header, nur fürs Dashboard.
 header('X-Frame-Options: DENY');
 header("Content-Security-Policy: frame-ancestors 'none'");
 header('X-Content-Type-Options: nosniff');
@@ -44,9 +42,8 @@ require_once $corePath;
 $lang = defined('LANG') ? LANG : 'de';
 $t    = _pesi_strings()[$lang] ?? _pesi_strings()['de'];
 
-// pesi-core.php darf einzelne Texte per $PESI_STRINGS überschreiben — Anrede
-// und Fachbegriffe pro Kundschaft, ohne pesi.php zu forken. Unbekannte Keys
-// werden ignoriert, damit ein Tippfehler kein Label leerräumt.
+// pesi-core.php darf einzelne Texte per $PESI_STRINGS überschreiben.
+// Unbekannte Keys werden ignoriert.
 if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
     foreach ($PESI_STRINGS as $k => $v) {
         if (is_string($v) && array_key_exists($k, $t)) $t[$k] = $v;
@@ -72,10 +69,7 @@ if (!is_string($selfUrl) || $selfUrl === '' || $selfUrl[0] !== '/'
 $PESI_LOGO_B64 = 'PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iRWJlbmVfMiIgZGF0YS1uYW1lPSJFYmVuZSAyIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNDIuNDYgNTYuNDYiPjxkZWZzPjxzdHlsZT4uY2xzLTF7ZmlsbDojZjNmM2YzfS5jbHMtMntmaWxsOiNjNDdhMmF9PC9zdHlsZT48L2RlZnM+PGcgaWQ9IkViZW5lXzEtMiIgZGF0YS1uYW1lPSJFYmVuZSAxIj48Zz48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0wLDEyLjEyaDUuNDZ2NC41YzEuMjgtMS42NCwyLjg5LTIuOTIsNC44My0zLjg0LDEuOTQtLjkyLDQuMTEtMS4zOCw2LjUxLTEuMzgsMywwLDUuNzIuNzQsOC4xNiwyLjIyLDIuNDQsMS40OCw0LjM2LDMuNTEsNS43Niw2LjA5LDEuNCwyLjU4LDIuMSw1LjQ1LDIuMSw4LjYxcy0uNyw2LjAyLTIuMSw4LjU4Yy0xLjQsMi41Ni0zLjMyLDQuNTgtNS43Niw2LjA2LTIuNDQsMS40OC01LjE4LDIuMjItOC4yMiwyLjIyLTIuMzIsMC00LjQ1LS40NS02LjM5LTEuMzVzLTMuNTMtMi4xOS00Ljc3LTMuODd2MTYuNUgwVjEyLjEyWk02Ljk5LDM0LjE3Yy45NCwxLjc0LDIuMjMsMy4xMSwzLjg3LDQuMTEsMS42NCwxLDMuNDYsMS41LDUuNDYsMS41czMuODEtLjUsNS40My0xLjVjMS42Mi0xLDIuODgtMi4zNywzLjc4LTQuMTEuOS0xLjc0LDEuMzUtMy42OSwxLjM1LTUuODVzLS40Ni00LjEyLTEuMzgtNS44OGMtLjkyLTEuNzYtMi4xOC0zLjE0LTMuNzgtNC4xNC0xLjYtMS0zLjQtMS41LTUuNC0xLjVzLTMuODIuNS01LjQ2LDEuNWMtMS42NCwxLTIuOTMsMi4zOC0zLjg3LDQuMTQtLjk0LDEuNzYtMS40MSwzLjcyLTEuNDEsNS44OHMuNDcsNC4xMSwxLjQxLDUuODVaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNDYuMTQsNDIuOTZjLTIuNDgtMS40OC00LjQyLTMuNTEtNS44Mi02LjA5LTEuNC0yLjU4LTIuMS01LjQ3LTIuMS04LjY3cy42OS02LjA4LDIuMDctOC42NGMxLjM4LTIuNTYsMy4yNi00LjU2LDUuNjQtNiwyLjM4LTEuNDQsNS4wNS0yLjE2LDguMDEtMi4xNnM1Ljc3LjcyLDguMDcsMi4xNmMyLjMsMS40NCw0LjA2LDMuMzUsNS4yOCw1LjczLDEuMjIsMi4zOCwxLjgzLDQuOTMsMS44Myw3LjY1LDAsLjkyLS4xLDEuOTItLjMsM2gtMjQuNzJjLjA4LDIuMDQuNiwzLjgyLDEuNTYsNS4zNC45NiwxLjUyLDIuMjEsMi43LDMuNzUsMy41NCwxLjU0Ljg0LDMuMjMsMS4yNiw1LjA3LDEuMjYsMy45MiwwLDYuOTQtMS43OCw5LjA2LTUuMzRsNC42OCwyLjRjLTEuMDQsMi4zMi0yLjgsNC4yNC01LjI4LDUuNzYtMi40OCwxLjUyLTUuMzIsMi4yOC04LjUyLDIuMjhzLTUuOC0uNzQtOC4yOC0yLjIyWk02My4wNiwyNS4xNGMtLjA4LTIuNTItLjk5LTQuNjEtMi43My02LjI3LTEuNzQtMS42Ni0zLjg3LTIuNDktNi4zOS0yLjQ5cy00LjYyLjc5LTYuNDIsMi4zN2MtMS44LDEuNTgtMi45LDMuNzEtMy4zLDYuMzloMTguODRaIi8+PHBhdGggY2xhc3M9ImNscy0xIiBkPSJNNzkuMDgsNDIuODdjLTIuNC0xLjU0LTQuMTItMy42My01LjE2LTYuMjdsNC41LTIuMjhjLjkyLDEuODgsMi4xOCwzLjM2LDMuNzgsNC40NCwxLjYsMS4wOCwzLjM0LDEuNjIsNS4yMiwxLjYyczMuMjgtLjQyLDQuNDQtMS4yNmMxLjE2LS44NCwxLjc0LTEuOTQsMS43NC0zLjNzLS41Mi0yLjM5LTEuNTYtMy4yMWMtMS4wNC0uODItMi4xNi0xLjMxLTMuMzYtMS40N2wtNC44Ni0uNjZjLTIuODgtLjcyLTUuMDQtMS45Mi02LjQ4LTMuNi0xLjQ0LTEuNjgtMi4xNi0zLjY2LTIuMTYtNS45NCwwLTEuODguNDktMy41NCwxLjQ3LTQuOTguOTgtMS40NCwyLjM0LTIuNTYsNC4wOC0zLjM2LDEuNzQtLjgsMy42Ny0xLjIsNS43OS0xLjIsMi44LDAsNS4zMS43LDcuNTMsMi4xLDIuMjIsMS40LDMuODEsMy4zNCw0Ljc3LDUuODJsLTQuNDQsMi4yOGMtLjgtMS42NC0xLjkxLTIuOTQtMy4zMy0zLjktMS40Mi0uOTYtMi45OS0xLjQ0LTQuNzEtMS40NHMtMi45Ni40LTMuOTYsMS4yYy0xLC44LTEuNSwxLjg0LTEuNSwzLjEycy40NywyLjM3LDEuNDEsMy4xNWMuOTQuNzgsMS45NywxLjI3LDMuMDksMS40N2w1LjM0LjcyYzIuNjguNzIsNC43NywxLjk1LDYuMjcsMy42OSwxLjUsMS43NCwyLjI1LDMuNzUsMi4yNSw2LjAzLDAsMS44NC0uNSwzLjQ4LTEuNSw0LjkyLTEsMS40NC0yLjQsMi41Ny00LjIsMy4zOS0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTEwNi4xNC45NmMuNjQtLjY0LDEuNDgtLjk2LDIuNTItLjk2czEuODguMzIsMi41Mi45NmMuNjQuNjQuOTYsMS40OC45NiwyLjUycy0uMzIsMS44OC0uOTYsMi41MmMtLjY0LjY0LTEuNDguOTYtMi41Mi45NnMtMS44OC0uMzItMi41Mi0uOTZjLS42NC0uNjQtLjk2LTEuNDgtLjk2LTIuNTJzLjMyLTEuODguOTYtMi41MlpNMTA1Ljg0LDE3LjQ2aDUuNTh2MjdoLTUuNTh2LTI3WiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTEzNS43Miw0Mi45NmMtMi41Mi0xLjQ4LTQuNDgtMy41MS01Ljg4LTYuMDktMS40LTIuNTgtMi4xLTUuNDUtMi4xLTguNjFzLjctNi4wOCwyLjEtOC42NGMxLjQtMi41NiwzLjM1LTQuNTcsNS44NS02LjAzLDIuNS0xLjQ2LDUuMzUtMi4xOSw4LjU1LTIuMTlzNS45Ny44MSw4LjU1LDIuNDMsNC40MSwzLjcxLDUuNDksNi4yN2wtNS4wNCwyLjRjLS43Ni0xLjcyLTEuOTUtMy4xLTMuNTctNC4xNC0xLjYyLTEuMDQtMy40My0xLjU2LTUuNDMtMS41NnMtMy43NS41LTUuMzcsMS41Yy0xLjYyLDEtMi44OSwyLjM3LTMuODEsNC4xMS0uOTIsMS43NC0xLjM4LDMuNzEtMS4zOCw1Ljkxcy40Nyw0LjExLDEuNDEsNS44NWMuOTQsMS43NCwyLjIxLDMuMTEsMy44MSw0LjExLDEuNiwxLDMuMzgsMS41LDUuMzQsMS41czMuODYtLjUyLDUuNDYtMS41NmMxLjYtMS4wNCwyLjc4LTIuNDYsMy41NC00LjI2bDUuMDQsMi41MmMtMS4wNCwyLjUyLTIuODYsNC42LTUuNDYsNi4yNC0yLjYsMS42NC01LjQ2LDIuNDYtOC41OCwyLjQ2cy02LS43NC04LjUyLTIuMjJaIi8+PHBhdGggY2xhc3M9ImNscy0yIiBkPSJNMTY0LjgyLDEyLjEyaDUuNDZ2NC4wMmMuOTItMS41MiwyLjE3LTIuNjksMy43NS0zLjUxLDEuNTgtLjgyLDMuMzMtMS4yMyw1LjI1LTEuMjMsMi4yLDAsNC4yMS41Myw2LjAzLDEuNTksMS44MiwxLjA2LDMuMjEsMi40OSw0LjE3LDQuMjksMS4wNC0xLjg4LDIuNDUtMy4zMyw0LjIzLTQuMzUsMS43OC0xLjAyLDMuNzUtMS41Myw1LjkxLTEuNTNzNC4yMi41Myw2LjA2LDEuNTljMS44NCwxLjA2LDMuMywyLjUxLDQuMzgsNC4zNSwxLjA4LDEuODQsMS42MiwzLjksMS42Miw2LjE4djIwLjk0aC01LjY0di0xOS4xNGMwLTIuNjQtLjY5LTQuNzItMi4wNy02LjI0LTEuMzgtMS41Mi0zLjE3LTIuMjgtNS4zNy0yLjI4cy00LjA2Ljc3LTUuNDYsMi4zMWMtMS40LDEuNTQtMi4xLDMuNjEtMi4xLDYuMjF2MTkuMTRoLTUuNjR2LTE5LjE0YzAtMi42NC0uNjgtNC43Mi0yLjA0LTYuMjQtMS4zNi0xLjUyLTMuMTYtMi4yOC01LjQtMi4yOHMtNC4wMS43Ny01LjQzLDIuMzFjLTEuNDIsMS41NC0yLjEzLDMuNjEtMi4xMyw2LjIxdjE5LjE0aC01LjU4VjEyLjEyWiIvPjxwYXRoIGNsYXNzPSJjbHMtMiIgZD0iTTIyMi4zLDQyLjg3Yy0yLjQtMS41NC00LjEyLTMuNjMtNS4xNi02LjI3bDQuNS0yLjI4Yy45MiwxLjg4LDIuMTgsMy4zNiwzLjc4LDQuNDQsMS42LDEuMDgsMy4zNCwxLjYyLDUuMjIsMS42MnMzLjI4LS40Miw0LjQ0LTEuMjZjMS4xNi0uODQsMS43NC0xLjk0LDEuNzQtMy4zcy0uNTItMi4zOS0xLjU2LTMuMjFjLTEuMDQtLjgyLTIuMTYtMS4zMS0zLjM2LTEuNDdsLTQuODYtLjY2Yy0yLjg4LS43Mi01LjA0LTEuOTItNi40OC0zLjYtMS40NC0xLjY4LTIuMTYtMy42Ni0yLjE2LTUuOTQsMC0xLjg4LjQ5LTMuNTQsMS40Ny00Ljk4czIuMzQtMi41Niw0LjA4LTMuMzZjMS43NC0uOCwzLjY3LTEuMiw1Ljc5LTEuMiwyLjgsMCw1LjMxLjcsNy41MywyLjEsMi4yMiwxLjQsMy44MSwzLjM0LDQuNzcsNS44MmwtNC40NCwyLjI4Yy0uOC0xLjY0LTEuOTEtMi45NC0zLjMzLTMuOS0xLjQyLS45Ni0yLjk5LTEuNDQtNC43MS0xLjQ0cy0yLjk2LjQtMy45NiwxLjJjLTEsLjgtMS41LDEuODQtMS41LDMuMTJzLjQ3LDIuMzcsMS40MSwzLjE1Yy45NC43OCwxLjk3LDEuMjcsMy4wOSwxLjQ3bDUuMzQuNzJjMi42OC43Miw0Ljc3LDEuOTUsNi4yNywzLjY5LDEuNSwxLjc0LDIuMjUsMy43NSwyLjI1LDYuMDMsMCwxLjg0LS41LDMuNDgtMS41LDQuOTJzLTIuNCwyLjU3LTQuMiwzLjM5Yy0xLjguODItMy44NiwxLjIzLTYuMTgsMS4yMy0zLjEyLDAtNS44OC0uNzctOC4yOC0yLjMxWiIvPjwvZz48L2c+PC9zdmc+';
 $PESI_LOGO = 'data:image/svg+xml;base64,' . $PESI_LOGO_B64;
 
-// Variante für hellen Hintergrund (Login). Dieselbe Grafik, nur der hellgraue
-// Wortteil „pesi" in Dunkel — auf Weiß wäre #f3f3f3 praktisch unsichtbar.
-// Zur Laufzeit abgeleitet statt als zweiter Base64-Block: ein Blob, der nicht
-// mit dem ersten aus dem Tritt geraten kann, wenn das Logo einmal getauscht wird.
+// Variante für hellen Hintergrund (Login), zur Laufzeit abgeleitet.
 $PESI_LOGO_LIGHT = 'data:image/svg+xml;base64,' . base64_encode(
     str_replace('#f3f3f3', '#1a1a1a', (string)base64_decode($PESI_LOGO_B64))
 );
@@ -147,10 +141,8 @@ if ($auth) {
         }
     }
 
-    // Eine Anfrage, eine Aktion. 'pesi_save' ist ein verstecktes Feld im selben
-    // Formular, geht also auch beim Klick auf „Duplizieren" mit — ohne diese
-    // Unterscheidung liefe der Save-Handler hinterher und überschriebe die
-    // Erfolgsmeldung mit „Seite wurde zwischenzeitlich geändert".
+    // Eine Anfrage, eine Aktion: 'pesi_save' ist ein verstecktes Feld und geht
+    // bei jedem Absenden mit, auch bei Strukturaktionen.
     $structural = isset($_POST['pesi_block']) || isset($_POST['pesi_toggle'])
                || isset($_POST['pesi_restore']);
 
@@ -217,9 +209,8 @@ if ($auth) {
                     if (!empty($up['old'])) _pesi_cleanup_old($basePath, $up['old'], $PESI_PAGES);
                     $fields = _pesi_parse($fp);
                 } elseif (!empty($up['old'])) {
-                    // Save gescheitert, Upload liegt aber schon auf der Platte
-                    // und wird von der Seite nie referenziert — sonst bliebe er
-                    // für immer im Upload-Ordner liegen.
+                    // Save gescheitert: der bereits verschobene Upload wird von
+                    // der Seite nie referenziert und muss wieder weg.
                     _pesi_cleanup_old($basePath, array_intersect_key($up['post'], $up['old']), $PESI_PAGES);
                 }
                 if (!empty($up['errors'])) {
@@ -280,12 +271,9 @@ function _pesi_parse(string $file): array {
 }
 
 /**
- * IDs von pesi()-Aufrufen, die der Parser nicht erfasst hat — meldet die
- * Diagnose als T13. Fast immer ein doppelt zitierter Wert: die Seite rendert
- * normal, das Feld fehlt aber lautlos im Dashboard.
- *
- * Doppelte Anführungszeichen einfach mitzulesen wäre falsch — PHP interpoliert
- * darin Variablen und Escapes, der Parser sähe etwas anderes als die Seite.
+ * IDs von pesi()-Aufrufen, die der Parser nicht erfasst hat — Diagnose T13.
+ * Fast immer ein doppelt zitierter Wert. Der Wert muss einfach zitiert sein:
+ * in doppelten Anführungszeichen interpoliert PHP.
  */
 function _pesi_unparsed_fields(string $file): array {
     $src = (string)file_get_contents($file);
@@ -308,8 +296,7 @@ function _pesi_backup(string $file): bool {
     $b2 = $file . '.pesi-backup.2';
     if (file_exists($b1)) @rename($b1, $b2);
     if (!copy($file, $b1)) return false;
-    // copy() kann auf voller Platte Erfolg melden und trotzdem kürzen. Ein
-    // gekürztes Backup ist schlimmer als keines — der Rollback nähme es.
+    // Grösse gegenprüfen: copy() kann Erfolg melden und trotzdem kürzen.
     clearstatcache(true, $b1);
     clearstatcache(true, $file);
     return filesize($b1) === filesize($file);
@@ -319,8 +306,7 @@ function _pesi_backup(string $file): bool {
 // Rückgabe: null bei Erfolg, sonst Fehler-Array.
 function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): ?array {
     global $t;
-    // 'c+', nicht 'c': 'c' ist write-only, der Stale-Check unten läse dann
-    // immer '' und jeder Feld-Save endete mit „Seite wurde geändert".
+    // 'c+' zwingend — 'c' ist write-only, der Stale-Check unten muss lesen.
     $fp = fopen($file, 'c+');
     if (!$fp || !flock($fp, LOCK_EX)) {
         if ($fp) fclose($fp);
@@ -335,17 +321,15 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
             return ['msg' => $t['err_stale'], 'type' => 'error'];
         }
     }
-    // Sicherung erst hier, nicht beim Aufrufer: sonst rotiert sie auch, wenn
-    // danach gar nichts geschrieben wird — und zwei folgenlose Klicks auf
-    // „Speichern" schöben die echte Vorversion aus der Zweier-Rotation.
+    // Sicherung gehört hierher, nicht zum Aufrufer: sie darf nur rotieren,
+    // wenn wirklich geschrieben wird.
     if (!_pesi_backup($file)) {
         flock($fp, LOCK_UN);
         fclose($fp);
         return ['msg' => $t['err_backup'], 'type' => 'error'];
     }
 
-    // fwrite() meldet eine Teilschreibung — volle Platte, Quota — nur über den
-    // Rückgabewert. Ungeprüft bliebe die Seite halb geschrieben liegen.
+    // Rückgabewert prüfen: fwrite() meldet eine Teilschreibung nur so.
     $want    = strlen($mod);
     $written = (ftruncate($fp, 0) && rewind($fp)) ? fwrite($fp, $mod) : false;
     $ok      = ($written === $want) && fflush($fp);
@@ -361,10 +345,8 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
 }
 
 /**
- * Stellt die Seite aus .pesi-backup.1 wieder her und liefert die passende
- * Meldung. Schlägt die Wiederherstellung selbst fehl, liegt die Seite der
- * Kundin beschädigt auf dem Server — das braucht eine eigene, dringlichere
- * Meldung, damit niemand denkt, es sei nichts passiert.
+ * Stellt die Seite aus .pesi-backup.1 wieder her. Schlägt das fehl, liegt sie
+ * beschädigt auf dem Server — dann err_write_fatal statt $msg.
  */
 function _pesi_rollback(string $file, string $msg): array {
     global $t;
@@ -377,10 +359,8 @@ function _pesi_rollback(string $file, string $msg): array {
 
 /**
  * `php -l`: true = ok, false = Syntaxfehler, null = Linter nicht verfügbar.
- *
- * Ein Exitcode != 0 beweist keinen Syntaxfehler — ein fehlendes CLI-Binary
- * liefert 127 (unter Windows 1). Als Fehler zählt darum nur eine echte
- * Lint-Diagnose, sonst rollte auf solchen Hosts jeder Save zurück.
+ * Nur eine echte Lint-Diagnose zählt als Fehler — ein Exitcode != 0 kann auch
+ * ein fehlendes CLI-Binary sein (127, unter Windows 1).
  */
 function _pesi_lint(string $file): ?bool {
     if (!function_exists('exec')) return null;
@@ -396,9 +376,8 @@ function _pesi_lint(string $file): ?bool {
 }
 
 /**
- * Struktur-Markierungen in einem Feldwert. Landete so etwas im Quelltext,
- * läsen Block- und Toggle-Parser es als echte Struktur und schnitten falsch —
- * und zwar `php -l`-sauber, das Sicherheitsnetz greift also nicht.
+ * Struktur-Markierungen in einem Feldwert. Block- und Toggle-Parser läsen sie
+ * als echte Struktur, und zwar `php -l`-sauber — kein Rollback.
  */
 function _pesi_has_marker(string $v): bool {
     return (bool)preg_match('#<!--\s*/?\s*pesi:(item|toggle)\b#i', $v)
@@ -592,10 +571,9 @@ function _pesi_toggle_re(): string {
 }
 
 /**
- * Verschachtelte pesi:toggle-Spannen. Der Parser ist non-greedy und läse den
- * inneren End-Marker als Ende der äußeren Spanne: der if(false)-Wrapper landet
- * mitten im Dokument, alles dahinter bleibt trotz „versteckt" sichtbar, und
- * `php -l` merkt nichts. Darum sperren statt falsch schalten.
+ * Verschachtelte pesi:toggle-Spannen — nicht unterstützt, das Umschalten wird
+ * gesperrt. Der non-greedy Parser läse sonst den inneren End-Marker als Ende
+ * der äusseren Spanne, und zwar `php -l`-sauber.
  */
 function _pesi_toggle_nested(string $file): bool {
     $src = (string)file_get_contents($file);
@@ -622,12 +600,8 @@ function _pesi_toggle_parse(string $file): array {
 }
 
 /**
- * id => ['group' => 'urlaubshinweis', 'visible' => false]
- *
- * Damit die Feldkarte anzeigen kann, dass ihr Inhalt gerade nicht auf der
- * Website steht — sonst schreibt die Kundin ahnungslos in einen versteckten
- * Bereich. Der Toggle-Rumpf wird nach pesi()-Aufrufen abgesucht; Offsets
- * braucht es nicht, und verschachtelte Toggles sind ohnehin gesperrt.
+ * id => ['group' => 'urlaubshinweis', 'visible' => false] — für die Anzeige
+ * auf der Feldkarte, ob deren Inhalt gerade auf der Website steht.
  */
 function _pesi_field_toggles(string $file): array {
     $src = (string)file_get_contents($file);
@@ -732,8 +706,7 @@ function _pesi_when(int $ts): string {
 }
 
 // Gruppen-Slug als Anzeigename: 'team_mitglieder' → 'Team mitglieder'.
-// Eine Stelle für beides, sonst formatieren Block-Überschrift und
-// Sichtbarkeits-Liste denselben Namen nebeneinander unterschiedlich.
+// Für Block-Überschrift und Sichtbarkeits-Liste gemeinsam.
 function _pesi_human(string $slug): string {
     $s = trim(str_replace(['_', '-'], ' ', $slug));
     return $s === '' ? '' : mb_strtoupper(mb_substr($s, 0, 1)) . mb_substr($s, 1);
@@ -828,12 +801,9 @@ function _pesi_upload_map(): array {
 }
 
 /**
- * MIME-Typ aus dem Dateiinhalt, nie aus dem Dateinamen. Liefert '' wenn nichts
- * Verwertbares herauskommt — der Aufrufer lehnt dann ab.
- *
- * finfo lässt sich abschalten und fehlt auf manchen Hostings; ein ungeprüftes
- * `new finfo()` beendete den Upload dort mit einem Fatal Error. getimagesize()
- * steckt im PHP-Kern und bestätigt zusätzlich, dass die Datei lesbar ist.
+ * MIME-Typ aus dem Dateiinhalt, nie aus dem Dateinamen. '' = nicht ermittelbar,
+ * der Aufrufer lehnt dann ab. finfo muss geprüft werden — die Erweiterung fehlt
+ * auf manchen Hostings; getimagesize() steckt dagegen im PHP-Kern.
  */
 function _pesi_image_mime(string $path): string {
     if (class_exists('finfo')) {
@@ -987,11 +957,9 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
 // ── i18n ─────────────────────────────────────────────────────
 // Funktion (wird gehoisted) → bereits vor der POST-Verarbeitung nutzbar.
 //
-// Tonfall: Meldungen nennen die Folge, nie den Mechanismus. Was die Kundin
-// selbst beheben kann, bekommt keinen Code; was nicht, einen (S… = Struktur,
-// T… = Technik) plus die Bitte, ihn weiterzugeben — jeder Code gehört in die
-// README-Tabelle. Deutsch siezt; Abweichungen per $PESI_STRINGS, nicht hier.
-// Beide Sprachen: gleiche Keys, gleiche %-Platzhalter (die Suite prüft es).
+// Regeln für neue Texte: Folge statt Mechanismus; ein Code (S…/T…) nur, wenn
+// die Kundin es nicht selbst beheben kann, und dann auch in der README-Tabelle.
+// Deutsch siezt. Beide Sprachen: gleiche Keys, gleiche %-Platzhalter.
 function _pesi_strings(): array { return [
     'de' => [
         'err_not_readable'  => 'Diese Seite lässt sich gerade nicht lesen. Ihre Inhalte sind unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T1)',
@@ -1174,9 +1142,8 @@ function _pesi_strings(): array { return [
 ]; }
 
 /**
- * WCAG-Kontrastverhältnis zweier Hex-Farben (1.0 … 21.0). Prüft die
- * Markenfarbe: sie trägt weisse Schrift auf dem Speichern-Button, gehört aber
- * der Kundin — also messen und die Betreuung informieren statt ändern.
+ * WCAG-Kontrastverhältnis zweier Hex-Farben (1.0 … 21.0). Prüft die frei
+ * konfigurierbare Markenfarbe für die Diagnose T12.
  */
 function _pesi_contrast(string $a, string $b): float {
     $lum = function (string $h): float {
@@ -1359,8 +1326,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 
 .fc-label{display:block;font-size:.92rem;font-weight:600;color:var(--tx);margin-bottom:.15rem}
 label.fc-label{cursor:pointer}
-/* Technische Metadaten (Feld-ID, Typ) gehören der Betreuung, nicht der Kundin —
-   nur sichtbar, wenn die technische Ansicht eingeschaltet ist. */
+/* Feld-ID und Typ nur in der technischen Ansicht. */
 .fc-meta{display:none;align-items:center;gap:.5rem;margin-bottom:.7rem}
 body.tech .fc-meta{display:flex}
 .fc-label{margin-bottom:.7rem}
@@ -1627,10 +1593,8 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
   <div class="M">
     <?php
       // ── Diagnose: Einrichtungsprobleme, Adressat ist die Betreuung ──
-      // Zugeklappt und ruhig formuliert — ein roter Alarm mit einer Anweisung,
-      // die die Kundin gar nicht ausführen kann, erzeugt nur einen Anruf.
-      // Der Linter wird gegen eine garantiert gültige Datei geprobt; nur auf
-      // exec() zu schauen verschwiege den häufigeren Fall (kein CLI im PATH).
+      // Der Linter wird gegen eine garantiert gültige Datei geprobt; auf
+      // exec() allein zu schauen übersähe ein fehlendes CLI im PATH.
       $diag = [];
       if (in_array((string)PESI_PASSWORD, ['demo123', 'demo1234'], true)) {
           $diag[] = $t['warn_default_pw'];
@@ -1638,8 +1602,6 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
           $diag[] = $t['warn_no_exec'];
       }
-      // Erkennung ohne Rettung: Der Syntax-Check merkt den Fehler, kann aber
-      // ohne Sicherung nichts zurückholen — die Seite bliebe kaputt liegen.
       if (PESI_SYNTAX_CHECK && !PESI_BACKUP_ENABLED) {
           $diag[] = $t['warn_no_backup'];
       }
@@ -1903,8 +1865,7 @@ function closeMobileNav(){
 })();
 
 // ── Technische Ansicht (Feld-IDs + Typen) ein/aus ──
-// Standard: aus. Die Kundin sieht nur Beschriftung und Eingabefeld; wer
-// Feld-IDs braucht, schaltet sie einmal ein und der Zustand bleibt.
+// Standard: aus, Zustand bleibt in localStorage.
 (function(){
   var btn=document.getElementById('techToggle');
   if(!btn) return;
