@@ -416,12 +416,9 @@ $gif = $scratch . '/probe.gif';
 file_put_contents($gif, base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'));
 $png = $scratch . '/probe.png';
 file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
-// PHP-Datei mit Bild-Endung. Der Inhalt ist bewusst harmlos: eine echte
-// Webshell (system() über $_GET) schlug hier ursprünglich, und der
-// Virenscanner des Entwicklungsrechners hat sie prompt in Quarantäne genommen
-// — zu Recht. Für die Zusage „der Typ kommt aus dem Inhalt, nicht aus dem
-// Dateinamen" genügt irgendein Nicht-Bild; die Signatur trägt nichts bei,
-// kostet aber Fehlalarme und quarantänebedingt wackelige Testläufe.
+// PHP-Datei mit Bild-Endung. Inhalt bewusst harmlos — eine echte Webshell hier
+// holt nur den Virenscanner auf den Plan; für „Typ kommt aus dem Inhalt"
+// genügt irgendein Nicht-Bild.
 $fake = $scratch . '/kein-bild.jpg';
 file_put_contents($fake, "<?php\n// PHP-Quelltext, aber kein Bild.\n\$x = 1;\n");
 echo '  (finfo ' . (class_exists('finfo') ? 'vorhanden' : 'FEHLT → getimagesize-Fallback') . ")\n";
@@ -664,6 +661,33 @@ $p = page("<?php\n\$a = pesi('nur_gut', 'Wert', 'text', 'Gut');\n");
 ok('saubere Seite meldet nichts', _pesi_unparsed_fields($p) === []);
 $p = page("<?php\n\$a = pesi('x', 'A', 'text', 'X');\n\$b = pesi('x', 'B', 'text', 'X');\n");
 ok('doppelte ID ist kein Fehlalarm', _pesi_unparsed_fields($p) === [], json_encode(_pesi_unparsed_fields($p)));
+
+// ── $PESI_STRINGS end-to-end ─────────────────────────────────
+// Der Test oben prüft nur die Merge-Regeln im herausgeschnittenen Block. Dass
+// der Override die Ausgabe auch wirklich erreicht, sagt er nicht — und genau
+// da klemmte es: eine zweite $t-Zuweisung weiter unten in pesi.php setzte die
+// Sprachtabelle neu und warf den Override weg. Darum pesi.php wirklich starten.
+grp('$PESI_STRINGS — wirkt bis in die Ausgabe');
+$e2e = $scratch . '/e2e';
+@mkdir($e2e, 0777, true);
+copy($root . '/pesi.php', $e2e . '/pesi.php');
+copy($root . '/pesi-core.php', $e2e . '/pesi-core.php');
+$render = function (string $dir): string {
+    $cmd = 'cd ' . escapeshellarg($dir) . ' && '
+         . escapeshellarg(PHP_BINARY) . ' pesi.php';
+    return (string)shell_exec($cmd . ' 2>&1');
+};
+$vorher = $render($e2e);
+ok('unverändert erscheint der Standardtext', strpos($vorher, '>Anmelden<') !== false);
+
+file_put_contents($e2e . '/pesi-core.php',
+    "\n\$PESI_STRINGS = ['login_btn' => 'EINLOGGEN-XYZ'];\n", FILE_APPEND);
+$nachher = $render($e2e);
+ok('überschriebener Text erscheint', strpos($nachher, 'EINLOGGEN-XYZ') !== false,
+    'Login-Button: ' . (preg_match('/class="L-b">([^<]*)/', $nachher, $mm) ? $mm[1] : '?'));
+ok('der Standardtext ist verschwunden', strpos($nachher, '>Anmelden<') === false);
+foreach (glob($e2e . '/*') as $f) @unlink($f);
+@rmdir($e2e);
 
 // ── Zeitangabe in der Wiederherstellen-Rückfrage ─────────────
 grp('_pesi_when');

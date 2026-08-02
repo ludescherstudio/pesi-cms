@@ -4,13 +4,9 @@
  * URL: domain.at/pesi
  */
 
-// ── Schutz-Header (nur fürs Dashboard, nicht für die Kundenseite) ──
-// Das Dashboard trägt destruktive Ein-Klick-Aktionen (Eintrag löschen,
-// Wiederherstellen). CSRF-Token schützen davor nicht: beim Clickjacking klickt
-// das Opfer den echten Button in einem unsichtbaren Frame, das Token wird
-// gültig mitgeschickt. 'frame-ancestors' ist die moderne Form, X-Frame-Options
-// die für ältere Browser — beide kosten nichts und brechen die Vorschau nicht,
-// denn die rahmt die Seite ein, nicht umgekehrt.
+// Schutz-Header, nur fürs Dashboard. Gegen Clickjacking helfen CSRF-Token
+// nicht: das Opfer klickt den echten „Löschen"-Button in einem unsichtbaren
+// Frame, das Token geht gültig mit.
 header('X-Frame-Options: DENY');
 header("Content-Security-Policy: frame-ancestors 'none'");
 header('X-Content-Type-Options: nosniff');
@@ -48,11 +44,9 @@ require_once $corePath;
 $lang = defined('LANG') ? LANG : 'de';
 $t    = _pesi_strings()[$lang] ?? _pesi_strings()['de'];
 
-// Projektspezifische Formulierungen: pesi-core.php darf einzelne Texte per
-// $PESI_STRINGS überschreiben. Damit lassen sich Anrede, Tonfall und
-// Fachbegriffe an die jeweilige Kundschaft anpassen, ohne pesi.php zu forken —
-// ein Update bleibt so ein reiner Dateitausch. Unbekannte Keys werden
-// ignoriert, damit ein Tippfehler nicht stillschweigend Text verschluckt.
+// pesi-core.php darf einzelne Texte per $PESI_STRINGS überschreiben — Anrede
+// und Fachbegriffe pro Kundschaft, ohne pesi.php zu forken. Unbekannte Keys
+// werden ignoriert, damit ein Tippfehler kein Label leerräumt.
 if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
     foreach ($PESI_STRINGS as $k => $v) {
         if (is_string($v) && array_key_exists($k, $t)) $t[$k] = $v;
@@ -66,9 +60,8 @@ $sk = 'pesi_auth';
 // 'Location: ./' wäre bei extensionsloser URL falsch: relativ zu '/pesi'
 // (ohne Slash) löst './' zu '/' auf → Redirect auf die Mutterseite.
 $selfUrl = strtok($_SERVER['REQUEST_URI'] ?? '/pesi', '?');
-// Muss mit genau EINEM Slash beginnen. '//host' und '/\host' liest der Browser
-// als protokollrelative URL — ein 'Location:' darauf wäre ein Open Redirect auf
-// eine fremde Domain. Steuerzeichen fliegen gleich mit raus.
+// Genau ein führender Slash: '//host' und '/\host' liest der Browser als
+// protokollrelative URL, ein 'Location:' darauf wäre ein Open Redirect.
 if (!is_string($selfUrl) || $selfUrl === '' || $selfUrl[0] !== '/'
     || (isset($selfUrl[1]) && ($selfUrl[1] === '/' || $selfUrl[1] === '\\'))
     || preg_match('/[\x00-\x1F\x7F]/', $selfUrl)) {
@@ -154,13 +147,10 @@ if ($auth) {
         }
     }
 
-    // Strukturelle Aktion? Die Block-, Toggle- und Wiederherstellen-Buttons
-    // liegen im selben Formular wie die Felder, und 'pesi_save' ist ein
-    // verstecktes Feld — es wird also bei JEDEM Absenden mitgeschickt, auch
-    // beim Klick auf „Duplizieren". Ohne diese Unterscheidung liefe der
-    // Save-Handler danach ebenfalls, fände die von der Operation gerade
-    // geänderte Dateizeit vor und überschriebe die Erfolgsmeldung mit
-    // „Seite wurde zwischenzeitlich geändert". Eine Anfrage, eine Aktion.
+    // Eine Anfrage, eine Aktion. 'pesi_save' ist ein verstecktes Feld im selben
+    // Formular, geht also auch beim Klick auf „Duplizieren" mit — ohne diese
+    // Unterscheidung liefe der Save-Handler hinterher und überschriebe die
+    // Erfolgsmeldung mit „Seite wurde zwischenzeitlich geändert".
     $structural = isset($_POST['pesi_block']) || isset($_POST['pesi_toggle'])
                || isset($_POST['pesi_restore']);
 
@@ -227,14 +217,9 @@ if ($auth) {
                     if (!empty($up['old'])) _pesi_cleanup_old($basePath, $up['old'], $PESI_PAGES);
                     $fields = _pesi_parse($fp);
                 } elseif (!empty($up['old'])) {
-                    // Der Upload liegt schon auf der Platte, der Save ist danach
-                    // gescheitert (stale, abgelehnter Wert, Schreibfehler) — die
-                    // Seite referenziert das neue Bild also nie. Ohne das hier
-                    // bliebe es für immer im Upload-Ordner liegen; bei
-                    // Personenfotos ist das genau der verwaiste Bestand, den
-                    // pesi zu vermeiden verspricht. Aufgeräumt wird mit
-                    // derselben Funktion und damit denselben Sicherungen
-                    // (nur eigener Ordner, kein Traversal, nichts in Benutzung).
+                    // Save gescheitert, Upload liegt aber schon auf der Platte
+                    // und wird von der Seite nie referenziert — sonst bliebe er
+                    // für immer im Upload-Ordner liegen.
                     _pesi_cleanup_old($basePath, array_intersect_key($up['post'], $up['old']), $PESI_PAGES);
                 }
                 if (!empty($up['errors'])) {
@@ -295,19 +280,12 @@ function _pesi_parse(string $file): array {
 }
 
 /**
- * IDs von pesi()-Aufrufen, die der Parser NICHT erfasst hat.
+ * IDs von pesi()-Aufrufen, die der Parser nicht erfasst hat — meldet die
+ * Diagnose als T13. Fast immer ein doppelt zitierter Wert: die Seite rendert
+ * normal, das Feld fehlt aber lautlos im Dashboard.
  *
- * Häufigster Grund: der Wert steht in doppelten Anführungszeichen. Die Seite
- * rendert dann völlig normal, das Feld fehlt aber im Dashboard — die Kundin
- * kann es nicht bearbeiten, und niemand erfährt warum. Zu doppelten
- * Anführungszeichen greift man ausgerechnet dann, wenn der Text ein Apostroph
- * enthält („Anna's Praxis"), also im unauffälligsten Moment.
- *
- * Sie einfach mitzulesen wäre falsch: In doppelten Anführungszeichen
- * interpoliert PHP Variablen und Escape-Sequenzen. Der Parser sähe den
- * Quelltext, die Seite zeigt etwas anderes, und ein Speichern schriebe die
- * Interpolation weg. Darum melden statt raten — das ist ein Fehler der
- * Einrichtung, kein Inhalt der Kundin.
+ * Doppelte Anführungszeichen einfach mitzulesen wäre falsch — PHP interpoliert
+ * darin Variablen und Escapes, der Parser sähe etwas anderes als die Seite.
  */
 function _pesi_unparsed_fields(string $file): array {
     $src = (string)file_get_contents($file);
@@ -330,9 +308,8 @@ function _pesi_backup(string $file): bool {
     $b2 = $file . '.pesi-backup.2';
     if (file_exists($b1)) @rename($b1, $b2);
     if (!copy($file, $b1)) return false;
-    // Auf vollem Webspace kann copy() erfolgreich melden und trotzdem kürzen.
-    // Ein gekürztes Backup ist schlimmer als keines: der Rollback unten würde
-    // die Seite der Kundin damit überschreiben.
+    // copy() kann auf voller Platte Erfolg melden und trotzdem kürzen. Ein
+    // gekürztes Backup ist schlimmer als keines — der Rollback nähme es.
     clearstatcache(true, $b1);
     clearstatcache(true, $file);
     return filesize($b1) === filesize($file);
@@ -342,10 +319,8 @@ function _pesi_backup(string $file): bool {
 // Rückgabe: null bei Erfolg, sonst Fehler-Array.
 function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): ?array {
     global $t;
-    // 'c+' (lesen UND schreiben), nicht 'c': 'c' ist write-only, das
-    // stream_get_contents() im Stale-Check unten läse dann immer '' und der
-    // Hash-Vergleich schlüge grundsätzlich fehl — jeder Feld-Save endete mit
-    // „Seite wurde geändert". Beide Modi legen an und truncaten nicht.
+    // 'c+', nicht 'c': 'c' ist write-only, der Stale-Check unten läse dann
+    // immer '' und jeder Feld-Save endete mit „Seite wurde geändert".
     $fp = fopen($file, 'c+');
     if (!$fp || !flock($fp, LOCK_EX)) {
         if ($fp) fclose($fp);
@@ -360,26 +335,17 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
             return ['msg' => $t['err_stale'], 'type' => 'error'];
         }
     }
-    // Sicherung erst hier: unter dem Lock, nach dem Stale-Check und unmittelbar
-    // bevor tatsächlich geschrieben wird.
-    //
-    // Vorher rotierte sie beim Aufrufer, also auch dann, wenn danach gar nichts
-    // geschrieben wurde — bei „keine Änderungen", bei abgelehnten Werten, bei
-    // einem Stale-Abbruch. Zwei folgenlose Klicks auf „Speichern" schoben damit
-    // die echte Vorversion aus der Zweier-Rotation, und „↩ Letzte Version" gab
-    // nur noch den Stand zurück, der ohnehin schon dastand. Genau das tut eine
-    // unsichere Nutzerin: nochmal klicken, weil sie nicht weiss, ob es klappte.
+    // Sicherung erst hier, nicht beim Aufrufer: sonst rotiert sie auch, wenn
+    // danach gar nichts geschrieben wird — und zwei folgenlose Klicks auf
+    // „Speichern" schöben die echte Vorversion aus der Zweier-Rotation.
     if (!_pesi_backup($file)) {
         flock($fp, LOCK_UN);
         fclose($fp);
         return ['msg' => $t['err_backup'], 'type' => 'error'];
     }
 
-    // Schreiben — und prüfen, dass wirklich alles ankam. Auf vollem Webspace
-    // oder bei erreichter Quota schreibt fwrite() nur einen Teil und meldet das
-    // ausschließlich über den Rückgabewert. Ungeprüft bliebe die Seite der
-    // Kundin halb geschrieben zurück; der Syntax-Check unten fängt das meist,
-    // aber ausgerechnet dann nicht, wenn er selbst nicht läuft (Code T7).
+    // fwrite() meldet eine Teilschreibung — volle Platte, Quota — nur über den
+    // Rückgabewert. Ungeprüft bliebe die Seite halb geschrieben liegen.
     $want    = strlen($mod);
     $written = (ftruncate($fp, 0) && rewind($fp)) ? fwrite($fp, $mod) : false;
     $ok      = ($written === $want) && fflush($fp);
@@ -410,14 +376,11 @@ function _pesi_rollback(string $file, string $msg): array {
 }
 
 /**
- * Führt `php -l` aus. true = syntaktisch ok, false = echter Syntaxfehler,
- * null = Linter nicht verfügbar (exec gesperrt oder kein PHP-CLI im PATH).
+ * `php -l`: true = ok, false = Syntaxfehler, null = Linter nicht verfügbar.
  *
- * WICHTIG: Ein Exitcode != 0 allein beweist keinen Syntaxfehler. Fehlt das
- * CLI-Binary, antwortet die Shell mit 127 („command not found", unter Windows
- * auch 1). Wer das als Syntaxfehler wertet, rollt auf solchen Hosts *jeden*
- * Speichervorgang zurück und meldet dem Kunden einen PHP-Fehler, den es nie
- * gab. Als Fehler zählt darum nur eine echte Lint-Diagnose auf stdout/stderr.
+ * Ein Exitcode != 0 beweist keinen Syntaxfehler — ein fehlendes CLI-Binary
+ * liefert 127 (unter Windows 1). Als Fehler zählt darum nur eine echte
+ * Lint-Diagnose, sonst rollte auf solchen Hosts jeder Save zurück.
  */
 function _pesi_lint(string $file): ?bool {
     if (!function_exists('exec')) return null;
@@ -433,14 +396,9 @@ function _pesi_lint(string $file): ?bool {
 }
 
 /**
- * Erkennt pesi-Struktur-Markierungen in einem Feldwert.
- *
- * Ein gespeicherter Wert landet als Literal im Seitenquelltext. Enthielte er
- * einen pesi:item-/pesi:toggle-Marker oder den if(false)-Wrapper, läsen Block-
- * und Toggle-Parser ihn als echte Struktur und schnitten ihre Spannen falsch.
- * Das Ergebnis bleibt dabei oft `php -l`-sauber — das Sicherheitsnetz greift
- * also nicht, der Kunde sieht nur noch Müll auf der Seite. Lieber die
- * Speicherung sauber ablehnen als still korrumpieren.
+ * Struktur-Markierungen in einem Feldwert. Landete so etwas im Quelltext,
+ * läsen Block- und Toggle-Parser es als echte Struktur und schnitten falsch —
+ * und zwar `php -l`-sauber, das Sicherheitsnetz greift also nicht.
  */
 function _pesi_has_marker(string $v): bool {
     return (bool)preg_match('#<!--\s*/?\s*pesi:(item|toggle)\b#i', $v)
@@ -634,14 +592,10 @@ function _pesi_toggle_re(): string {
 }
 
 /**
- * Meldet true, sobald sich zwei pesi:toggle-Spannen schachteln.
- *
- * Schachtelung ist in pesi-agent.md verboten, scheiterte bisher aber lautlos:
- * der Parser ist non-greedy und liest den *inneren* End-Marker als Ende der
- * äußeren Spanne. Der if(false)-Wrapper landet dann mitten im Dokument, alles
- * dahinter bleibt trotz „versteckt" sichtbar, und `php -l` findet daran nichts
- * auszusetzen — das Sicherheitsnetz greift also nicht. Lieber die Operation
- * verweigern und es im Dashboard anzeigen, als falsch zu schalten.
+ * Verschachtelte pesi:toggle-Spannen. Der Parser ist non-greedy und läse den
+ * inneren End-Marker als Ende der äußeren Spanne: der if(false)-Wrapper landet
+ * mitten im Dokument, alles dahinter bleibt trotz „versteckt" sichtbar, und
+ * `php -l` merkt nichts. Darum sperren statt falsch schalten.
  */
 function _pesi_toggle_nested(string $file): bool {
     $src = (string)file_get_contents($file);
@@ -668,18 +622,12 @@ function _pesi_toggle_parse(string $file): array {
 }
 
 /**
- * Ordnet Feld-IDs ihrem Sichtbarkeits-Bereich zu:
- *   id => ['group' => 'urlaubshinweis', 'visible' => false]
+ * id => ['group' => 'urlaubshinweis', 'visible' => false]
  *
- * Ohne diese Zuordnung stehen die Felder eines versteckten Bereichs mitten in
- * der Liste, voll bearbeitbar und ohne jeden Hinweis darauf, dass ihr Inhalt
- * gerade gar nicht auf der Website steht. Die Kundin schreibt dann in gutem
- * Glauben einen Text, den niemand sieht. Der Schalter allein — weit oben im
- * Panel — stellt diese Verbindung nicht her.
- *
- * Es genügt, den Rumpf jedes Toggles nach pesi()-Aufrufen abzusuchen; echte
- * Offsets braucht es dafür nicht. Taucht eine ID in mehreren Bereichen auf,
- * gewinnt der erste — verschachtelte Toggles sind ohnehin gesperrt.
+ * Damit die Feldkarte anzeigen kann, dass ihr Inhalt gerade nicht auf der
+ * Website steht — sonst schreibt die Kundin ahnungslos in einen versteckten
+ * Bereich. Der Toggle-Rumpf wird nach pesi()-Aufrufen abgesucht; Offsets
+ * braucht es nicht, und verschachtelte Toggles sind ohnehin gesperrt.
  */
 function _pesi_field_toggles(string $file): array {
     $src = (string)file_get_contents($file);
@@ -770,20 +718,9 @@ function _pesi_esc(string $v): string {
 }
 
 /**
- * Slug einer Gruppe (Block oder Toggle) als Anzeigename für die Kundin.
- * 'team_mitglieder' → 'Team mitglieder'. Eine einzige Stelle dafür, weil die
- * Block-Überschrift und die Sichtbarkeits-Liste sonst denselben Namen
- * unterschiedlich formatieren — das ist im Dashboard direkt nebeneinander
- * sichtbar und wirkt schlampig.
- */
-/**
- * Zeitpunkt in einer Form, die ohne Nachdenken lesbar ist: „heute 14:23 Uhr“
- * statt „02.08.2026 14:23“.
- *
- * Gebraucht für die Rückfrage vor dem Wiederherstellen. Bisher stand dort nur
- * „auf die letzte gespeicherte Version zurücksetzen?“ — die Kundin konnte gar
- * nicht beurteilen, welchen Stand sie zurückholt, und musste raten. Ein Klick,
- * den sie danach bereut, ist teurer als jede zusätzliche Sicherungsstufe.
+ * Zeitpunkt für die Rückfrage vor dem Wiederherstellen: „heute 14:23 Uhr“
+ * statt „02.08.2026 14:23“ — die Kundin muss beurteilen können, welchen Stand
+ * sie zurückholt.
  */
 function _pesi_when(int $ts): string {
     global $t;
@@ -794,6 +731,9 @@ function _pesi_when(int $ts): string {
     return date('d.m.Y', $ts) . ' ' . $time;
 }
 
+// Gruppen-Slug als Anzeigename: 'team_mitglieder' → 'Team mitglieder'.
+// Eine Stelle für beides, sonst formatieren Block-Überschrift und
+// Sichtbarkeits-Liste denselben Namen nebeneinander unterschiedlich.
 function _pesi_human(string $slug): string {
     $s = trim(str_replace(['_', '-'], ' ', $slug));
     return $s === '' ? '' : mb_strtoupper(mb_substr($s, 0, 1)) . mb_substr($s, 1);
@@ -887,21 +827,13 @@ function _pesi_upload_map(): array {
     ];
 }
 
-// $dir überschreibt die Konstante — nur damit dev/test-engine.php die
-// Ablehnungspfade durchspielen kann, ohne PESI_UPLOAD_DIR neu zu definieren.
-// Im Produktivcode immer ohne Argument aufrufen.
 /**
- * Bestimmt den MIME-Typ aus dem Dateiinhalt — niemals aus dem Dateinamen.
+ * MIME-Typ aus dem Dateiinhalt, nie aus dem Dateinamen. Liefert '' wenn nichts
+ * Verwertbares herauskommt — der Aufrufer lehnt dann ab.
  *
- * finfo ist nicht überall vorhanden: die Fileinfo-Erweiterung lässt sich
- * abschalten, und manche Shared-Hostings tun das. Ein ungeprüftes
- * `new finfo()` beendet den Upload dort mit einem Fatal Error — die Kundin
- * sieht eine weiße Seite und verliert die ungespeicherten Änderungen des
- * ganzen Formulars. getimagesize() steckt dagegen im PHP-Kern, liest ebenfalls
- * den Dateikopf und bestätigt zusätzlich, dass die Datei als Bild lesbar ist.
- *
- * Liefert '' wenn nichts Verwertbares herauskommt. Der Aufrufer lehnt dann ab
- * — im Zweifel kein Upload statt einem ungeprüften.
+ * finfo lässt sich abschalten und fehlt auf manchen Hostings; ein ungeprüftes
+ * `new finfo()` beendete den Upload dort mit einem Fatal Error. getimagesize()
+ * steckt im PHP-Kern und bestätigt zusätzlich, dass die Datei lesbar ist.
  */
 function _pesi_image_mime(string $path): string {
     if (class_exists('finfo')) {
@@ -913,6 +845,8 @@ function _pesi_image_mime(string $path): string {
     return '';
 }
 
+// $dir überschreibt die Konstante — nur damit die Suite die Ablehnungspfade
+// durchspielen kann. Produktivcode ruft immer ohne Argument auf.
 function _pesi_upload_dir(?string $dir = null): string {
     $dir = str_replace('\\', '/', $dir ?? (string)(defined('PESI_UPLOAD_DIR') ? PESI_UPLOAD_DIR : 'uploads'));
     $dir = trim($dir, "/\\");
@@ -1053,24 +987,11 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
 // ── i18n ─────────────────────────────────────────────────────
 // Funktion (wird gehoisted) → bereits vor der POST-Verarbeitung nutzbar.
 //
-// TONFALL — das Dashboard gehört der Kundin, nicht der Entwicklerin.
-// Sie ist der einzige Mensch, der diese Texte täglich liest, und sie ist
-// nicht technisch. Darum:
-//
-//   1. Meldungen benennen die FOLGE, nie den Mechanismus. Nicht „PHP-Fehler
-//      erkannt — Rollback!", sondern „Ihre Seite ist unverändert geblieben."
-//   2. Was sie selbst beheben kann (Bild zu groß, falsches Format), sagt ihr
-//      genau das — ohne Code, denn sie braucht niemanden dafür.
-//   3. Was sie NICHT beheben kann, bekommt einen kurzen Code (S… = Struktur
-//      der Seite, T… = Technik/Server) und die Bitte, ihn weiterzugeben. Sie
-//      liest vier Zeichen vor, die Betreuung schlägt sie in der README nach.
-//      Nur so bleibt sie handlungsfähig, ohne den Mechanismus zu sehen.
-//   4. Deutsch siezt. Die Zielgruppe sind Praxen, Kanzleien, Therapeutinnen.
-//      Wer duzen will, überschreibt einzelne Texte per $PESI_STRINGS in
-//      pesi-core.php — ohne diese Datei anzufassen.
-//
-// Beide Sprachen müssen dieselben Keys und dieselben %-Platzhalter tragen;
-// dev/test-engine.php prüft das.
+// Tonfall: Meldungen nennen die Folge, nie den Mechanismus. Was die Kundin
+// selbst beheben kann, bekommt keinen Code; was nicht, einen (S… = Struktur,
+// T… = Technik) plus die Bitte, ihn weiterzugeben — jeder Code gehört in die
+// README-Tabelle. Deutsch siezt; Abweichungen per $PESI_STRINGS, nicht hier.
+// Beide Sprachen: gleiche Keys, gleiche %-Platzhalter (die Suite prüft es).
 function _pesi_strings(): array { return [
     'de' => [
         'err_not_readable'  => 'Diese Seite lässt sich gerade nicht lesen. Ihre Inhalte sind unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T1)',
@@ -1251,17 +1172,11 @@ function _pesi_strings(): array { return [
         'unsaved_warn'      => 'There are unsaved changes. Do you want to discard them?',
     ],
 ]; }
-$lang = defined('LANG') ? LANG : 'de';
-$t    = _pesi_strings()[$lang] ?? _pesi_strings()['de'];
 
 /**
- * WCAG-Kontrastverhältnis zweier Hex-Farben (1.0 … 21.0).
- *
- * Gebraucht für eine Prüfung, die pesi nicht selbst entscheiden kann: Der
- * Speichern-Button trägt weisse Schrift auf der Markenfarbe. Ist die zu hell,
- * ist ausgerechnet die wichtigste Schaltfläche des Dashboards nicht lesbar
- * genug — aber die Farbe gehört der Kundin, pesi darf sie nicht eigenmächtig
- * ändern. Also messen und die Betreuung informieren.
+ * WCAG-Kontrastverhältnis zweier Hex-Farben (1.0 … 21.0). Prüft die
+ * Markenfarbe: sie trägt weisse Schrift auf dem Speichern-Button, gehört aber
+ * der Kundin — also messen und die Betreuung informieren statt ändern.
  */
 function _pesi_contrast(string $a, string $b): float {
     $lum = function (string $h): float {
@@ -1317,11 +1232,8 @@ foreach ($fields as $f) { if ($f['type'] === 'richtext') { $hasRt = true; break;
    überall verlässlich versteckt. */
 [hidden]{display:none!important}
 
-/* Sichtbarer Fokus. Die Eingabefelder hatten über :focus-within einen Ring,
-   die Schaltflächen gar nichts — wer mit der Tastatur bedient, stand ohne
-   Anzeige auf „Löschen". Bewusst NICHT in der Markenfarbe: die ist frei
-   konfigurierbar und kann zu hell sein. Schwarz auf hell, weiss im dunklen
-   Seitenmenü — trägt bei jeder BRAND_COLOR. */
+/* Sichtbarer Fokus — Schaltflächen hatten gar keinen. Bewusst nicht in der
+   Markenfarbe: die ist konfigurierbar und kann zu hell sein. */
 :focus-visible{outline:3px solid #1a1a1a;outline-offset:2px}
 .S :focus-visible{outline-color:#ffffff}
 
@@ -1356,9 +1268,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .L-c{width:100%;max-width:340px;animation:up .45s ease-out;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:2rem;box-shadow:0 4px 24px rgba(26,32,44,.06)}
 .L-logo{display:block;height:42px;width:auto;margin-bottom:.15rem}
 .L-c .sub{font-size:.8rem;color:var(--tx2);margin:.25rem 0 2rem}
-/* Eigene Rot- und Grautöne statt var(--er)/var(--tx3): die stammen aus der
-   Dunkel-Palette und erreichen auf der weissen Karte nur 2,8:1 bzw. 2,5:1 —
-   unter WCAG AA, und das bei der wichtigsten Zeile des Bildschirms. */
+/* Eigene Töne statt var(--er)/var(--tx3): die erreichen auf der weissen Karte
+   nur 2,8:1 bzw. 2,5:1 — unter WCAG AA. */
 .L-c .err{padding:.6rem .85rem;background:var(--er-b);border:1px solid #f8717130;border-radius:var(--r2);color:#c0392b;font-size:.84rem;margin-bottom:1rem}
 .L-i{width:100%;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:inherit;font-size:.93rem;outline:0;transition:border .2s,box-shadow .2s}
 .L-i:focus{border-color:var(--b);box-shadow:0 0 0 3px var(--b-g)}
@@ -1456,11 +1367,9 @@ body.tech .fc-meta{display:flex}
 body.tech .fc-label{margin-bottom:.15rem}
 .fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.72rem;color:var(--tx3)}
 
-/* Zugehörigkeit zu einem Sichtbarkeits-Bereich. Bewusst OHNE opacity auf der
-   Karte: das Feld gehört weiterhin bearbeitet, und abgesenkter Kontrast wäre
-   für die Zielgruppe das falsche Signal. Stattdessen eine Randmarkierung und
-   ein Punkt in derselben Farbe wie im Panel oben — so gehören die beiden
-   Anzeigen sichtbar zusammen. */
+/* Zugehörigkeit zu einem Sichtbarkeits-Bereich. Bewusst ohne opacity: das Feld
+   gehört weiterhin bearbeitet, abgesenkter Kontrast wäre das falsche Signal.
+   Punktfarben wie im Panel oben, damit beides zusammengehört. */
 .fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--tx2);margin:-.1rem 0 .6rem}
 .fc-tgl-dot{width:8px;height:8px;border-radius:50%;background:#1f9d55;flex:0 0 auto}
 .fc-off{border-left:3px solid #9aa0a6}
@@ -1599,10 +1508,7 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
   .sv-h{display:none}
 }
 
-/* ═══ LIGHT MODE — Login wie Dashboard ═══ */
-/* Der Login lief bisher dunkel, das Dashboard hell: derselbe Nutzer sah beim
-   Anmelden zwei verschiedene Produkte. Beide teilen sich jetzt die Palette,
-   analog zu the shared design. */
+/* ═══ LIGHT MODE — Login und Dashboard teilen die Palette ═══ */
 body.dash,body.login{
   --bg:  #f0f2f5;
   --bg2: #ffffff;
@@ -1612,17 +1518,10 @@ body.dash,body.login{
   --bd2: #ccc;
   --tx:  #1a1a1a;
   --tx2: #555555;
-  /* #999 erreichte auf Weiss nur 2,85:1 und auf --bg 2,54:1 — WCAG AA verlangt
-     4,5:1. Betraf jeden Nebentext im Dashboard: Dateiname, Bildhinweis,
-     Speicherhinweis, Fusszeile. #666 schafft 5,7:1 bzw. 5,0:1 und reicht auch
-     auf den markenfarbenen Tints, wo #6b6b6b mit 4,47:1 knapp scheiterte. */
+  /* Nebentext: #999 lag bei 2,85:1, #666 liegt bei 5,7:1 (WCAG AA: 4,5:1). */
   --tx3: #666666;
-  /* Meldungsfarben: die Dunkel-Palette erreicht auf Weiss nur 1,74:1 (--ok),
-     2,77:1 (--er) und 2,54:1 (--in) — die Rückmeldung nach jedem Speichern
-     wäre damit die am schlechtesten lesbare Zeile des Dashboards. Dunkle
-     Töne derselben Farbwinkel, alle über WCAG AA (4,5:1) auf #ffffff.
-     Rot ist derselbe Wert wie im Login, damit pesi nur ein Rot führt.
-     Die Tints (--ok-b/--er-b/--in-b) bleiben unverändert. */
+  /* Meldungsfarben: die Dunkel-Palette lag auf Weiss bei 1,74 / 2,77 / 2,54:1.
+     Dunklere Töne derselben Farbwinkel, alle über AA; Tints unverändert. */
   --ok: #15803d;  /* 5,02:1 */
   --er: #c0392b;  /* 5,44:1 */
   --in: #1565c0;  /* 5,75:1 */
@@ -1727,17 +1626,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
 
   <div class="M">
     <?php
-      // ── Diagnose ──────────────────────────────────────────────
-      // Einrichtungsprobleme betreffen die Betreuung, nicht die Kundin. Ein
-      // roter Vollbreiten-Alarm mit einer Anweisung, die sie gar nicht
-      // ausführen kann ("bitte in pesi-core.php ändern"), erzeugt nur Angst
-      // und einen Anruf. Darum eine ruhige, zugeklappte Zeile, die ihr sagt,
-      // dass für sie nichts zu tun ist — die Details stehen einen Klick tief
-      // für die Person, die sie beheben kann.
-      //
-      // Probe gegen eine garantiert gültige Datei: schlägt sie fehl, ist der
-      // Linter nicht nutzbar (exec gesperrt ODER kein PHP-CLI im PATH). Nur
-      // auf exec() zu prüfen hätte den zweiten, häufigeren Fall verschwiegen.
+      // ── Diagnose: Einrichtungsprobleme, Adressat ist die Betreuung ──
+      // Zugeklappt und ruhig formuliert — ein roter Alarm mit einer Anweisung,
+      // die die Kundin gar nicht ausführen kann, erzeugt nur einen Anruf.
+      // Der Linter wird gegen eine garantiert gültige Datei geprobt; nur auf
+      // exec() zu schauen verschwiege den häufigeren Fall (kein CLI im PATH).
       $diag = [];
       if (in_array((string)PESI_PASSWORD, ['demo123', 'demo1234'], true)) {
           $diag[] = $t['warn_default_pw'];
