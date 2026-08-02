@@ -323,6 +323,21 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
             return ['msg' => $t['err_stale'], 'type' => 'error'];
         }
     }
+    // Sicherung erst hier: unter dem Lock, nach dem Stale-Check und unmittelbar
+    // bevor tatsächlich geschrieben wird.
+    //
+    // Vorher rotierte sie beim Aufrufer, also auch dann, wenn danach gar nichts
+    // geschrieben wurde — bei „keine Änderungen", bei abgelehnten Werten, bei
+    // einem Stale-Abbruch. Zwei folgenlose Klicks auf „Speichern" schoben damit
+    // die echte Vorversion aus der Zweier-Rotation, und „↩ Letzte Version" gab
+    // nur noch den Stand zurück, der ohnehin schon dastand. Genau das tut eine
+    // unsichere Nutzerin: nochmal klicken, weil sie nicht weiss, ob es klappte.
+    if (!_pesi_backup($file)) {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return ['msg' => $t['err_backup'], 'type' => 'error'];
+    }
+
     // Schreiben — und prüfen, dass wirklich alles ankam. Auf vollem Webspace
     // oder bei erreichter Quota schreibt fwrite() nur einen Teil und meldet das
     // ausschließlich über den Rückgabewert. Ungeprüft bliebe die Seite der
@@ -399,7 +414,6 @@ function _pesi_save(string $file, array $fields, array $post): array {
     global $t;
     $src = file_get_contents($file);
     if ($src === false) return ['msg' => $t['err_not_readable'], 'type' => 'error'];
-    if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
     $srcHash = hash('sha256', $src);
 
     $mod = $src;
@@ -523,7 +537,6 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
             $at   = $last['offset'] + $last['len'];
         }
         $mod  = substr($src, 0, $at) . $clone . substr($src, $at);
-        if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
         if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t[$action === 'add' ? 'blk_added' : 'blk_duplicated'], 'type' => 'success'];
     }
@@ -531,7 +544,6 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
     if ($action === 'del') {
         if (count($grp) <= 1) return ['msg' => $t['blk_min_one'], 'type' => 'error'];
         $mod = substr($src, 0, $target['offset']) . substr($src, $target['offset'] + $target['len']);
-        if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
         if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t['blk_deleted'], 'type' => 'success'];
     }
@@ -546,7 +558,6 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
              . substr($src, $a['offset'] + $a['len'], $b['offset'] - ($a['offset'] + $a['len']))
              . $a['text']
              . substr($src, $b['offset'] + $b['len']);
-        if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
         if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t['blk_moved'], 'type' => 'success'];
     }
@@ -566,7 +577,6 @@ function _pesi_restore(string $file): array {
     if ($restore === false || $restore === '') return ['msg' => $t['rst_none'], 'type' => 'info'];
     $current = (string)file_get_contents($file);
     if ($current === $restore) return ['msg' => $t['rst_same'], 'type' => 'info'];
-    if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
     if ($c = _pesi_commit($file, $restore, hash('sha256', $current))) return $c;
     return ['msg' => $t['rst_done'], 'type' => 'success'];
 }
@@ -677,7 +687,6 @@ function _pesi_toggle_op(string $file, string $group): array {
         return $mm[1] . '<?php if (false): ?>' . $body . '<?php endif; ?>' . $mm[5];
     }, $src, 1);
 
-    if (!_pesi_backup($file)) return ['msg' => $t['err_backup'], 'type' => 'error'];
     if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
     return ['msg' => $t['tgl_done'], 'type' => 'success'];
 }

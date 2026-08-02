@@ -45,6 +45,19 @@ echo "Prüfe: $root\n";
 $scratch = sys_get_temp_dir() . '/pesi-test-' . getmypid();
 @mkdir($scratch, 0777, true);
 
+// Aufräumen als Shutdown-Handler, nicht am Skriptende: bricht ein Lauf mit
+// einem Fatal Error ab — etwa weil eine PHP-Erweiterung fehlt —, bliebe das
+// Verzeichnis sonst liegen. Hier hatten sich so sieben Ruinen angesammelt.
+register_shutdown_function(function () use ($scratch) {
+    foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
+        foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }
+    }
+    @unlink($scratch . '/.pesi-throttle');   // glob() übergeht führende Punkte
+    @rmdir($scratch . '/site/uploads');
+    @rmdir($scratch . '/site');
+    @rmdir($scratch);
+});
+
 // ── Engine extrahieren: alles ab _pesi_parse() bis zum Ende von _pesi_strings()
 $src   = file_get_contents($root . '/pesi.php');
 $start = strpos($src, 'function _pesi_parse');
@@ -396,8 +409,14 @@ $gif = $scratch . '/probe.gif';
 file_put_contents($gif, base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'));
 $png = $scratch . '/probe.png';
 file_put_contents($png, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
-$fake = $scratch . '/harmlos.jpg';           // PHP-Datei mit Bild-Endung
-file_put_contents($fake, "<?php system(\$_GET['c']); ?>");
+// PHP-Datei mit Bild-Endung. Der Inhalt ist bewusst harmlos: eine echte
+// Webshell (system() über $_GET) schlug hier ursprünglich, und der
+// Virenscanner des Entwicklungsrechners hat sie prompt in Quarantäne genommen
+// — zu Recht. Für die Zusage „der Typ kommt aus dem Inhalt, nicht aus dem
+// Dateinamen" genügt irgendein Nicht-Bild; die Signatur trägt nichts bei,
+// kostet aber Fehlalarme und quarantänebedingt wackelige Testläufe.
+$fake = $scratch . '/kein-bild.jpg';
+file_put_contents($fake, "<?php\n// PHP-Quelltext, aber kein Bild.\n\$x = 1;\n");
 echo '  (finfo ' . (class_exists('finfo') ? 'vorhanden' : 'FEHLT → getimagesize-Fallback') . ")\n";
 foreach ([$gif => 'image/gif', $png => 'image/png'] as $f => $wantMime) {
     $m = _pesi_image_mime($f);
@@ -475,11 +494,56 @@ ok('Rollback meldet Fehler', $r !== null && $r['type'] === 'error');
 ok('Meldung ist die Rollback-Meldung, nicht die fatale',
     $r['msg'] === $GLOBALS['t']['err_php_rollback'], $r['msg']);
 ok('Originalinhalt ist zurück', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
-// Ohne Backup kann nicht zurückgerollt werden → dringlichere Meldung
+// _pesi_commit() legt selbst eine Sicherung an, bevor es schreibt — auch wenn
+// gar keine existiert. Vorher konnte ein Aufrufer schreiben, ohne dass es einen
+// Rückweg gab.
 @unlink($p . '.pesi-backup.1');
 @unlink($p . '.pesi-backup.2');
 $r = _pesi_commit($p, "<?php\n\$x = ;;;\n");
-ok('ohne Backup: fatale Meldung', $r !== null && $r['msg'] === $GLOBALS['t']['err_write_fatal'], $r['msg'] ?? '');
+ok('commit sichert von sich aus und rollt zurück',
+    $r !== null && $r['msg'] === $GLOBALS['t']['err_php_rollback'], $r['msg'] ?? '');
+ok('Sicherung existiert danach', is_file($p . '.pesi-backup.1'));
+ok('guter Stand ist wieder da', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
+
+// Die fatale Meldung bleibt dem Fall vorbehalten, dass wirklich nicht
+// zurückgerollt werden kann.
+$p2 = page("<?php\n\$x = 1;\n");
+@unlink($p2 . '.pesi-backup.1');
+ok('_pesi_rollback ohne Sicherung → fatale Meldung',
+    _pesi_rollback($p2, 'egal')['msg'] === $GLOBALS['t']['err_write_fatal']);
+
+// ── Sicherung rotiert nur bei echtem Schreibvorgang ──────────
+// Sonst schoben zwei folgenlose Klicks auf „Speichern" die echte Vorversion
+// aus der Zweier-Rotation und „↩ Letzte Version" gab den Stand zurück, der
+// ohnehin schon dastand. Genau das tut eine unsichere Nutzerin.
+grp('Sicherung — rotiert nicht ohne Schreibvorgang');
+function versionOf(string $f): string {
+    preg_match("/'([A-Z0-9]+)'/", is_file($f) ? (string)file_get_contents($f) : '', $m);
+    return $m[1] ?? '—';
+}
+$p = page("<?php\n\$x = pesi('f', 'V0', 'text', 'L');\n");
+_pesi_backup($p);
+file_put_contents($p, "<?php\n\$x = pesi('f', 'V1', 'text', 'L');\n");
+_pesi_backup($p);
+file_put_contents($p, "<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n");
+ok('Ausgangslage V2/V1/V0',
+    versionOf($p) . versionOf($p . '.pesi-backup.1') . versionOf($p . '.pesi-backup.2') === 'V2V1V0');
+
+$r = _pesi_save($p, _pesi_parse($p), ['pesi_field_f' => 'V2']);   // nichts geändert
+ok('Save ohne Änderung meldet „nichts zu speichern"', $r['type'] === 'info', $r['msg']);
+ok('Rotation unangetastet',
+    versionOf($p . '.pesi-backup.1') === 'V1' && versionOf($p . '.pesi-backup.2') === 'V0',
+    versionOf($p . '.pesi-backup.1') . '/' . versionOf($p . '.pesi-backup.2'));
+ok('„Letzte Version" führt noch zurück', _pesi_restore($p)['type'] === 'success');
+ok('nämlich auf V1', versionOf($p) === 'V1');
+
+// Abgelehnter Wert darf ebenfalls nicht rotieren
+$p = page("<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n");
+_pesi_backup($p);
+$before = versionOf($p . '.pesi-backup.1');
+$r = _pesi_save($p, _pesi_parse($p), ['pesi_field_f' => 'x<!-- pesi:item a:1 -->']);
+ok('abgelehnter Wert meldet Fehler', $r['type'] === 'error');
+ok('und rotiert die Sicherung nicht', versionOf($p . '.pesi-backup.1') === $before);
 
 // ── Eine Anfrage, eine Aktion ────────────────────────────────
 // Die Block-/Toggle-/Wiederherstellen-Buttons liegen im selben Formular wie
@@ -591,14 +655,7 @@ foreach ([
     ok('human(' . json_encode($in) . ')', _pesi_human($in) === $want, 'bekam: ' . _pesi_human($in));
 }
 
-// ── Aufräumen ────────────────────────────────────────────────
-foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
-    foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }
-}
-@unlink($scratch . '/.pesi-throttle');   // glob() übergeht Dateien mit führendem Punkt
-@rmdir($scratch . '/site/uploads');
-@rmdir($scratch . '/site');
-@rmdir($scratch);
+// Aufräumen erledigt der Shutdown-Handler ganz oben — auch bei einem Abbruch.
 
 echo "\n" . str_repeat('─', 46) . "\n";
 echo ($fail === 0 ? "ALLE TESTS BESTANDEN" : "FEHLGESCHLAGEN") . " — $pass ok, $fail Fehler\n";
