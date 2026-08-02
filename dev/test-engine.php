@@ -329,6 +329,13 @@ _pesi_cleanup_old($site, [
 ok('fest im Markup referenziertes Bild bleibt', is_file($site . '/uploads/benutzt.jpg'));
 ok('wirklich verwaistes Bild gelöscht', !is_file($site . '/uploads/verwaist.jpg'));
 
+// Nach einem gescheiterten Save muss das frisch hochgeladene Bild wieder weg —
+// sonst bliebe es unreferenziert im Upload-Ordner liegen, und bei Personenfotos
+// ist genau das der verwaiste Bestand, den pesi zu vermeiden verspricht.
+file_put_contents($site . '/uploads/frisch-hochgeladen.jpg', 'x');
+_pesi_cleanup_old($site, ['pesi_field_bild' => '/uploads/frisch-hochgeladen.jpg'], ['index.php' => 'Start']);
+ok('unreferenziertes Bild nach Fehlschlag entfernt', !is_file($site . '/uploads/frisch-hochgeladen.jpg'));
+
 // Traversal-Schutz: ein Pfad ausserhalb des Upload-Ordners wird nie gelöscht
 file_put_contents($site . '/wichtig.php', 'BLEIBT');
 _pesi_cleanup_old($site, ['pesi_field_c' => '/uploads/../wichtig.php'], ['index.php' => 'Start']);
