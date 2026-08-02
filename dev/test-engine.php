@@ -649,6 +649,31 @@ if (!preg_match('/if \(isset\(\$PESI_STRINGS\).*?\n\}\n/s', $src, $om)) {
     $GLOBALS['t'] = $t;
 }
 
+// ── Nicht erkannte Felder melden ─────────────────────────────
+// Ein Wert in doppelten Anführungszeichen rendert normal, wird aber nie
+// erfasst — das Feld fehlt lautlos im Dashboard.
+grp('_pesi_unparsed_fields');
+$p = page("<?php\n"
+    . "\$a = pesi('gut', 'Wert', 'text', 'Gut');\n"
+    . "\$b = pesi(\"schlecht\", \"Wert\", \"text\", \"Schlecht\");\n");
+ok('einfach zitiertes Feld wird erkannt', isset(_pesi_parse($p)['gut']));
+ok('doppelt zitiertes Feld fehlt im Parser', !isset(_pesi_parse($p)['schlecht']));
+ok('und wird als nicht erkannt gemeldet', _pesi_unparsed_fields($p) === ['schlecht'],
+    json_encode(_pesi_unparsed_fields($p)));
+$p = page("<?php\n\$a = pesi('nur_gut', 'Wert', 'text', 'Gut');\n");
+ok('saubere Seite meldet nichts', _pesi_unparsed_fields($p) === []);
+$p = page("<?php\n\$a = pesi('x', 'A', 'text', 'X');\n\$b = pesi('x', 'B', 'text', 'X');\n");
+ok('doppelte ID ist kein Fehlalarm', _pesi_unparsed_fields($p) === [], json_encode(_pesi_unparsed_fields($p)));
+
+// ── Zeitangabe in der Wiederherstellen-Rückfrage ─────────────
+grp('_pesi_when');
+ok('heute',    _pesi_when(mktime(14, 23, 0)) === 'heute 14:23 Uhr', _pesi_when(mktime(14, 23, 0)));
+ok('gestern',  _pesi_when(strtotime('-1 day 09:05')) === 'gestern 09:05 Uhr', _pesi_when(strtotime('-1 day 09:05')));
+$alt = strtotime('-9 days 16:40');
+ok('älter → Datum', _pesi_when($alt) === date('d.m.Y', $alt) . ' 16:40', _pesi_when($alt));
+ok('Rückfrage nennt den Zeitpunkt',
+    strpos(sprintf($GLOBALS['t']['rst_confirm'], _pesi_when(mktime(14, 23, 0))), 'heute 14:23') !== false);
+
 // ── Anzeigenamen ─────────────────────────────────────────────
 grp('_pesi_human');
 foreach ([

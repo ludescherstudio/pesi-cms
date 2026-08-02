@@ -294,6 +294,33 @@ function _pesi_parse(string $file): array {
     return $f;
 }
 
+/**
+ * IDs von pesi()-Aufrufen, die der Parser NICHT erfasst hat.
+ *
+ * Häufigster Grund: der Wert steht in doppelten Anführungszeichen. Die Seite
+ * rendert dann völlig normal, das Feld fehlt aber im Dashboard — die Kundin
+ * kann es nicht bearbeiten, und niemand erfährt warum. Zu doppelten
+ * Anführungszeichen greift man ausgerechnet dann, wenn der Text ein Apostroph
+ * enthält („Anna's Praxis"), also im unauffälligsten Moment.
+ *
+ * Sie einfach mitzulesen wäre falsch: In doppelten Anführungszeichen
+ * interpoliert PHP Variablen und Escape-Sequenzen. Der Parser sähe den
+ * Quelltext, die Seite zeigt etwas anderes, und ein Speichern schriebe die
+ * Interpolation weg. Darum melden statt raten — das ist ein Fehler der
+ * Einrichtung, kein Inhalt der Kundin.
+ */
+function _pesi_unparsed_fields(string $file): array {
+    $src = (string)file_get_contents($file);
+    if ($src === '') return [];
+    if (!preg_match_all('/pesi\s*\(\s*[\'"]([a-zA-Z0-9_]+)[\'"]\s*,/', $src, $m)) return [];
+    $parsed = _pesi_parse($file);
+    $out = [];
+    foreach (array_unique($m[1]) as $id) {
+        if (!isset($parsed[$id])) $out[] = $id;
+    }
+    return $out;
+}
+
 // ── Saver ────────────────────────────────────────────────────
 
 // Backup-Rotation (.pesi-backup.1 → .2). Gemeinsam für Feld-Save und Block-Op.
@@ -749,6 +776,24 @@ function _pesi_esc(string $v): string {
  * unterschiedlich formatieren — das ist im Dashboard direkt nebeneinander
  * sichtbar und wirkt schlampig.
  */
+/**
+ * Zeitpunkt in einer Form, die ohne Nachdenken lesbar ist: „heute 14:23 Uhr“
+ * statt „02.08.2026 14:23“.
+ *
+ * Gebraucht für die Rückfrage vor dem Wiederherstellen. Bisher stand dort nur
+ * „auf die letzte gespeicherte Version zurücksetzen?“ — die Kundin konnte gar
+ * nicht beurteilen, welchen Stand sie zurückholt, und musste raten. Ein Klick,
+ * den sie danach bereut, ist teurer als jede zusätzliche Sicherungsstufe.
+ */
+function _pesi_when(int $ts): string {
+    global $t;
+    $time = date('H:i', $ts);
+    $day  = date('Y-m-d', $ts);
+    if ($day === date('Y-m-d'))                       return sprintf($t['when_today'], $time);
+    if ($day === date('Y-m-d', strtotime('-1 day')))  return sprintf($t['when_yesterday'], $time);
+    return date('d.m.Y', $ts) . ' ' . $time;
+}
+
 function _pesi_human(string $slug): string {
     $s = trim(str_replace(['_', '-'], ' ', $slug));
     return $s === '' ? '' : mb_strtoupper(mb_substr($s, 0, 1)) . mb_substr($s, 1);
@@ -1058,6 +1103,7 @@ function _pesi_strings(): array { return [
         'warn_default_pw'   => 'Es ist noch das Auslieferungs-Passwort gesetzt. In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Damit entfällt das automatische Zurückrollen bei fehlerhaften Seiten. (Code T7)',
         'warn_no_backup'    => 'Syntax-Check ist aktiv, automatische Sicherungen sind aber abgeschaltet (PESI_BACKUP_ENABLED). Ein Fehler wird dann zwar erkannt, lässt sich aber nicht zurückrollen — die Seite bliebe beschädigt. (Code T11)',
+        'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Fast immer steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache. (Code T13)',
         'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
         'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
@@ -1097,7 +1143,9 @@ function _pesi_strings(): array { return [
         'img_current'       => 'Aktuelles Bild:',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
         'rst_btn'           => '↩ Letzte Version',
-        'rst_confirm'       => 'Diese Seite auf die letzte gespeicherte Version zurücksetzen?',
+        'rst_confirm'       => 'Diese Seite auf den Stand von %s zurücksetzen? Ihr jetziger Stand wird dabei gesichert, Sie können also wieder zurück.',
+        'when_today'        => 'heute %s Uhr',
+        'when_yesterday'    => 'gestern %s Uhr',
         'rst_done'          => 'Die letzte Version wurde wiederhergestellt.',
         'rst_none'          => 'Es gibt noch keine frühere Version.',
         'rst_same'          => 'Der aktuelle Stand ist bereits die letzte Version.',
@@ -1144,6 +1192,7 @@ function _pesi_strings(): array { return [
         'warn_default_pw'   => 'The shipped default password is still in use. Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Automatic rollback of a broken page is therefore unavailable. (Code T7)',
         'warn_no_backup'    => 'Syntax check is enabled but automatic backups are switched off (PESI_BACKUP_ENABLED). An error is then detected but cannot be rolled back — the page would stay damaged. (Code T11)',
+        'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Almost always the value is in double quotes instead of single ones — pesi() expects single quotes. (Code T13)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
         'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
@@ -1183,7 +1232,9 @@ function _pesi_strings(): array { return [
         'img_current'       => 'Current image:',
         'img_advanced'      => 'Advanced: path / external URL',
         'rst_btn'           => '↩ Last version',
-        'rst_confirm'       => 'Reset this page to the last saved version?',
+        'rst_confirm'       => 'Reset this page to the state from %s? Your current state is backed up first, so you can go back again.',
+        'when_today'        => 'today at %s',
+        'when_yesterday'    => 'yesterday at %s',
         'rst_done'          => 'The last version has been restored.',
         'rst_none'          => 'There is no earlier version yet.',
         'rst_same'          => 'The current state is already the last version.',
@@ -1699,6 +1750,10 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       if (PESI_SYNTAX_CHECK && !PESI_BACKUP_ENABLED) {
           $diag[] = $t['warn_no_backup'];
       }
+      if ($page) {
+          $unparsed = _pesi_unparsed_fields($basePath . '/' . $page);
+          if ($unparsed) $diag[] = sprintf($t['warn_unparsed'], $page, implode(', ', $unparsed));
+      }
       $bcRatio = _pesi_contrast('#ffffff', $bc);
       if ($bcRatio < 4.5) {
           $diag[] = sprintf($t['warn_brand_contrast'], $bc, number_format($bcRatio, 2, ',', '.'));
@@ -1883,7 +1938,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           </span>
           <span class="sv-act">
           <?php if (is_file($pageAbs . '.pesi-backup.1')): ?>
-          <button type="submit" class="rst-b" formnovalidate name="pesi_restore" value="1" data-confirm="<?=htmlspecialchars($t['rst_confirm'])?>"><?=htmlspecialchars($t['rst_btn'])?></button>
+          <button type="submit" class="rst-b" formnovalidate name="pesi_restore" value="1" data-confirm="<?=htmlspecialchars(sprintf($t['rst_confirm'], _pesi_when((int)filemtime($pageAbs . '.pesi-backup.1'))))?>"><?=htmlspecialchars($t['rst_btn'])?></button>
           <?php endif; ?>
           <?php if (!empty($fields)): ?><button type="submit" class="sv-b"><?=$t['save_btn']?></button><?php endif; ?>
           </span>
