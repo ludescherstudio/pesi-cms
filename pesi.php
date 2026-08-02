@@ -226,6 +226,16 @@ if ($auth) {
                 if ($msgType === 'success') {
                     if (!empty($up['old'])) _pesi_cleanup_old($basePath, $up['old'], $PESI_PAGES);
                     $fields = _pesi_parse($fp);
+                } elseif (!empty($up['old'])) {
+                    // Der Upload liegt schon auf der Platte, der Save ist danach
+                    // gescheitert (stale, abgelehnter Wert, Schreibfehler) — die
+                    // Seite referenziert das neue Bild also nie. Ohne das hier
+                    // bliebe es für immer im Upload-Ordner liegen; bei
+                    // Personenfotos ist das genau der verwaiste Bestand, den
+                    // pesi zu vermeiden verspricht. Aufgeräumt wird mit
+                    // derselben Funktion und damit denselben Sicherungen
+                    // (nur eigener Ordner, kein Traversal, nichts in Benutzung).
+                    _pesi_cleanup_old($basePath, array_intersect_key($up['post'], $up['old']), $PESI_PAGES);
                 }
                 if (!empty($up['errors'])) {
                     $msg = trim(($msgType === 'success' ? $msg . ' ' : '') . implode(' ', $up['errors']));
@@ -1047,6 +1057,8 @@ function _pesi_strings(): array { return [
         'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
         'warn_default_pw'   => 'Es ist noch das Auslieferungs-Passwort gesetzt. In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Damit entfällt das automatische Zurückrollen bei fehlerhaften Seiten. (Code T7)',
+        'warn_no_backup'    => 'Syntax-Check ist aktiv, automatische Sicherungen sind aber abgeschaltet (PESI_BACKUP_ENABLED). Ein Fehler wird dann zwar erkannt, lässt sich aber nicht zurückrollen — die Seite bliebe beschädigt. (Code T11)',
+        'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
         'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
         'up_err_type'       => 'Das Bild für „%s“ hat ein Format, das nicht unterstützt wird. Möglich sind JPG, PNG, WebP, AVIF und GIF.',
@@ -1131,6 +1143,8 @@ function _pesi_strings(): array { return [
         'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
         'warn_default_pw'   => 'The shipped default password is still in use. Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Automatic rollback of a broken page is therefore unavailable. (Code T7)',
+        'warn_no_backup'    => 'Syntax check is enabled but automatic backups are switched off (PESI_BACKUP_ENABLED). An error is then detected but cannot be rolled back — the page would stay damaged. (Code T11)',
+        'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
         'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
         'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
@@ -1189,6 +1203,31 @@ function _pesi_strings(): array { return [
 $lang = defined('LANG') ? LANG : 'de';
 $t    = _pesi_strings()[$lang] ?? _pesi_strings()['de'];
 
+/**
+ * WCAG-Kontrastverhältnis zweier Hex-Farben (1.0 … 21.0).
+ *
+ * Gebraucht für eine Prüfung, die pesi nicht selbst entscheiden kann: Der
+ * Speichern-Button trägt weisse Schrift auf der Markenfarbe. Ist die zu hell,
+ * ist ausgerechnet die wichtigste Schaltfläche des Dashboards nicht lesbar
+ * genug — aber die Farbe gehört der Kundin, pesi darf sie nicht eigenmächtig
+ * ändern. Also messen und die Betreuung informieren.
+ */
+function _pesi_contrast(string $a, string $b): float {
+    $lum = function (string $h): float {
+        $h = ltrim(trim($h), '#');
+        if (strlen($h) === 3) $h = $h[0].$h[0].$h[1].$h[1].$h[2].$h[2];
+        $o = 0.0;
+        foreach ([[0, 0.2126], [2, 0.7152], [4, 0.0722]] as [$p, $w]) {
+            $v = hexdec(substr($h, $p, 2)) / 255;
+            $o += $w * ($v <= 0.03928 ? $v / 12.92 : pow(($v + 0.055) / 1.055, 2.4));
+        }
+        return $o;
+    };
+    $x = $lum($a);
+    $y = $lum($b);
+    return (max($x, $y) + 0.05) / (min($x, $y) + 0.05);
+}
+
 // ── Render ───────────────────────────────────────────────────
 $bc   = defined('BRAND_COLOR') ? BRAND_COLOR : '#c47a2a';
 // 3-stelliges Hex (#abc) auf 6-stellig normalisieren — Alpha-Suffixe (…22, …0a) brauchen 6 Stellen
@@ -1226,6 +1265,14 @@ foreach ($fields as $f) { if ($f['type'] === 'richtext') { $hasRt = true; break;
    Kasten liess sich deshalb nicht wegklicken. Global absichern, damit hidden
    überall verlässlich versteckt. */
 [hidden]{display:none!important}
+
+/* Sichtbarer Fokus. Die Eingabefelder hatten über :focus-within einen Ring,
+   die Schaltflächen gar nichts — wer mit der Tastatur bedient, stand ohne
+   Anzeige auf „Löschen". Bewusst NICHT in der Markenfarbe: die ist frei
+   konfigurierbar und kann zu hell sein. Schwarz auf hell, weiss im dunklen
+   Seitenmenü — trägt bei jeder BRAND_COLOR. */
+:focus-visible{outline:3px solid #1a1a1a;outline-offset:2px}
+.S :focus-visible{outline-color:#ffffff}
 
 :root{
   --b: <?=$bc?>;
@@ -1514,7 +1561,11 @@ body.dash,body.login{
   --bd2: #ccc;
   --tx:  #1a1a1a;
   --tx2: #555555;
-  --tx3: #999999;
+  /* #999 erreichte auf Weiss nur 2,85:1 und auf --bg 2,54:1 — WCAG AA verlangt
+     4,5:1. Betraf jeden Nebentext im Dashboard: Dateiname, Bildhinweis,
+     Speicherhinweis, Fusszeile. #666 schafft 5,7:1 bzw. 5,0:1 und reicht auch
+     auf den markenfarbenen Tints, wo #6b6b6b mit 4,47:1 knapp scheiterte. */
+  --tx3: #666666;
   /* Meldungsfarben: die Dunkel-Palette erreicht auf Weiss nur 1,74:1 (--ok),
      2,77:1 (--er) und 2,54:1 (--in) — die Rückmeldung nach jedem Speichern
      wäre damit die am schlechtesten lesbare Zeile des Dashboards. Dunkle
@@ -1529,7 +1580,8 @@ body.dash,body.login{
 /* Sidebar: #333 vibe */
 body.dash .S{background:#333333;border-right:1px solid #222}
 body.dash .S-site{color:#aaa}
-body.dash .S-lbl{color:#777}
+/* Auf dem dunklen Seitenmenü (#333) lagen #777 bei 2,8:1 und #888 bei 3,6:1. */
+body.dash .S-lbl{color:#9e9e9e}
 body.dash .S-nav a{color:#bbb}
 body.dash .S-nav a:hover{color:#f0f0f0;background:rgba(255,255,255,.07)}
 body.dash .S-nav a.on{color:var(--b);background:rgba(255,255,255,.1);border-left-color:var(--b)}
@@ -1537,7 +1589,7 @@ body.dash .S-nav .ic{background:#444;border-color:#555;color:#999}
 body.dash .S-nav a.on .ic{background:var(--b);border-color:var(--b);color:#fff}
 body.dash .S-nav .cnt{background:#444;color:#999}
 body.dash .S-ft{border-top-color:#444}
-body.dash .S-ft a{color:#888}
+body.dash .S-ft a{color:#a8a8a8}
 body.dash .S-ft a:hover{color:#ccc}
 
 /* Mobile: hamburger auf weißem Grund */
@@ -1642,6 +1694,15 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
           $diag[] = $t['warn_no_exec'];
       }
+      // Erkennung ohne Rettung: Der Syntax-Check merkt den Fehler, kann aber
+      // ohne Sicherung nichts zurückholen — die Seite bliebe kaputt liegen.
+      if (PESI_SYNTAX_CHECK && !PESI_BACKUP_ENABLED) {
+          $diag[] = $t['warn_no_backup'];
+      }
+      $bcRatio = _pesi_contrast('#ffffff', $bc);
+      if ($bcRatio < 4.5) {
+          $diag[] = sprintf($t['warn_brand_contrast'], $bc, number_format($bcRatio, 2, ',', '.'));
+      }
       if ($diag):
     ?>
       <details class="dg">
@@ -1670,7 +1731,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         $liveUrl = '/' . ltrim($page, '/');
       ?>
       <div class="top">
-        <span class="top-t"><?=htmlspecialchars($pageLabel)?></span>
+        <h1 class="top-t"><?=htmlspecialchars($pageLabel)?></h1>
         <span class="top-f"><?=htmlspecialchars($page)?></span>
         <?php if ($mtime): ?><span class="top-m"><?=sprintf($t['last_mod'], date('d.m.Y H:i', $mtime))?></span><?php endif; ?>
         <a class="top-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=$t['view_live']?></a>
@@ -1685,7 +1746,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         <input type="hidden" name="pesi_mtime" value="<?=htmlspecialchars((string)$mtime)?>">
 
         <div class="cnt-wrap">
-          <?php if ($msg): ?><div class="ms <?=$msgType?>"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success'): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
+          <?php if ($msg): ?><div class="ms <?=$msgType?>" role="status"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success'): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
 
           <?php
             $toggles     = _pesi_toggle_parse($pageAbs);
@@ -1694,7 +1755,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           ?>
           <?php if ($toggles): ?>
             <div class="tgl-sec">
-              <div class="tgl-sec-h"><?=$t['tgl_section']?></div>
+              <h2 class="tgl-sec-h"><?=$t['tgl_section']?></h2>
               <?php if ($tglNested): ?>
                 <div class="ms error" style="margin:10px 14px"><span><?=htmlspecialchars($t['tgl_nested'])?></span></div>
               <?php endif; ?>
@@ -1756,7 +1817,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   $bm = $blkMeta[$bk];
             ?>
               <div class="blk">
-                <div class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></div>
+                <h2 class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></h2>
                 <div class="blk-fields">
             <?php endif; $curBlk = $bk; endif; ?>
               <?php
