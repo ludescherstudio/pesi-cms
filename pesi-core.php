@@ -25,11 +25,9 @@ $PESI_PAGES = [
     'datenschutz.php' => 'Datenschutz',
 ];
 
-// Eigene Formulierungen (optional). Überschreibt einzelne Texte des
-// Dashboards, ohne pesi.php anzufassen — so bleibt ein Update ein reiner
-// Dateitausch. Nützlich für Anrede (das mitgelieferte Deutsch siezt),
-// Tonfall und branchenübliche Begriffe. Unbekannte Keys werden ignoriert;
-// die vollständige Liste steht in _pesi_strings() in pesi.php.
+// Eigene Formulierungen (optional): überschreibt einzelne Dashboard-Texte,
+// ohne pesi.php anzufassen. Das mitgelieferte Deutsch siezt. Vollständige
+// Liste der Keys in _pesi_strings() in pesi.php.
 //
 // $PESI_STRINGS = [
 //     'welcome_hint' => 'Wähl links eine Seite aus, dann kannst du loslegen.',
