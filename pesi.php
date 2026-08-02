@@ -1232,8 +1232,8 @@ foreach ($fields as $f) { if ($f['type'] === 'richtext') { $hasRt = true; break;
    überall verlässlich versteckt. */
 [hidden]{display:none!important}
 
-/* Sichtbarer Fokus — Schaltflächen hatten gar keinen. Bewusst nicht in der
-   Markenfarbe: die ist konfigurierbar und kann zu hell sein. */
+/* Sichtbarer Fokus für Tastaturbedienung. Nicht in der Markenfarbe — die ist
+   konfigurierbar und kann zu hell sein. */
 :focus-visible{outline:3px solid #1a1a1a;outline-offset:2px}
 .S :focus-visible{outline-color:#ffffff}
 
@@ -1518,10 +1518,10 @@ body.dash,body.login{
   --bd2: #ccc;
   --tx:  #1a1a1a;
   --tx2: #555555;
-  /* Nebentext: #999 lag bei 2,85:1, #666 liegt bei 5,7:1 (WCAG AA: 4,5:1). */
+  /* --tx3 trägt jeden Nebentext: 5,7:1 auf Weiss (WCAG AA verlangt 4,5:1). */
   --tx3: #666666;
-  /* Meldungsfarben: die Dunkel-Palette lag auf Weiss bei 1,74 / 2,77 / 2,54:1.
-     Dunklere Töne derselben Farbwinkel, alle über AA; Tints unverändert. */
+  /* Meldungsfarben: dunkle Töne, alle über AA auf Weiss. Die hellen Varianten
+     der Dunkel-Palette scheitern hier — die Tints bleiben davon unberührt. */
   --ok: #15803d;  /* 5,02:1 */
   --er: #c0392b;  /* 5,44:1 */
   --in: #1565c0;  /* 5,75:1 */
@@ -1530,7 +1530,7 @@ body.dash,body.login{
 /* Sidebar: #333 vibe */
 body.dash .S{background:#333333;border-right:1px solid #222}
 body.dash .S-site{color:#aaa}
-/* Auf dem dunklen Seitenmenü (#333) lagen #777 bei 2,8:1 und #888 bei 3,6:1. */
+/* Grautöne auf dem dunklen Seitenmenü müssen 4,5:1 gegen #333 halten. */
 body.dash .S-lbl{color:#9e9e9e}
 body.dash .S-nav a{color:#bbb}
 body.dash .S-nav a:hover{color:#f0f0f0;background:rgba(255,255,255,.07)}
