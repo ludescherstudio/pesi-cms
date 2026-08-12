@@ -7,7 +7,8 @@ You are integrating **pesi**, a minimal inline CMS, into a finished PHP website.
 > `README.md` and the source.
 >
 > You do **not** need to copy this file into the customer project. Read it while
-> integrating, then leave it behind — only `pesi-core.php` and `pesi.php` belong
+> integrating, then leave it behind — only `pesi-core.php`, `pesi-content.php`
+> and `pesi.php` belong
 > in the customer site (see the file structure below). If you do keep a copy
 > there, never rename it to `AGENTS.md` or `CLAUDE.md`: most projects already
 > have one of their own, and it would collide with or overwrite it.
@@ -33,6 +34,7 @@ The client can never create pages, menu entries or layout — that stays your jo
 ```
 site/
 ├── pesi-core.php   # Config + helper function (included by every editable page)
+├── pesi-content.php # Shared practice details used across multiple pages
 ├── pesi.php        # Dashboard (domain.at/pesi)
 ├── .htaccess       # Protects pesi-core.php and backup files (add to existing)
 ├── robots.txt      # Must disallow /pesi
@@ -41,7 +43,7 @@ site/
 
 **Upload only those files.** Everything else in the pesi repository — every
 `*.md` file and `LICENSE` — is documentation and has no place on a customer
-webspace. Copy `pesi.php` and `pesi-core.php`, nothing more.
+webspace. Copy `pesi.php`, `pesi-core.php` and `pesi-content.php`, nothing more.
 
 ## The pesi() function
 
@@ -53,7 +55,7 @@ webspace. Copy `pesi.php` and `pesi-core.php`, nothing more.
 |-------|----------|-------------|
 | `$id` | yes | Unique field ID per file. snake_case, `[a-z0-9_]` only |
 | `$default` | yes | Content shown on the page. This IS the content — no separate storage |
-| `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, or `image` |
+| `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, `image`, `url`, `email`, or `tel` |
 | `$label` | optional in code — **always pass it** | Human-readable label shown in dashboard. **Always German.** Omit it and the client sees the raw field ID (`footer_firma`) instead of a readable name. |
 
 > **Single quotes around the value — never double.** `pesi('id', 'Text', …)` is
@@ -83,10 +85,13 @@ in the dashboard. Delete dead code instead of commenting it out.
 
 | Type | Dashboard renders | Use for |
 |------|-------------------|---------|
-| `text` | Single-line input | Headings, names, phone, email, address, button text, short strings |
+| `text` | Single-line input | Headings, names, button text and short strings used in text context |
 | `textarea` | Multi-line textarea | Plain-text paragraphs, disclaimers, descriptions without formatting |
 | `richtext` | Quill WYSIWYG editor | Formatted HTML blocks with `<p>`, `<strong>`, `<ul>`, `<a>` etc. |
 | `image` | Image preview + file upload + path field | Photos that the client must be able to swap (team members, gallery, hero image) |
+| `url` | Validated link input | `http(s)` URLs, `/internal` paths, queries and anchors used in `href` |
+| `email` | Validated email input | Address used after `mailto:` |
+| `tel` | Validated phone input | Number used after `tel:` |
 
 ### Image type
 
@@ -97,7 +102,18 @@ in the dashboard. Delete dead code instead of commenting it out.
      alt="Anna Muster">
 ```
 
-Wrap **only the path** in `pesi()` — never the `<img>` tag, `alt`, `class` or `width`/`height`. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and **deletes the replaced file** if it lives in the upload folder and is no longer referenced by any registered page (DSGVO: no orphaned team photos lingering on the webspace). The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
+`url`, `email` and `tel` are the only field types that belong in link-related
+attributes. They reject unsafe or malformed values and abort the complete save.
+Never place a normal `text` field in `href`: HTML escaping does not make a URL
+scheme safe.
+
+```php
+<a href="<?= pesi('termin_url', '/kontakt', 'url', 'Link zur Terminvereinbarung') ?>">Termin</a>
+<a href="mailto:<?= pesi('kontakt_email', 'praxis@example.at', 'email', 'E-Mail-Adresse') ?>">E-Mail</a>
+<a href="tel:<?= pesi('telefon', '+43 123 456789', 'tel', 'Telefonnummer') ?>">Anrufen</a>
+```
+
+Wrap **only the path** in `pesi()` — never the `<img>` tag, `alt`, `class` or `width`/`height`. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and both technical backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
 
 ### Heredoc syntax for richtext
 
@@ -186,6 +202,7 @@ Execute these steps in order.
 
 Check that these files are present:
 - `pesi-core.php` (root)
+- `pesi-content.php` (root)
 - `pesi.php` (root)
 
 If any are missing: **stop and report.** Do not generate these files — they come from the pesi package.
@@ -193,6 +210,11 @@ If any are missing: **stop and report.** Do not generate these files — they co
 ### Step 2 — Configure pesi-core.php
 
 Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrite the whole file — edit the specific lines:
+
+Before placing duplicate practice details into individual pages, adapt
+`pesi-content.php`. Keep one key per shared value (practice name, address,
+phone, email, booking URL) and output it with `pesi_global('key')` wherever it
+is needed. The dashboard exposes this file as **Stammdaten**.
 
 1. **`PESI_PASSWORD`** — set a strong password for the client.
 
@@ -218,8 +240,10 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_DIR` | `'uploads'` | the site already has a media folder you want to reuse. Relative to the root, no leading slash, no `..` |
 | `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size` |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
-| `PESI_BACKUP_ENABLED` | `true` | never in production. This is the rollback safety net |
-| `PESI_SYNTAX_CHECK` | `true` | never in production. Without it a broken save is not rolled back |
+| `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
+| `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing |
+| `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
+| `PESI_SESSION_MAX` | 12 hours | only if the client explicitly needs a shorter absolute session lifetime |
 
 ### Step 3 — Inventory pages
 
@@ -314,6 +338,9 @@ Replace each identified text with a `pesi()` call.
 - No HTML, multiple lines or long → `textarea`
 - Contains HTML tags or needs formatting → `richtext` (always with heredoc)
 - Swappable photo (path is an image file) → `image`
+- Editable web/internal link used in `href` → `url`
+- Editable address used after `mailto:` → `email`
+- Editable number used after `tel:` → `tel`
 
 ### Step 6b — Repeatable blocks and visibility toggles
 
@@ -450,9 +477,11 @@ RewriteRule ^cms$   pesi.php [L]
 Keep `RewriteEngine On` unless an earlier block in the same file already enables
 it. Without it the two `RewriteRule` lines are inert and `/pesi` returns 404.
 
-The `\.pesi-` pattern covers every internal pesi file: the rotated backups
-(`page.php.pesi-backup.1`/`.2`) **and** the login-throttle register
-(`.pesi-throttle`). Backups are byte-for-byte copies of the page source, so a
+The `\.pesi-` pattern covers every internal pesi file: the rotated backups,
+the stable write locks and short-lived candidate files
+(`page.php.pesi-backup.1`/`.2`, `.pesi-lock`, `.pesi-tmp-*`) **and** the
+login-throttle register (`.pesi-throttle`). Backups and candidate files contain
+page source, so a
 leak would expose that page's full PHP source — blocking them is
 security-critical, not cosmetic.
 
@@ -587,7 +616,7 @@ Output a summary:
 pesi integration complete.
 
 Pages:    X registered
-Fields:   Y total (Z text, W textarea, V richtext, U image)
+Fields:   Y total (Z text, W textarea, V richtext, U image, R url/email/tel)
 Blocks:   N repeatable groups (team, leistungen, …)
 Toggles:  M switchable sections (urlaub, …)
 robots.txt: updated

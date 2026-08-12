@@ -30,9 +30,9 @@ alongside client work — timelines are best-effort, not contractual.
 
 **Out of scope**
 
-- A site running the shipped default password (`demo1234`). The dashboard shows
-  a permanent red warning banner for exactly this; changing it is step one of
-  every install.
+- A site whose operator has deliberately replaced the shipped password with a
+  weak password. The literal shipped value itself fails closed: nobody can sign
+  in until it is changed.
 - Missing `.htaccess` hardening. Blocking `pesi-core.php` and `.pesi-*` files is
   a documented install step, and on Nginx an equivalent `deny` rule is required
   (see README). A server that skips it is a deployment issue, not a pesi bug.
@@ -53,6 +53,7 @@ alongside client work — timelines are best-effort, not contractual.
   byte-for-byte copies of that page's source. Note that the `<FilesMatch>`
   pattern must be **unanchored** (`\.pesi-`, not `^\.pesi-`): a backup is named
   `index.php.pesi-backup.1` and does not start with `.pesi-`.
-- Keep `PESI_SYNTAX_CHECK` enabled so a broken save rolls back automatically.
+- Keep `PESI_SYNTAX_CHECK` enabled so invalid PHP is rejected in the temporary
+  candidate before the live page is atomically replaced.
 - Serve the dashboard over HTTPS — session cookies only get the `secure` flag
   when the request is HTTPS.
