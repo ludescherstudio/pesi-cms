@@ -13,5 +13,7 @@ pesi.php merge=binary linguist-vendored=false
 
 # Maintainer-only files must not leak into GitHub source archives.
 CLAUDE.md export-ignore
-.claude/ export-ignore
-dev/ export-ignore
+.claude export-ignore
+.claude/** export-ignore
+dev export-ignore
+dev/** export-ignore
