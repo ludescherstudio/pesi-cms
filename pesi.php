@@ -52,6 +52,27 @@ if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
 
 $basePath = realpath(__DIR__);
 $sk = 'pesi_auth';
+$storedPassword = (string)PESI_PASSWORD;
+$defaultPassword = in_array($storedPassword, ['demo123', 'demo1234'], true);
+
+// Sitzungen enden bei Inaktivität, nach einer absoluten Höchstdauer oder wenn
+// die Betreuung das Passwort ändert. Damit bleiben alte Cookies nicht gültig.
+if (!empty($_SESSION[$sk])) {
+    $now = time();
+    $idle = defined('PESI_SESSION_IDLE') ? max(60, (int)PESI_SESSION_IDLE) : 1800;
+    $max  = defined('PESI_SESSION_MAX') ? max($idle, (int)PESI_SESSION_MAX) : 43200;
+    $expired = $now - (int)($_SESSION['pesi_last'] ?? 0) > $idle
+        || $now - (int)($_SESSION['pesi_login_at'] ?? 0) > $max
+        || !hash_equals(hash('sha256', $storedPassword), (string)($_SESSION['pesi_pw_fingerprint'] ?? ''));
+    if ($expired) {
+        unset($_SESSION[$sk], $_SESSION['pesi_last'], $_SESSION['pesi_login_at'], $_SESSION['pesi_pw_fingerprint']);
+        $_SESSION['pesi_csrf'] = bin2hex(random_bytes(16));
+        $csrf = $_SESSION['pesi_csrf'];
+        $csrfOk = false;
+    } else {
+        $_SESSION['pesi_last'] = $now;
+    }
+}
 
 // Eigener Pfad für Redirects (z. B. /pesi oder /cms). Ein relatives
 // 'Location: ./' wäre bei extensionsloser URL falsch: relativ zu '/pesi'
@@ -75,8 +96,13 @@ $PESI_LOGO_LIGHT = 'data:image/svg+xml;base64,' . base64_encode(
 );
 
 // ── Auth ─────────────────────────────────────────────────────
-if (isset($_GET['logout'])) {
-    unset($_SESSION[$sk]);
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_logout']) && $csrfOk) {
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $cp = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $cp['path'], $cp['domain'], $cp['secure'], $cp['httponly']);
+    }
+    session_destroy();
     header('Location: ' . $selfUrl);
     exit;
 }
@@ -85,33 +111,35 @@ $loginError = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_login'])) {
     // IP-gebundene Bremse zuerst — greift auch, wenn ein Angreifer die
     // Session-Cookies verwirft (reines Session-Backoff wäre so umgehbar).
-    $wait = _pesi_throttle_check();
+    $wait = max(_pesi_throttle_check(), _pesi_session_throttle_check());
     if ($wait > 0) {
-        sleep(min(3, $wait)); // laufende Anfrage kurz halten, Passwort gar nicht erst prüfen
+        // Passwort gar nicht erst prüfen. Kein sleep(): blockierte Anfragen
+        // sollen keine PHP-Worker belegen und so selbst zum DoS-Werkzeug werden.
         $loginError = true;
     } else {
         $pw = (string)($_POST['pesi_password'] ?? '');
-        $stored = (string)PESI_PASSWORD;
+        $stored = $storedPassword;
         // Akzeptiert sowohl Plaintext als auch password_hash() ($2y$, $argon, …)
-        $ok = (strlen($stored) > 3 && $stored[0] === '$')
+        $ok = !$defaultPassword && ((strlen($stored) > 3 && $stored[0] === '$')
             ? password_verify($pw, $stored)
-            : hash_equals($stored, $pw);
+            : hash_equals($stored, $pw));
         if ($csrfOk && $ok) {
             // Session-Fixation verhindern
             session_regenerate_id(true);
             $_SESSION['pesi_csrf'] = bin2hex(random_bytes(16));
             $_SESSION[$sk] = true;
+            $_SESSION['pesi_login_at'] = time();
+            $_SESSION['pesi_last'] = time();
+            $_SESSION['pesi_pw_fingerprint'] = hash('sha256', $stored);
             // Throttle bei Erfolg zurücksetzen
             _pesi_throttle_reset();
-            unset($_SESSION['pesi_fail'], $_SESSION['pesi_fail_until']);
+            _pesi_session_throttle_reset();
             header('Location: ' . $selfUrl);
             exit;
         }
         // Brute-Force-Bremse: exponentielles Backoff je Session UND je IP
         _pesi_throttle_fail();
-        $_SESSION['pesi_fail'] = ($_SESSION['pesi_fail'] ?? 0) + 1;
-        $delay = min(8, $_SESSION['pesi_fail']); // 1s, 2s, 3s … max 8s
-        sleep($delay);
+        _pesi_session_throttle_fail();
         $loginError = true;
     }
 }
@@ -145,18 +173,26 @@ if ($auth) {
     // bei jedem Absenden mit, auch bei Strukturaktionen.
     $structural = isset($_POST['pesi_block']) || isset($_POST['pesi_toggle'])
                || isset($_POST['pesi_restore']);
+    $postedHash = (string)($_POST['pesi_hash'] ?? '');
 
     // Block-Operation (Duplizieren / Löschen / Sortieren)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_block']) && $page) {
         if (!$csrfOk) {
             $msg = $t['err_session'];
             $msgType = 'error';
+        } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
+            $msg = $t['err_stale'];
+            $msgType = 'error';
         } elseif (preg_match('/^(dup|add|del|up|down):([a-z0-9_]+)(?::(\d+))?$/', (string)$_POST['pesi_block'], $bm)) {
             $fp = $basePath . '/' . $page;
-            $r = _pesi_block_op($fp, $bm[2], (int)($bm[3] ?? 0), $bm[1]);
+            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+            $r = _pesi_block_op($fp, $bm[2], (int)($bm[3] ?? 0), $bm[1], $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
-            if ($msgType === 'success') $fields = _pesi_parse($fp);
+            if ($msgType === 'success') {
+                _pesi_cleanup_old($basePath, $expiredImages, $PESI_PAGES);
+                $fields = _pesi_parse($fp);
+            }
         }
     }
 
@@ -165,12 +201,19 @@ if ($auth) {
         if (!$csrfOk) {
             $msg = $t['err_session'];
             $msgType = 'error';
+        } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
+            $msg = $t['err_stale'];
+            $msgType = 'error';
         } elseif (preg_match('/^[a-z0-9_]+$/', (string)$_POST['pesi_toggle'])) {
             $fp = $basePath . '/' . $page;
-            $r = _pesi_toggle_op($fp, (string)$_POST['pesi_toggle']);
+            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+            $r = _pesi_toggle_op($fp, (string)$_POST['pesi_toggle'], $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
-            if ($msgType === 'success') $fields = _pesi_parse($fp);
+            if ($msgType === 'success') {
+                _pesi_cleanup_old($basePath, $expiredImages, $PESI_PAGES);
+                $fields = _pesi_parse($fp);
+            }
         }
     }
 
@@ -179,12 +222,19 @@ if ($auth) {
         if (!$csrfOk) {
             $msg = $t['err_session'];
             $msgType = 'error';
+        } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
+            $msg = $t['err_stale'];
+            $msgType = 'error';
         } else {
             $fp = $basePath . '/' . $page;
-            $r = _pesi_restore($fp);
+            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+            $r = _pesi_restore($fp, $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
-            if ($msgType === 'success') $fields = _pesi_parse($fp);
+            if ($msgType === 'success') {
+                _pesi_cleanup_old($basePath, $expiredImages, $PESI_PAGES);
+                $fields = _pesi_parse($fp);
+            }
         }
     }
 
@@ -195,27 +245,38 @@ if ($auth) {
             $msgType = 'error';
         } else {
             $fp = $basePath . '/' . $page;
-            $postedMtime = isset($_POST['pesi_mtime']) ? (int)$_POST['pesi_mtime'] : 0;
-            $currentMtime = is_file($fp) ? (int)filemtime($fp) : 0;
-            if ($postedMtime > 0 && $currentMtime > 0 && $postedMtime !== $currentMtime) {
+            if (!_pesi_hash_matches($fp, $postedHash)) {
                 $msg = $t['err_stale'];
                 $msgType = 'error';
             } else {
                 $up = _pesi_handle_uploads($fields, $_FILES, $_POST, $basePath);
-                $r = _pesi_save($fp, $fields, $up['post']);
-                $msg = $r['msg'];
-                $msgType = $r['type'];
-                if ($msgType === 'success') {
-                    if (!empty($up['old'])) _pesi_cleanup_old($basePath, $up['old'], $PESI_PAGES);
-                    $fields = _pesi_parse($fp);
-                } elseif (!empty($up['old'])) {
-                    // Save gescheitert: der bereits verschobene Upload wird von
-                    // der Seite nie referenziert und muss wieder weg.
-                    _pesi_cleanup_old($basePath, array_intersect_key($up['post'], $up['old']), $PESI_PAGES);
-                }
                 if (!empty($up['errors'])) {
-                    $msg = trim(($msgType === 'success' ? $msg . ' ' : '') . implode(' ', $up['errors']));
+                    _pesi_discard_uploads($basePath, $up['new'] ?? []);
+                    $msg = implode(' ', $up['errors']);
                     $msgType = 'error';
+                } else {
+                    // Auch ein manuell geänderter Bildpfad kann eine bisherige
+                    // Upload-Datei verwaisen lassen, nicht nur ein neuer Upload.
+                    $replacedImages = array_values($up['old'] ?? []);
+                    foreach ($fields as $id => $field) {
+                        $key = 'pesi_field_' . $id;
+                        if (($field['type'] ?? '') === 'image' && isset($up['post'][$key])
+                            && (string)$up['post'][$key] !== (string)($field['value'] ?? '')) {
+                            $replacedImages[] = (string)($field['value'] ?? '');
+                        }
+                    }
+                    // Kandidaten aus der Sicherung, die bei dieser Rotation
+                    // herausfällt, können anschließend ebenfalls bereinigt werden.
+                    $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+                    $r = _pesi_save($fp, $fields, $up['post'], $postedHash);
+                    $msg = $r['msg'];
+                    $msgType = $r['type'];
+                    if ($msgType === 'success') {
+                        _pesi_cleanup_old($basePath, array_unique(array_merge($replacedImages, $expiredImages)), $PESI_PAGES);
+                        $fields = _pesi_parse($fp);
+                    } else {
+                        _pesi_discard_uploads($basePath, $up['new'] ?? []);
+                    }
                 }
             }
         }
@@ -270,6 +331,12 @@ function _pesi_parse(string $file): array {
     return $f;
 }
 
+function _pesi_hash_matches(string $file, string $expected): bool {
+    if (!preg_match('/^[a-f0-9]{64}$/', $expected) || !is_file($file)) return false;
+    $actual = hash_file('sha256', $file);
+    return is_string($actual) && hash_equals($expected, $actual);
+}
+
 /**
  * IDs von pesi()-Aufrufen, die der Parser nicht erfasst hat — Diagnose T13.
  * Fast immer ein doppelt zitierter Wert. Der Wert muss einfach zitiert sein:
@@ -290,71 +357,129 @@ function _pesi_unparsed_fields(string $file): array {
 // ── Saver ────────────────────────────────────────────────────
 
 // Backup-Rotation (.pesi-backup.1 → .2). Gemeinsam für Feld-Save und Block-Op.
+// Jede Kopie wird zuerst neben dem Ziel vollständig aufgebaut und geprüft.
+// So bleibt auch bei einem abgebrochenen Backup mindestens der bisherige Stand
+// erhalten; die Live-Datei wird von dieser Funktion nie verändert.
 function _pesi_backup(string $file): bool {
     if (!PESI_BACKUP_ENABLED) return true;
     $b1 = $file . '.pesi-backup.1';
     $b2 = $file . '.pesi-backup.2';
-    if (file_exists($b1)) @rename($b1, $b2);
-    if (!copy($file, $b1)) return false;
-    // Grösse gegenprüfen: copy() kann Erfolg melden und trotzdem kürzen.
-    clearstatcache(true, $b1);
-    clearstatcache(true, $file);
-    return filesize($b1) === filesize($file);
+
+    $prepare = static function (string $source, string $target) {
+        try {
+            $tmp = $target . '.pesi-tmp-backup-' . bin2hex(random_bytes(8));
+        } catch (Throwable $e) {
+            return false;
+        }
+        if (!@copy($source, $tmp)) {
+            @unlink($tmp);
+            return false;
+        }
+        clearstatcache(true, $source);
+        clearstatcache(true, $tmp);
+        $sourceHash = @hash_file('sha256', $source);
+        $tmpHash = @hash_file('sha256', $tmp);
+        if (!is_string($sourceHash) || !is_string($tmpHash) || !hash_equals($sourceHash, $tmpHash)) {
+            @unlink($tmp);
+            return false;
+        }
+        return $tmp;
+    };
+
+    $nextB1 = $prepare($file, $b1);
+    if ($nextB1 === false) return false;
+
+    if (is_file($b1)) {
+        $nextB2 = $prepare($b1, $b2);
+        if ($nextB2 === false || !@rename($nextB2, $b2)) {
+            if (is_string($nextB2)) @unlink($nextB2);
+            @unlink($nextB1);
+            return false;
+        }
+    }
+
+    if (!@rename($nextB1, $b1)) {
+        @unlink($nextB1);
+        return false;
+    }
+    return true;
 }
 
-// Schreibt $mod atomar und rollt bei PHP-Syntaxfehler aufs Backup zurück.
+// Prüft $mod als temporäre Datei und ersetzt die Live-Datei erst danach atomar.
 // Rückgabe: null bei Erfolg, sonst Fehler-Array.
 function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): ?array {
     global $t;
-    // 'c+' zwingend — 'c' ist write-only, der Stale-Check unten muss lesen.
-    $fp = fopen($file, 'c+');
-    if (!$fp || !flock($fp, LOCK_EX)) {
-        if ($fp) fclose($fp);
+    // Ein stabiler Sidecar-Lock bleibt auch über den späteren rename()-Wechsel
+    // hinweg für parallele Requests gültig.
+    $lock = @fopen($file . '.pesi-lock', 'c+');
+    if (!$lock || !flock($lock, LOCK_EX)) {
+        if ($lock) fclose($lock);
         return ['msg' => $t['err_locked'], 'type' => 'error'];
     }
+
+    $finish = static function ($lock, ?string $tmp = null): void {
+        if ($tmp !== null && is_file($tmp)) @unlink($tmp);
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    };
+
+    $current = @file_get_contents($file);
+    if ($current === false) {
+        $finish($lock);
+        return ['msg' => $t['err_not_readable'], 'type' => 'error'];
+    }
     if ($expectedHash !== null) {
-        rewind($fp);
-        $current = stream_get_contents($fp);
-        if ($current === false || !hash_equals($expectedHash, hash('sha256', $current))) {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+        if (!hash_equals($expectedHash, hash('sha256', $current))) {
+            $finish($lock);
             return ['msg' => $t['err_stale'], 'type' => 'error'];
         }
     }
-    // Sicherung gehört hierher, nicht zum Aufrufer: sie darf nur rotieren,
-    // wenn wirklich geschrieben wird.
+
+    // Die neue Version entsteht vollständig im selben Ordner. Dadurch ist der
+    // abschließende rename() auf üblichen Hosts ein atomarer Dateiaustausch.
+    try {
+        $tmp = $file . '.pesi-tmp-' . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        $tmp = false;
+    }
+    $out = $tmp !== false ? @fopen($tmp, 'x+b') : false;
+    $want = strlen($mod);
+    $written = $out ? fwrite($out, $mod) : false;
+    $ok = $out && $written === $want && fflush($out);
+    if ($out && function_exists('fsync')) $ok = fsync($out) && $ok;
+    if ($out) fclose($out);
+    if (!$ok || $tmp === false) {
+        $finish($lock, $tmp === false ? null : $tmp);
+        return ['msg' => $t['err_write'], 'type' => 'error'];
+    }
+
+    $mode = @fileperms($file);
+    if ($mode !== false) @chmod($tmp, $mode & 0777);
+
+    // Ungültiges PHP erreicht die Live-Datei nie. Ein abgelehnter Versuch
+    // rotiert außerdem keinen der beiden technischen Sicherungsstände.
+    if (PESI_SYNTAX_CHECK && _pesi_lint($tmp) === false) {
+        $finish($lock, $tmp);
+        return ['msg' => $t['err_php_rollback'], 'type' => 'error'];
+    }
+    // Auch Änderungen außerhalb des CMS (z. B. ein paralleler FTP-Upload)
+    // nicht mit dem inzwischen veralteten Snapshot überschreiben.
+    if (!_pesi_hash_matches($file, hash('sha256', $current))) {
+        $finish($lock, $tmp);
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
     if (!_pesi_backup($file)) {
-        flock($fp, LOCK_UN);
-        fclose($fp);
+        $finish($lock, $tmp);
         return ['msg' => $t['err_backup'], 'type' => 'error'];
     }
-
-    // Rückgabewert prüfen: fwrite() meldet eine Teilschreibung nur so.
-    $want    = strlen($mod);
-    $written = (ftruncate($fp, 0) && rewind($fp)) ? fwrite($fp, $mod) : false;
-    $ok      = ($written === $want) && fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
-
-    if (!$ok) return _pesi_rollback($file, $t['err_write']);
-
-    if (PESI_SYNTAX_CHECK && _pesi_lint($file) === false) {
-        return _pesi_rollback($file, $t['err_php_rollback']);
+    if (!@rename($tmp, $file)) {
+        $finish($lock, $tmp);
+        return ['msg' => $t['err_write'], 'type' => 'error'];
     }
+    if (function_exists('opcache_invalidate')) @opcache_invalidate($file, true);
+    clearstatcache(true, $file);
+    $finish($lock);
     return null;
-}
-
-/**
- * Stellt die Seite aus .pesi-backup.1 wieder her. Schlägt das fehl, liegt sie
- * beschädigt auf dem Server — dann err_write_fatal statt $msg.
- */
-function _pesi_rollback(string $file, string $msg): array {
-    global $t;
-    $b1 = $file . '.pesi-backup.1';
-    if (PESI_BACKUP_ENABLED && is_file($b1) && copy($b1, $file)) {
-        return ['msg' => $msg, 'type' => 'error'];
-    }
-    return ['msg' => $t['err_write_fatal'], 'type' => 'error'];
 }
 
 /**
@@ -377,22 +502,26 @@ function _pesi_lint(string $file): ?bool {
 
 /**
  * Struktur-Markierungen in einem Feldwert. Block- und Toggle-Parser läsen sie
- * als echte Struktur, und zwar `php -l`-sauber — kein Rollback.
+ * als echte Struktur, und zwar `php -l`-sauber — kein abgelehnter Commit.
  */
 function _pesi_has_marker(string $v): bool {
     return (bool)preg_match('#<!--\s*/?\s*pesi:(item|toggle)\b#i', $v)
         || (bool)preg_match('#<\?php\s+(if\s*\(\s*false\s*\)\s*:|endif\s*;)#i', $v);
 }
 
-function _pesi_save(string $file, array $fields, array $post): array {
+function _pesi_save(string $file, array $fields, array $post, ?string $expectedHash = null): array {
     global $t;
     $src = file_get_contents($file);
     if ($src === false) return ['msg' => $t['err_not_readable'], 'type' => 'error'];
     $srcHash = hash('sha256', $src);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $srcHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
 
     $mod = $src;
     $n = 0;
     $blocked = [];
+    $invalid = [];
     foreach ($fields as $id => $fld) {
         $k = 'pesi_field_' . $id;
         if (!isset($post[$k])) continue;
@@ -401,7 +530,21 @@ function _pesi_save(string $file, array $fields, array $post): array {
             $nv = _pesi_sanitize_html($nv);
         }
         if (($fld['type'] ?? '') === 'image' && function_exists('_pesi_safe_asset_url')) {
-            $nv = _pesi_safe_asset_url($nv);
+            $safe = _pesi_safe_asset_url($nv);
+            if (trim($nv) !== '' && $safe === '') {
+                $invalid[] = $fld['label'] ?: $id;
+                continue;
+            }
+            $nv = $safe;
+        }
+        if (in_array(($fld['type'] ?? ''), ['url', 'email', 'tel'], true)
+            && function_exists('_pesi_safe_typed_value')) {
+            $safe = _pesi_safe_typed_value($nv, $fld['type']);
+            if ($safe === null) {
+                $invalid[] = $fld['label'] ?: $id;
+                continue;
+            }
+            $nv = $safe;
         }
         if ($nv === $fld['value']) continue;
         if (_pesi_has_marker($nv)) { $blocked[] = $fld['label'] ?: $id; continue; }
@@ -410,6 +553,7 @@ function _pesi_save(string $file, array $fields, array $post): array {
     }
     // Vor dem ersten Schreibzugriff abbrechen — ein Save ist ganz oder gar nicht.
     if ($blocked) return ['msg' => sprintf($t['err_marker'], implode(', ', $blocked)), 'type' => 'error'];
+    if ($invalid) return ['msg' => sprintf($t['err_invalid_fields'], implode(', ', $invalid)), 'type' => 'error'];
     if ($n === 0) return ['msg' => $t['err_no_changes'], 'type' => 'info'];
 
     if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
@@ -456,7 +600,7 @@ function _pesi_block_parse(string $file): array {
  * Block-Operation: 'dup' | 'add' | 'del' | 'up' | 'down'.
  * 'add' klont den letzten Block der Gruppe als Vorlage.
  */
-function _pesi_block_op(string $file, string $group, int $inst, string $action): array {
+function _pesi_block_op(string $file, string $group, int $inst, string $action, ?string $expectedHash = null): array {
     global $t;
     $src = (string)file_get_contents($file);
     if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
@@ -465,6 +609,9 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
     // Lesen und Schreiben von einer zweiten Sitzung gespeichert wurde — die
     // Offsets unten stammen aus genau diesem Snapshot.
     $srcHash = hash('sha256', $src);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $srcHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
 
     $all = _pesi_block_parse($file);
     $grp = array_values(array_filter($all, fn($b) => $b['group'] === $group));
@@ -543,15 +690,19 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action):
 // Setzt die Datei auf .pesi-backup.1 zurück. Der aktuelle Stand
 // wandert vorher in die Backup-Rotation → erneutes Klicken kehrt
 // die Wiederherstellung wieder um.
-function _pesi_restore(string $file): array {
+function _pesi_restore(string $file, ?string $expectedHash = null): array {
     global $t;
     $b1 = $file . '.pesi-backup.1';
     if (!is_file($b1)) return ['msg' => $t['rst_none'], 'type' => 'info'];
     $restore = file_get_contents($b1);
     if ($restore === false || $restore === '') return ['msg' => $t['rst_none'], 'type' => 'info'];
     $current = (string)file_get_contents($file);
+    $currentHash = hash('sha256', $current);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $currentHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
     if ($current === $restore) return ['msg' => $t['rst_same'], 'type' => 'info'];
-    if ($c = _pesi_commit($file, $restore, hash('sha256', $current))) return $c;
+    if ($c = _pesi_commit($file, $restore, $currentHash)) return $c;
     return ['msg' => $t['rst_done'], 'type' => 'success'];
 }
 
@@ -621,12 +772,15 @@ function _pesi_field_toggles(string $file): array {
     return $out;
 }
 
-function _pesi_toggle_op(string $file, string $group): array {
+function _pesi_toggle_op(string $file, string $group, ?string $expectedHash = null): array {
     global $t;
     $src = (string)file_get_contents($file);
     if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
     if (_pesi_toggle_nested($file)) return ['msg' => $t['tgl_nested'], 'type' => 'error'];
     $srcHash = hash('sha256', $src);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $srcHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
 
     $eg = preg_quote($group, '/');
     $re = '/(<!--\s*pesi:toggle\s+' . $eg . '\s*-->)'
@@ -656,8 +810,8 @@ function _pesi_replace(string $src, string $id, string $nv): string {
 
     // Ersetzungswert einmal aufbauen und per Callback einsetzen. NIE über den
     // Replacement-String von preg_replace(): dort würden $1/${1}/\1 im
-    // Nutzertext als Backreferences interpretiert (kaputtes PHP → Rollback
-    // bzw. stille Content-Korruption bei z. B. Preisen wie „$1.000").
+    // Nutzertext als Backreferences interpretiert (abgelehnter Commit bzw.
+    // stille Content-Korruption bei z. B. Preisen wie „$1.000").
     $repl = $hd
         ? "<<<'PESI'\n" . $nv . "\nPESI"
         : "'" . _pesi_esc($nv) . "'";
@@ -720,28 +874,52 @@ function _pesi_human(string $slug): string {
 // fällt lautlos auf das Session-Backoff zurück, wenn die Datei nicht schreibbar
 // ist — passt damit zu pesis „kein Content-Store"-Prinzip.
 function _pesi_throttle_file(): string { return __DIR__ . '/.pesi-throttle'; }
+function _pesi_throttle_lock_file(): string { return __DIR__ . '/.pesi-throttle-lock'; }
 
 function _pesi_throttle_key(): string {
     return hash('sha256', (string)($_SERVER['REMOTE_ADDR'] ?? ''));
 }
 
+// Zweite, sitzungsgebundene Bremse. Sie bleibt wirksam, wenn das gemeinsame
+// Register vorübergehend nicht schreibbar ist; das IP-Register verhindert
+// zusätzlich die Umgehung durch das Verwerfen des Session-Cookies.
+function _pesi_session_throttle_check(): int {
+    return max(0, (int)($_SESSION['pesi_fail_until'] ?? 0) - time());
+}
+
+function _pesi_session_throttle_fail(): void {
+    $fails = min(20, (int)($_SESSION['pesi_fail'] ?? 0) + 1);
+    $_SESSION['pesi_fail'] = $fails;
+    $_SESSION['pesi_fail_until'] = time() + min(300, 2 ** min(8, $fails));
+}
+
+function _pesi_session_throttle_reset(): void {
+    unset($_SESSION['pesi_fail'], $_SESSION['pesi_fail_until']);
+}
+
 // Verbleibende Sperrsekunden für den aktuellen Client (0 = frei).
 function _pesi_throttle_check(): int {
     $f = _pesi_throttle_file();
-    if (!is_file($f)) return 0;
-    $raw  = @file_get_contents($f);
+    $lock = @fopen(_pesi_throttle_lock_file(), 'c+');
+    if (!$lock) return 0;
+    if (!flock($lock, LOCK_SH)) { fclose($lock); return 0; }
+    $raw = is_file($f) ? @file_get_contents($f) : false;
+    flock($lock, LOCK_UN);
+    fclose($lock);
     $data = ($raw !== false && $raw !== '') ? json_decode($raw, true) : null;
     if (!is_array($data)) return 0;
     $until = (int)($data[_pesi_throttle_key()]['until'] ?? 0);
     return max(0, $until - time());
 }
 
-// Schreibt den Register-Stand unter Exklusiv-Lock (c+ = anlegen falls nötig).
+// Schreibt den Register-Stand unter stabilem Sidecar-Lock und tauscht auch
+// diese Datei erst vollständig geschrieben aus. Ein Prozessabbruch darf die
+// Bremse nicht durch abgeschnittenes JSON unbemerkt zurücksetzen.
 function _pesi_throttle_write(callable $mutate): void {
-    $fp = @fopen(_pesi_throttle_file(), 'c+');
-    if (!$fp) return;                       // nicht schreibbar → Session-Backoff bleibt
-    if (!flock($fp, LOCK_EX)) { fclose($fp); return; }
-    $raw  = stream_get_contents($fp);
+    $lock = @fopen(_pesi_throttle_lock_file(), 'c+');
+    if (!$lock) return;
+    if (!flock($lock, LOCK_EX)) { fclose($lock); return; }
+    $raw = @file_get_contents(_pesi_throttle_file());
     $data = ($raw !== false && $raw !== '') ? json_decode($raw, true) : [];
     if (!is_array($data)) $data = [];
     $now = time();
@@ -755,15 +933,22 @@ function _pesi_throttle_write(callable $mutate): void {
     if (count($data) > 500) $data = array_slice($data, -500, null, true);
     $data = $mutate($data, $now);
     $json = (string)json_encode($data);
-    rewind($fp);
-    ftruncate($fp, 0);
-    // Teilschreibung ergäbe kaputtes JSON. json_decode() liefert dann null,
-    // das Register gilt als leer und die Brute-Force-Bremse ist stillschweigend
-    // aus. Lieber sauber leeren als korrupt zurücklassen.
-    if (fwrite($fp, $json) !== strlen($json)) ftruncate($fp, 0);
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
+    try {
+        $tmp = _pesi_throttle_file() . '-tmp-' . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        $tmp = '';
+    }
+    $fp = $tmp !== '' ? @fopen($tmp, 'x+b') : false;
+    $ok = $fp && fwrite($fp, $json) === strlen($json) && fflush($fp);
+    if ($fp && function_exists('fsync')) $ok = fsync($fp) && $ok;
+    if ($fp) fclose($fp);
+    if ($ok) {
+        @chmod($tmp, 0600);
+        $ok = @rename($tmp, _pesi_throttle_file());
+    }
+    if (!$ok && $tmp !== '' && is_file($tmp)) @unlink($tmp);
+    flock($lock, LOCK_UN);
+    fclose($lock);
 }
 
 // Fehlversuch verbuchen → exponentielles Backoff je IP: 2, 4, 8 … Sekunden,
@@ -842,8 +1027,10 @@ function _pesi_slug(string $name): string {
  */
 function _pesi_handle_uploads(array $fields, array $files, array $post, string $basePath): array {
     global $t;
+    $originalPost = $post;
     $errors = [];
     $old    = [];
+    $new    = [];
     $map    = _pesi_upload_map();
     $cfgExt = array_filter(array_map(
         'trim',
@@ -910,9 +1097,43 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
 
         $old['pesi_field_' . $id] = $fld['value'];
         $post['pesi_field_' . $id] = '/' . $dir . '/' . $fname;
+        $new[] = '/' . $dir . '/' . $fname;
     }
 
-    return ['post' => $post, 'errors' => $errors, 'old' => $old];
+    // Ein Klick erzeugt genau einen konsistenten Stand: Sobald ein Bild nicht
+    // validiert oder verschoben werden konnte, werden auch bereits vorbereitete
+    // Uploads verworfen und kein Textfeld gespeichert.
+    if ($errors) {
+        _pesi_discard_uploads($basePath, $new);
+        return ['post' => $originalPost, 'errors' => $errors, 'old' => [], 'new' => []];
+    }
+    return ['post' => $post, 'errors' => [], 'old' => $old, 'new' => $new];
+}
+
+function _pesi_discard_uploads(string $basePath, array $paths): void {
+    $dir = _pesi_upload_dir();
+    if ($dir === '') return;
+    $absDir = realpath($basePath . '/' . $dir);
+    if ($absDir === false) return;
+    foreach ($paths as $path) {
+        $rel = ltrim((string)$path, '/');
+        if (strncmp($rel, $dir . '/', strlen($dir) + 1) !== 0) continue;
+        $target = realpath($basePath . '/' . $rel);
+        if ($target === false) continue;
+        if (strncmp($target, $absDir . DIRECTORY_SEPARATOR, strlen($absDir) + 1) !== 0) continue;
+        @unlink($target);
+    }
+}
+
+function _pesi_image_values(string $file): array {
+    if (!is_file($file)) return [];
+    $out = [];
+    foreach (_pesi_parse($file) as $field) {
+        if (($field['type'] ?? '') === 'image' && ($field['value'] ?? '') !== '') {
+            $out[] = $field['value'];
+        }
+    }
+    return $out;
 }
 
 /**
@@ -931,10 +1152,12 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
     $raw   = '';
     foreach (array_keys($pages) as $pg) {
         $pf = $basePath . '/' . $pg;
-        if (!file_exists($pf)) continue;
-        $raw .= (string)file_get_contents($pf);
-        foreach (_pesi_parse($pf) as $fld) {
-            $inUse[ltrim($fld['value'], '/')] = true;
+        foreach ([$pf, $pf . '.pesi-backup.1', $pf . '.pesi-backup.2'] as $version) {
+            if (!file_exists($version)) continue;
+            $raw .= (string)file_get_contents($version);
+            foreach (_pesi_parse($version) as $fld) {
+                $inUse[ltrim($fld['value'], '/')] = true;
+            }
         }
     }
 
@@ -967,18 +1190,19 @@ function _pesi_strings(): array { return [
         'err_no_changes'    => 'Es gab nichts zu speichern — Sie haben nichts geändert.',
         'err_locked'        => 'Die Seite wird gerade von jemand anderem bearbeitet. Bitte versuchen Sie es in einem Moment noch einmal. (Code T3)',
         'err_php_rollback'  => 'Diese Änderung konnte nicht übernommen werden. Ihre Seite ist unverändert geblieben — es ist nichts kaputtgegangen. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S1)',
-        'err_write'         => 'Die Änderung konnte nicht vollständig gespeichert werden, vermutlich ist der Speicherplatz voll. Ihre Seite wurde auf den Stand davor zurückgesetzt. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T9)',
-        'err_write_fatal'   => 'Beim Speichern ist etwas schiefgegangen und die Seite konnte nicht zurückgesetzt werden. Bitte ändern Sie jetzt nichts weiter und melden Sie sich umgehend bei Ihrer Website-Betreuung. (Code T10)',
+        'err_write'         => 'Die Änderung konnte nicht vollständig gespeichert werden, vermutlich ist der Speicherplatz voll. Ihre Seite ist unverändert geblieben. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T9)',
         'err_session'       => 'Sie waren zu lange angemeldet. Bitte laden Sie die Seite neu und melden Sie sich erneut an.',
         'err_file_missing'  => 'Diese Seite ist nicht mehr auffindbar. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T4) Betroffen: ',
         'err_stale'         => 'Diese Seite wurde zwischenzeitlich an anderer Stelle geändert. Bitte laden Sie sie neu und speichern Sie danach noch einmal.',
         'err_marker'        => 'Nicht gespeichert: %s enthält Text, den pesi nicht verarbeiten kann. Ihre Seite ist unverändert. Bitte entfernen Sie zuletzt eingefügte Sonderzeichen oder melden Sie sich bei Ihrer Website-Betreuung. (Code S2)',
+        'err_invalid_fields'=> 'Nicht gespeichert: Bitte prüfen Sie die Eingabe bei %s. Ihre übrigen Änderungen wurden ebenfalls noch nicht übernommen.',
         'saved_one'         => '1 Änderung gespeichert.',
         'saved_many'        => '%d Änderungen gespeichert.',
         'wrong_password'    => 'Das Passwort stimmt nicht.',
         'password_ph'       => 'Passwort',
         'login_btn'         => 'Anmelden',
         'login_help'        => 'Passwort vergessen? Ihre Website-Betreuung kann es neu setzen.',
+        'setup_default_pw'  => 'Die Anmeldung ist gesperrt, bis Ihre Website-Betreuung das Auslieferungs-Passwort in pesi-core.php geändert hat. (Code T8)',
         'nav_pages'         => 'Seiten',
         'to_website'        => '↗ Zur Website',
         'logout'            => 'Abmelden',
@@ -987,11 +1211,11 @@ function _pesi_strings(): array { return [
         'save_btn'          => 'Speichern',
         'welcome_title'     => 'Willkommen',
         'welcome_hint'      => 'Wählen Sie links eine Seite aus, um deren Inhalte zu bearbeiten.',
+        'globals_hint'      => 'Diese Angaben gelten gemeinsam auf der ganzen Website. Änderungen werden überall wirksam, wo die Website das entsprechende Stammdatenfeld verwendet.',
         'diag_summary'      => '⚙ Technischer Hinweis für Ihre Website-Betreuung — für Sie ist nichts zu tun',
         'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
         'warn_default_pw'   => 'Es ist noch das Auslieferungs-Passwort gesetzt. In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
-        'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Damit entfällt das automatische Zurückrollen bei fehlerhaften Seiten. (Code T7)',
-        'warn_no_backup'    => 'Syntax-Check ist aktiv, automatische Sicherungen sind aber abgeschaltet (PESI_BACKUP_ENABLED). Ein Fehler wird dann zwar erkannt, lässt sich aber nicht zurückrollen — die Seite bliebe beschädigt. (Code T11)',
+        'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Fehlerhaft erzeugtes PHP kann dann vor dem Live-Austausch nicht automatisch erkannt werden. (Code T7)',
         'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Fast immer steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache. (Code T13)',
         'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
@@ -1056,18 +1280,19 @@ function _pesi_strings(): array { return [
         'err_no_changes'    => 'There was nothing to save — you did not change anything.',
         'err_locked'        => 'Someone else is editing this page right now. Please try again in a moment. (Code T3)',
         'err_php_rollback'  => 'This change could not be applied. Your page is unchanged — nothing is broken. Please contact whoever looks after your website. (Code S1)',
-        'err_write'         => 'The change could not be saved completely, most likely because the disk is full. Your page has been reset to its previous state. Please contact whoever looks after your website. (Code T9)',
-        'err_write_fatal'   => 'Something went wrong while saving and the page could not be reset. Please do not change anything else and contact whoever looks after your website right away. (Code T10)',
+        'err_write'         => 'The change could not be saved completely, most likely because the disk is full. Your page is unchanged. Please contact whoever looks after your website. (Code T9)',
         'err_session'       => 'You were signed in for too long. Please reload the page and sign in again.',
         'err_file_missing'  => 'This page can no longer be found. Please contact whoever looks after your website. (Code T4) Affected: ',
         'err_stale'         => 'This page was changed elsewhere in the meantime. Please reload it and save again.',
         'err_marker'        => 'Not saved: %s contains text pesi cannot process. Your page is unchanged. Please remove any special characters you pasted recently, or contact whoever looks after your website. (Code S2)',
+        'err_invalid_fields'=> 'Not saved: Please check the value for %s. Your other changes have not been applied either.',
         'saved_one'         => '1 change saved.',
         'saved_many'        => '%d changes saved.',
         'wrong_password'    => 'That password is not correct.',
         'password_ph'       => 'Password',
         'login_btn'         => 'Sign in',
         'login_help'        => 'Forgot your password? Whoever looks after your website can reset it.',
+        'setup_default_pw'  => 'Sign-in is disabled until whoever looks after your website changes the shipped password in pesi-core.php. (Code T8)',
         'nav_pages'         => 'Pages',
         'to_website'        => '↗ Visit Website',
         'logout'            => 'Sign out',
@@ -1076,11 +1301,11 @@ function _pesi_strings(): array { return [
         'save_btn'          => 'Save',
         'welcome_title'     => 'Welcome',
         'welcome_hint'      => 'Select a page on the left to edit its content.',
+        'globals_hint'      => 'These details are shared across the whole website. A change applies everywhere the corresponding shared field is used.',
         'diag_summary'      => '⚙ Technical note for whoever looks after your website — nothing for you to do',
         'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
         'warn_default_pw'   => 'The shipped default password is still in use. Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
-        'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Automatic rollback of a broken page is therefore unavailable. (Code T7)',
-        'warn_no_backup'    => 'Syntax check is enabled but automatic backups are switched off (PESI_BACKUP_ENABLED). An error is then detected but cannot be rolled back — the page would stay damaged. (Code T11)',
+        'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Invalid generated PHP then cannot be detected automatically before the live file is replaced. (Code T7)',
         'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Almost always the value is in double quotes instead of single ones — pesi() expects single quotes. (Code T13)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
@@ -1278,8 +1503,9 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .S-nav .cnt{font-size:.65rem;color:var(--tx3);margin-left:auto;background:var(--sf);padding:.1rem .4rem;border-radius:4px}
 
 .S-ft{padding:.9rem 1.3rem;border-top:1px solid var(--bd);margin-top:auto;display:flex;flex-direction:column;gap:.45rem}
-.S-ft a{font-size:.78rem;color:var(--tx3);text-decoration:none;transition:color .12s}
-.S-ft a:hover{color:var(--tx2)}
+.S-ft form{margin:0}
+.S-ft a,.S-ft button{font:inherit;font-size:.78rem;color:var(--tx3);text-decoration:none;transition:color .12s;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.S-ft a:hover,.S-ft button:hover{color:var(--tx2)}
 
 /* Mobile hamburger */
 .ham{display:none;position:fixed;top:.9rem;left:.9rem;z-index:30;width:40px;height:40px;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;flex-direction:column;align-items:center;justify-content:center;gap:4px}
@@ -1505,8 +1731,8 @@ body.dash .S-nav .ic{background:#444;border-color:#555;color:#999}
 body.dash .S-nav a.on .ic{background:var(--b);border-color:var(--b);color:#fff}
 body.dash .S-nav .cnt{background:#444;color:#999}
 body.dash .S-ft{border-top-color:#444}
-body.dash .S-ft a{color:#a8a8a8}
-body.dash .S-ft a:hover{color:#ccc}
+body.dash .S-ft a,body.dash .S-ft button{color:#a8a8a8}
+body.dash .S-ft a:hover,body.dash .S-ft button:hover{color:#ccc}
 
 /* Mobile: hamburger auf weißem Grund */
 body.dash .ham{background:#fff;border-color:#dde1e7}
@@ -1537,6 +1763,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi cms" class="L-logo">
     <?php endif; ?>
     <p class="sub"><?=htmlspecialchars($sn)?></p>
+    <?php if ($defaultPassword): ?><div class="err"><?=htmlspecialchars($t['setup_default_pw'])?></div><?php endif; ?>
     <?php if ($loginError): ?><div class="err"><?=$t['wrong_password']?></div><?php endif; ?>
     <form method="POST">
       <input type="hidden" name="pesi_login" value="1">
@@ -1586,7 +1813,10 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     </ul>
     <div class="S-ft">
       <a href="/" target="_blank" rel="noopener noreferrer"><?=$t['to_website']?></a>
-      <a href="?logout"><?=$t['logout']?></a>
+      <form method="POST">
+        <input type="hidden" name="pesi_csrf" value="<?=htmlspecialchars($csrf)?>">
+        <button type="submit" name="pesi_logout" value="1"><?=$t['logout']?></button>
+      </form>
     </div>
   </nav>
 
@@ -1601,9 +1831,6 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       }
       if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
           $diag[] = $t['warn_no_exec'];
-      }
-      if (PESI_SYNTAX_CHECK && !PESI_BACKUP_ENABLED) {
-          $diag[] = $t['warn_no_backup'];
       }
       if ($page) {
           $unparsed = _pesi_unparsed_fields($basePath . '/' . $page);
@@ -1638,14 +1865,18 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       <?php
         $pageAbs = $basePath . '/' . $page;
         $mtime   = is_file($pageAbs) ? filemtime($pageAbs) : 0;
+        $fileHash = is_file($pageAbs) ? hash_file('sha256', $pageAbs) : '';
+        $isGlobals = defined('PESI_GLOBALS_FILE') && $page === PESI_GLOBALS_FILE;
         $liveUrl = '/' . ltrim($page, '/');
       ?>
       <div class="top">
         <h1 class="top-t"><?=htmlspecialchars($pageLabel)?></h1>
         <span class="top-f"><?=htmlspecialchars($page)?></span>
         <?php if ($mtime): ?><span class="top-m"><?=sprintf($t['last_mod'], date('d.m.Y H:i', $mtime))?></span><?php endif; ?>
+        <?php if (!$isGlobals): ?>
         <a class="top-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=$t['view_live']?></a>
         <button type="button" class="top-pv" id="pvToggle" aria-pressed="true" title="<?=htmlspecialchars($t['pv_btn'])?>"><?=htmlspecialchars($t['pv_btn'])?></button>
+        <?php endif; ?>
         <button type="button" class="top-tech" id="techToggle" aria-pressed="false" title="<?=htmlspecialchars($t['tech_btn'])?>"><?=htmlspecialchars($t['tech_btn'])?></button>
       </div>
 
@@ -1653,10 +1884,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       <form method="POST" id="pf" enctype="multipart/form-data" class="ws-edit">
         <input type="hidden" name="pesi_save" value="1">
         <input type="hidden" name="pesi_csrf" value="<?=htmlspecialchars($csrf)?>">
-        <input type="hidden" name="pesi_mtime" value="<?=htmlspecialchars((string)$mtime)?>">
+        <input type="hidden" name="pesi_hash" value="<?=htmlspecialchars((string)$fileHash)?>">
 
         <div class="cnt-wrap">
-          <?php if ($msg): ?><div class="ms <?=$msgType?>" role="status"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success'): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
+          <?php if ($msg): ?><div class="ms <?=$msgType?>" role="status"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success' && !$isGlobals): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
+          <?php if ($isGlobals): ?><div class="ms info"><span><?=htmlspecialchars($t['globals_hint'])?></span></div><?php endif; ?>
 
           <?php
             $toggles     = _pesi_toggle_parse($pageAbs);
@@ -1754,6 +1986,15 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                 <?php if ($fld['type'] === 'text'): ?>
                   <input type="text" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi">
 
+                <?php elseif ($fld['type'] === 'url'): ?>
+                  <input type="text" inputmode="url" autocomplete="url" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi" placeholder="https://… oder /kontakt">
+
+                <?php elseif ($fld['type'] === 'email'): ?>
+                  <input type="email" inputmode="email" autocomplete="email" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi">
+
+                <?php elseif ($fld['type'] === 'tel'): ?>
+                  <input type="tel" inputmode="tel" autocomplete="tel" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($fld['value'])?>" class="fi">
+
                 <?php elseif ($fld['type'] === 'textarea'): ?>
                   <textarea id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" class="fi" rows="4"><?=htmlspecialchars($fld['value'])?></textarea>
 
@@ -1800,12 +2041,12 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         </div>
         <?php endif; ?>
       </form>
-      <aside class="pv" id="pv" aria-label="<?=htmlspecialchars($t['pv_title'])?>">
+      <?php if (!$isGlobals): ?><aside class="pv" id="pv" aria-label="<?=htmlspecialchars($t['pv_title'])?>">
         <div class="pv-bar"><?=htmlspecialchars($t['pv_label'])?></div>
         <div class="pv-frame">
-          <iframe title="<?=htmlspecialchars($t['pv_title'])?>" src="<?=htmlspecialchars($liveUrl . (strpos($liveUrl, '?') !== false ? '&' : '?') . 'pesi_pv=' . $mtime)?>" loading="lazy"></iframe>
+          <iframe title="<?=htmlspecialchars($t['pv_title'])?>" src="<?=htmlspecialchars($liveUrl . (strpos($liveUrl, '?') !== false ? '&' : '?') . 'pesi_pv=' . $mtime)?>" loading="lazy" sandbox="allow-scripts"></iframe>
         </div>
-      </aside>
+      </aside><?php endif; ?>
       </div>
 
     <?php else: ?>

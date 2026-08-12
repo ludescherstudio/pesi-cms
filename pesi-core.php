@@ -12,6 +12,9 @@ define('BRAND_LOGO',  '');                 // z. B. '/assets/logo.svg' — leer 
 define('LANG',        'de');               // 'de' oder 'en'
 define('PESI_BACKUP_ENABLED', true);
 define('PESI_SYNTAX_CHECK', true);
+define('PESI_SESSION_IDLE',  30 * 60);      // 30 Minuten ohne Aktivität
+define('PESI_SESSION_MAX',   12 * 60 * 60); // spätestens nach 12 Stunden neu anmelden
+define('PESI_GLOBALS_FILE',  'pesi-content.php');
 
 // Bild-Upload (Typ 'image'). Ordner liegt relativ zum Root, ohne Slash.
 // Muss vom Browser erreichbar bleiben — in .htaccess NICHT sperren.
@@ -20,6 +23,7 @@ define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);          // 5 MB
 define('PESI_UPLOAD_TYPES',     'jpg,jpeg,png,webp,avif,gif'); // SVG bewusst nicht erlaubt
 
 $PESI_PAGES = [
+    PESI_GLOBALS_FILE => 'Stammdaten',
     'index.php'       => 'Startseite',
     'impressum.php'   => 'Impressum',
     'datenschutz.php' => 'Datenschutz',
@@ -51,14 +55,53 @@ if (!function_exists('pesi')) {
         return substr($url, 0, 2) === '//' ? '' : $url;
     }
 
+    function _pesi_safe_link_url(string $url): string {
+        $url = trim($url);
+        if ($url === '' || preg_match('/[\x00-\x20\x7F<>"\']/', $url)) return '';
+        if (substr($url, 0, 2) === '//' || strpos($url, '\\') !== false) return '';
+        if (preg_match('/^https?:\/\//i', $url)) {
+            return filter_var($url, FILTER_VALIDATE_URL) ? $url : '';
+        }
+        // Interne Links und Sprungmarken. Andere Schemas sind bewusst verboten;
+        // E-Mail und Telefon haben eigene, strengere Feldtypen.
+        return in_array($url[0], ['/', '#', '?'], true) ? $url : '';
+    }
+
+    function _pesi_safe_email(string $email): string {
+        $email = trim($email);
+        return $email === '' || filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
+    }
+
+    function _pesi_safe_tel(string $tel): string {
+        $tel = trim($tel);
+        if ($tel === '') return '';
+        return preg_match('/^(?=.*\d)[0-9+()\.\-\/ ]{3,40}$/', $tel) ? $tel : '';
+    }
+
+    function _pesi_safe_typed_value(string $value, string $type): ?string {
+        if ($type === 'url') {
+            $safe = _pesi_safe_link_url($value);
+        } elseif ($type === 'email') {
+            $safe = _pesi_safe_email($value);
+        } elseif ($type === 'tel') {
+            $safe = _pesi_safe_tel($value);
+        } else {
+            return $value;
+        }
+        return trim($value) === '' || $safe !== '' ? $safe : null;
+    }
+
+    function _pesi_sanitize_html_fallback(string $html): string {
+        // Ohne DOM gibt es keinen belastbaren HTML-Parser. Regex-Filter
+        // übersehen insbesondere unquotierte Attribute (onclick=…) und
+        // dürfen deshalb kein Markup zurückgeben. Der Inhalt bleibt als
+        // sicherer Klartext erhalten; Formatierung gibt es erst mit ext/dom.
+        return nl2br(_pesi_e(strip_tags($html)), false);
+    }
+
     function _pesi_sanitize_html(string $html): string {
         if ($html === '') return '';
-        if (!class_exists('DOMDocument')) {
-            $html = strip_tags($html, '<p><br><strong><b><em><i><u><s><a><ul><ol><li><blockquote><h2><h3>');
-            $html = preg_replace('/\s+on[a-z]+\s*=\s*(["\']).*?\1/is', '', $html);
-            $html = preg_replace('/\s+(href)\s*=\s*(["\'])\s*(?!https?:|mailto:|tel:|\/|#)[^"\']*\2/is', '', $html);
-            return $html ?? '';
-        }
+        if (!class_exists('DOMDocument')) return _pesi_sanitize_html_fallback($html);
 
         $allowed = [
             'p' => [], 'br' => [], 'strong' => [], 'b' => [], 'em' => [], 'i' => [],
@@ -147,6 +190,9 @@ if (!function_exists('pesi')) {
         if ($type === 'image') {
             return _pesi_e(_pesi_safe_asset_url($default));
         }
+        if (in_array($type, ['url', 'email', 'tel'], true)) {
+            return _pesi_e(_pesi_safe_typed_value($default, $type) ?? '');
+        }
         if ($type !== 'richtext') {
             return _pesi_e($default);
         }
@@ -166,3 +212,16 @@ if (!function_exists('pesi')) {
         return $style . '<div class="pesi-richtext">' . _pesi_sanitize_html($default) . '</div>';
     }
 }
+
+if (!function_exists('pesi_global')) {
+    function pesi_global(string $id): string {
+        global $PESI_GLOBALS;
+        return isset($PESI_GLOBALS[$id]) && is_string($PESI_GLOBALS[$id])
+            ? $PESI_GLOBALS[$id]
+            : '';
+    }
+}
+
+$PESI_GLOBALS = [];
+$pesiGlobalsPath = __DIR__ . '/' . PESI_GLOBALS_FILE;
+if (is_file($pesiGlobalsPath)) require_once $pesiGlobalsPath;
