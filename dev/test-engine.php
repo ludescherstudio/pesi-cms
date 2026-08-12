@@ -52,7 +52,7 @@ register_shutdown_function(function () use ($scratch) {
     foreach (['/site/uploads/*', '/site/*', '/*'] as $g) {
         foreach (glob($scratch . $g) as $f) { if (is_file($f)) @unlink($f); }
     }
-    @unlink($scratch . '/.pesi-throttle');   // glob() übergeht führende Punkte
+    foreach (glob($scratch . '/.pesi-throttle*') as $f) @unlink($f); // glob() übergeht führende Punkte nur ohne exaktes Präfix
     @rmdir($scratch . '/site/uploads');
     @rmdir($scratch . '/site');
     @rmdir($scratch);
@@ -135,6 +135,30 @@ ok('href \x01javascript:',
 ok('asset-url \x01javascript:', _pesi_safe_asset_url("\x01javascript:alert(1)") === '');
 ok('asset-url protokollrelativ', _pesi_safe_asset_url('//evil.example/x.jpg') === '');
 
+$fallback = _pesi_sanitize_html_fallback('<p onclick=alert(1)>Hallo <a href=javascript:alert(1)>Welt</a></p>');
+ok('No-DOM-Fallback entfernt unquotiertes onclick', stripos($fallback, 'onclick') === false, $fallback);
+ok('No-DOM-Fallback entfernt javascript-Link', stripos($fallback, 'javascript:') === false, $fallback);
+ok('No-DOM-Fallback behält Textinhalt', strpos($fallback, 'Hallo Welt') !== false, $fallback);
+
+grp('Kontext-Feldtypen — url / email / tel');
+ok('https-URL erlaubt', _pesi_safe_link_url('https://example.org/termin') === 'https://example.org/termin');
+ok('interner Link erlaubt', _pesi_safe_link_url('/kontakt') === '/kontakt');
+ok('javascript-URL abgelehnt', _pesi_safe_link_url('javascript:alert(1)') === '');
+ok('protokollrelative URL abgelehnt', _pesi_safe_link_url('//evil.example') === '');
+ok('gültige E-Mail erlaubt', _pesi_safe_email('praxis@example.org') === 'praxis@example.org');
+ok('ungültige E-Mail abgelehnt', _pesi_safe_email('nicht @ gültig') === '');
+ok('gültiges Telefon erlaubt', _pesi_safe_tel('+43 (0) 123 45-67') === '+43 (0) 123 45-67');
+ok('Telefon mit Schema abgelehnt', _pesi_safe_tel('javascript:1') === '');
+$p = page("<?php\n\$u=pesi('u', '/kontakt', 'url', 'Link');\n\$e=pesi('e', 'a@example.org', 'email', 'E-Mail');\n");
+$beforeTyped = (string)file_get_contents($p);
+$typedFields = _pesi_parse($p);
+$typedBad = _pesi_save($p, $typedFields, ['pesi_field_u' => 'javascript:alert(1)', 'pesi_field_e' => 'kaputt']);
+ok('ungültige Kontextfelder lehnen gesamten Save ab', $typedBad['type'] === 'error');
+ok('ungültige Kontextfelder lassen Datei unverändert', file_get_contents($p) === $beforeTyped);
+$typedGood = _pesi_save($p, $typedFields, ['pesi_field_u' => 'https://example.org/termin', 'pesi_field_e' => 'neu@example.org']);
+ok('gültige Kontextfelder gemeinsam gespeichert', $typedGood['type'] === 'success');
+ok('globale Inhaltsdatei enthält Stammdaten', count(_pesi_parse($root . '/pesi-content.php')) >= 5);
+
 // ── 2026-07-31 #1: Linter-Verfügbarkeit vs. echter Syntaxfehler
 grp('Linter — Exitcode != 0 ist kein Beweis für einen Syntaxfehler');
 $good = page("<?php\n\$x = 1;\n");
@@ -150,13 +174,13 @@ ok('fehlendes Binary → null (nicht false)',
     })(),
     'sonst würde jeder Save auf solchen Hosts zurückgerollt');
 
-// Rollback greift bei echtem Syntaxfehler, aber nicht bei fehlendem Linter
+// Ein echter Syntaxfehler wird vor dem Live-Austausch abgelehnt.
 $p = page("<?php\n\$x = pesi('f', 'GUT', 'text', 'L');\n");
 _pesi_backup($p);
 $r = _pesi_commit($p, "<?php\n\$x = ;;; kaputt\n");
-ok('Rollback bei echtem Syntaxfehler', $r !== null && $r['type'] === 'error');
-ok('Datei nach Rollback wieder gültig', _pesi_lint($p) === true);
-ok('Inhalt nach Rollback wiederhergestellt', strpos(file_get_contents($p), 'GUT') !== false);
+ok('Syntaxfehler wird vor Live-Austausch abgelehnt', $r !== null && $r['type'] === 'error');
+ok('Live-Datei bleibt gültig', _pesi_lint($p) === true);
+ok('Live-Inhalt bleibt unverändert', strpos(file_get_contents($p), 'GUT') !== false);
 
 // ── 2026-07-31 #2: PI und Kommentare im Sanitizer ────────────
 grp('Sanitizer — Processing-Instructions und Kommentare');
@@ -212,12 +236,33 @@ $p = page("<?php\n\$x = pesi('f', 'A', 'text', 'L');\n");
 $hash = hash('sha256', file_get_contents($p));
 ok('passender Hash → Commit läuft durch',
     _pesi_commit($p, "<?php\n\$x = pesi('f', 'B', 'text', 'L');\n", $hash) === null,
-    'fopen-Modus muss c+ sein, nicht c — c ist write-only und der Hash-Vergleich '
-    . 'liest dann immer den leeren String');
+    'der Hash wird innerhalb des stabilen Sidecar-Locks erneut geprüft');
 ok('Wert wurde geschrieben', (_pesi_parse($p)['f']['value'] ?? null) === 'B');
 $stale = _pesi_commit($p, "<?php\n\$x = pesi('f', 'C', 'text', 'L');\n", hash('sha256', 'ganz andere Datei'));
 ok('falscher Hash → abgelehnt', $stale !== null && $stale['type'] === 'error');
 ok('Datei nach Ablehnung unverändert', (_pesi_parse($p)['f']['value'] ?? null) === 'B');
+
+$p = page("<?php ?>\n<!-- pesi:item team:1 -->\n<article><?= pesi('team_1_name', 'Anna', 'text', 'Name') ?></article>\n<!-- /pesi:item -->\n");
+$opened = hash('sha256', (string)file_get_contents($p));
+file_put_contents($p, (string)file_get_contents($p) . "<!-- extern geändert -->\n");
+$stale = _pesi_block_op($p, 'team', 1, 'add', $opened);
+ok('veraltete Blockaktion wird abgelehnt', $stale['type'] === 'error');
+ok('veraltete Blockaktion verändert keine Struktur', count(_pesi_block_parse($p)) === 1);
+
+$p = page("<?php ?>\n<!-- pesi:toggle urlaub -->Hinweis<!-- /pesi:toggle -->\n");
+$opened = hash('sha256', (string)file_get_contents($p));
+file_put_contents($p, (string)file_get_contents($p) . "<!-- extern geändert -->\n");
+$stale = _pesi_toggle_op($p, 'urlaub', $opened);
+ok('veralteter Sichtbarkeitsschalter wird abgelehnt', $stale['type'] === 'error');
+ok('Sichtbarkeit bleibt unverändert', _pesi_toggle_parse($p) === ['urlaub' => true]);
+
+$p = page("<?php\n\$x = pesi('f', 'A', 'text', 'L');\n");
+_pesi_backup($p);
+$opened = hash('sha256', (string)file_get_contents($p));
+file_put_contents($p, "<?php\n\$x = pesi('f', 'B', 'text', 'L');\n");
+$stale = _pesi_restore($p, $opened);
+ok('veraltete Wiederherstellung wird abgelehnt', $stale['type'] === 'error');
+ok('neuerer Live-Stand bleibt erhalten', (_pesi_parse($p)['f']['value'] ?? null) === 'B');
 
 // ── Strukturelle Round-Trips (Blöcke) ────────────────────────
 grp('Blöcke — add / duplicate / reorder / delete');
@@ -328,6 +373,12 @@ _pesi_cleanup_old($site, [
 ], ['index.php' => 'Start']);
 ok('fest im Markup referenziertes Bild bleibt', is_file($site . '/uploads/benutzt.jpg'));
 ok('wirklich verwaistes Bild gelöscht', !is_file($site . '/uploads/verwaist.jpg'));
+
+file_put_contents($site . '/uploads/aus-backup.jpg', 'x');
+file_put_contents($site . '/index.php.pesi-backup.1',
+    "<?php ?>\n<?= pesi('altbild', '/uploads/aus-backup.jpg', 'image', 'Altes Bild') ?>\n");
+_pesi_cleanup_old($site, ['pesi_field_altbild' => '/uploads/aus-backup.jpg'], ['index.php' => 'Start']);
+ok('von Sicherung referenziertes Bild bleibt wiederherstellbar', is_file($site . '/uploads/aus-backup.jpg'));
 
 // Nach einem gescheiterten Save muss das frisch hochgeladene Bild wieder weg —
 // sonst bliebe es unreferenziert im Upload-Ordner liegen, und bei Personenfotos
@@ -481,40 +532,41 @@ ok('erste IP weiterhin gesperrt', _pesi_throttle_check() > 0);
 _pesi_throttle_reset();
 ok('erfolgreicher Login löscht den Zähler', _pesi_throttle_check() === 0);
 
+$_SESSION = [];
+ok('frische Session ist nicht gesperrt', _pesi_session_throttle_check() === 0);
+_pesi_session_throttle_fail();
+ok('Session-Bremse greift auch ohne Registerdatei', _pesi_session_throttle_check() > 0);
+ok('Session-Bremse zählt Fehlversuche', ($_SESSION['pesi_fail'] ?? 0) === 1);
+_pesi_session_throttle_reset();
+ok('erfolgreicher Login setzt auch Session-Bremse zurück', _pesi_session_throttle_check() === 0);
+
 $raw = (string)file_get_contents($thr);
 ok('Register enthält keine Klartext-IP', strpos($raw, '203.0.113.7') === false, $raw);
 ok('Register ist gültiges JSON', is_array(json_decode($raw, true)), $raw);
 @unlink($thr);
 
 // ── Teilschreibung: Rollback statt halber Seite ──────────────
-grp('Commit — unvollständiger Schreibvorgang');
+grp('Commit — atomarer Live-Austausch');
 $p = page("<?php\n\$x = pesi('f', 'ORIGINAL', 'text', 'L');\n");
 _pesi_backup($p);
 ok('Backup wurde vollständig angelegt',
     is_file($p . '.pesi-backup.1') && filesize($p . '.pesi-backup.1') === filesize($p));
-// Echten Syntaxfehler committen → Rollback-Pfad inkl. Meldung prüfen
+// Echten Syntaxfehler committen → Ablehnung inkl. Meldung prüfen
 $r = _pesi_commit($p, "<?php\n\$x = ;;;\n");
-ok('Rollback meldet Fehler', $r !== null && $r['type'] === 'error');
-ok('Meldung ist die Rollback-Meldung, nicht die fatale',
+ok('Temp-Prüfung meldet Fehler', $r !== null && $r['type'] === 'error');
+ok('Meldung ist die sichere Syntax-Meldung',
     $r['msg'] === $GLOBALS['t']['err_php_rollback'], $r['msg']);
-ok('Originalinhalt ist zurück', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
-// _pesi_commit() legt selbst eine Sicherung an, bevor es schreibt — auch wenn
-// gar keine existiert. Vorher konnte ein Aufrufer schreiben, ohne dass es einen
-// Rückweg gab.
+ok('Originalinhalt war durchgehend live', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
+// Ungültige Inhalte werden bereits in der Temp-Datei erkannt. Die Live-Datei
+// bleibt dabei unverändert und ein abgelehnter Versuch verbraucht kein Backup.
 @unlink($p . '.pesi-backup.1');
 @unlink($p . '.pesi-backup.2');
 $r = _pesi_commit($p, "<?php\n\$x = ;;;\n");
-ok('commit sichert von sich aus und rollt zurück',
+ok('commit lehnt ungültige Temp-Datei vor Live-Austausch ab',
     $r !== null && $r['msg'] === $GLOBALS['t']['err_php_rollback'], $r['msg'] ?? '');
-ok('Sicherung existiert danach', is_file($p . '.pesi-backup.1'));
+ok('abgelehnter Stand rotiert keine Sicherung', !is_file($p . '.pesi-backup.1'));
 ok('guter Stand ist wieder da', strpos((string)file_get_contents($p), 'ORIGINAL') !== false);
-
-// Die fatale Meldung bleibt dem Fall vorbehalten, dass wirklich nicht
-// zurückgerollt werden kann.
-$p2 = page("<?php\n\$x = 1;\n");
-@unlink($p2 . '.pesi-backup.1');
-ok('_pesi_rollback ohne Sicherung → fatale Meldung',
-    _pesi_rollback($p2, 'egal')['msg'] === $GLOBALS['t']['err_write_fatal']);
+ok('keine Temp-Datei bleibt liegen', count(glob($p . '.pesi-tmp-*')) === 0);
 
 // ── Sicherung rotiert nur bei echtem Schreibvorgang ──────────
 // Sonst schoben zwei folgenlose Klicks auf „Speichern" die echte Vorversion
@@ -532,6 +584,8 @@ _pesi_backup($p);
 file_put_contents($p, "<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n");
 ok('Ausgangslage V2/V1/V0',
     versionOf($p) . versionOf($p . '.pesi-backup.1') . versionOf($p . '.pesi-backup.2') === 'V2V1V0');
+ok('atomare Backup-Rotation hinterlässt keine Temp-Datei',
+    count(glob(dirname($p) . '/*.pesi-tmp-*')) === 0);
 
 $r = _pesi_save($p, _pesi_parse($p), ['pesi_field_f' => 'V2']);   // nichts geändert
 ok('Save ohne Änderung meldet „nichts zu speichern"', $r['type'] === 'info', $r['msg']);
@@ -615,7 +669,7 @@ ok('keine ungenutzten Keys', !$dead, implode(', ', $dead));
 // Jede Meldung, die die Kundin nicht selbst beheben kann, trägt einen Code.
 grp('i18n — Fehlercodes');
 foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
-          'err_file_missing', 'err_marker', 'err_write', 'err_write_fatal',
+          'err_file_missing', 'err_marker', 'err_write',
           'up_err_dir', 'up_err_dir_invalid',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'warn_default_pw',
           'warn_no_exec'] as $k) {

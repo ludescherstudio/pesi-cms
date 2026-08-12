@@ -2,7 +2,9 @@
 # Backups are byte-for-byte copies of your page source. Committing one to a
 # public repo leaks the full PHP source including PESI_PASSWORD.
 *.pesi-backup.*
-.pesi-throttle
+.pesi-throttle*
+*.pesi-lock
+*.pesi-tmp-*
 
 # Client uploads belong to the site, not to the pesi package.
 uploads/

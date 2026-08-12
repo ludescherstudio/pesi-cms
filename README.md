@@ -6,11 +6,11 @@
 > *Pesi* (Swahili) — lightweight, effortless.
 > **pesi CMS** is exactly that: a featherweight system to edit your website. No database. No bloated menus. Just your content, incredibly easy to manage.
 
-**An inline CMS for PHP — three files, one password, done.**
+**An inline CMS for PHP — three PHP files, one password, done.**
 
 No MySQL. No Node.js. No Docker. No external database. No state-sync headaches between CMS and FTP. The PHP file is always the single source of truth.
 
-Built for developers who maintain static client websites and want the client to edit their own text — without spinning up a full WordPress stack. Works on any shared host with PHP 7.4+.
+Built for developers who maintain static client websites and want the client to edit their own content — without spinning up a full WordPress stack. Works on shared hosting with PHP 8.2+.
 
 ---
 
@@ -23,7 +23,7 @@ Built for developers who maintain static client websites and want the client to 
 | Edits written to source     | ✅             | ❌              | ❌              | ❌              |
 | Shared hosting              | ✅             | ✅              | ⚠️              | ✅              |
 | Install time                | ~5 min         | 30+ min         | 30+ min         | 20+ min         |
-| Code size                   | ~3 files       | 2,000+ files    | 1,000+ files    | 500+ files      |
+| Code size                   | 3 PHP files    | 2,000+ files    | 1,000+ files    | 500+ files      |
 
 The difference from everything else: **no sync problems.** What you see in the PHP file via FTP is exactly what the client last saved. No parallel database, no JSON files alongside, no "which version is current?"
 
@@ -35,8 +35,9 @@ not grow into one. Four rules hold, and features that break them are rejected:
 - **No database, no external store.** Content lives in the page's PHP source.
 - **You design the markup; the client only edits content.** pesi never generates
   layout and never lets a client create pages, menus or structure through a UI.
-- **The safety net is not optional.** Every write is preceded by a rotating
-  backup and followed by `php -l`, with automatic rollback on a syntax error.
+- **The safety net is not optional.** Every write is completed and checked with
+  `php -l` in a temporary file before a rotating backup is made and the live
+  page is atomically replaced.
 - **Self-contained.** No CDN, no Composer, no build step. Quill is vendored.
 
 If something needs its own management UI, its own URLs, or has to scale to
@@ -47,25 +48,27 @@ pesi handles small, page-bound content, and stops there.
 
 ## What's in this repository
 
-**Two files are the product. Everything else is documentation.**
+**Three PHP files are the product. Everything else is documentation.**
 
 | File | What it is |
 |------|------------|
 | **`pesi.php`** | The dashboard your client logs into. Upload as-is, never edit. |
 | **`pesi-core.php`** | Settings + the `pesi()` helper. Upload it, then change the settings at the top — password, brand name, page list. |
+| **`pesi-content.php`** | Shared practice details such as address, phone, email and booking URL. They appear as “Stammdaten” in the dashboard. |
 | `README.md` | You are reading it. Continue with *Installation* right below. |
 | `pesi-agent.md` | The same installation, written for an AI coding agent (Claude Code, Cursor, …). Point your agent at this file and it does the integration for you. Ignore it if you install by hand. |
 | `SECURITY.md` | How to report a security problem. |
 | `THIRD-PARTY.md` | The licence notice for the bundled Quill editor. Ships with every copy you pass on. |
 | `LICENSE` | MIT. |
 
-**Only the two `.php` files belong on your webspace.** The `.md` files stay here on GitHub.
+**Only these three `.php` files belong on your webspace.** The `.md` files stay here on GitHub.
 
 After installation your webroot looks like this:
 
 ```
 your-webroot/
 ├── pesi-core.php   → Config + inline helper (included by every editable page)
+├── pesi-content.php → Shared content used across multiple pages
 ├── pesi.php        → Dashboard (served at /pesi and /cms)
 └── [pages].php     → Your existing pages
 ```
@@ -78,11 +81,12 @@ Plus two small additions to your existing `.htaccess` and `robots.txt` — which
 
 ### Step 1 — Upload the files
 
-Upload `pesi-core.php` and `pesi.php` via FTP into your web root (the same folder that contains `index.php`):
+Upload `pesi-core.php`, `pesi-content.php` and `pesi.php` via FTP into your web root (the same folder that contains `index.php`):
 
 ```
 your-webroot/
 ├── pesi-core.php
+├── pesi-content.php
 ├── pesi.php
 ├── index.php
 ├── impressum.php
@@ -165,7 +169,7 @@ What each line does:
 | `RewriteRule ^pesi$ pesi.php [L]`                 | Maps `/pesi` → `pesi.php` (the dashboard URL)                        |
 | `RewriteRule ^cms$ pesi.php [L]`                  | Second, optional URL `/cms`                                          |
 | `<Files "pesi-core.php">…`                        | Blocks web access to your password                                   |
-| `<FilesMatch "\.pesi-">…`                         | Blocks pesi's internal files (`.pesi-backup.1/.2`, `.pesi-throttle`) |
+| `<FilesMatch "\.pesi-">…`                         | Blocks pesi's internal files (backups, locks, temporary candidates and login throttle) |
 
 > **⚠ Using an older copy of these instructions?** Earlier versions anchored the
 > pattern as `^\.pesi-`. `<FilesMatch>` matches the *file name*, and a backup is
@@ -335,7 +339,7 @@ define('LANG', 'de'); // 'de' = German, 'en' = English
 |---|------------|---------------------------------------------------------------------------------------------------------|
 | 1 | `$id`      | Unique field ID per file. snake_case, `[a-z0-9_]` only                                                  |
 | 2 | `$default` | The content. Until the client saves something, this text is shown. Once saved, the client's text replaces the default directly in the source file. |
-| 3 | `$type`    | Field type: `text`, `textarea`, or `richtext`                                                           |
+| 3 | `$type`    | Field type: `text`, `textarea`, `richtext`, `image`, `url`, `email`, or `tel`                            |
 | 4 | `$label`   | Display name in the dashboard. **Keep it human-friendly** — this is what the client sees.               |
 
 ### Field types
@@ -352,6 +356,22 @@ define('LANG', 'de'); // 'de' = German, 'en' = English
 
 ```php
 <p><?= pesi('disclaimer', 'The content of this website has been prepared with care.', 'textarea', 'Liability notice') ?></p>
+```
+
+**`url`, `email`, `tel`** — Context-safe contact and link values. Invalid values reject the complete save, so another field is never published while a contact value failed validation.
+
+```php
+<a href="<?= pesi('booking_url', '/kontakt', 'url', 'Booking link') ?>">Book appointment</a>
+<a href="mailto:<?= pesi('email', 'praxis@example.com', 'email', 'Email') ?>">Email us</a>
+<a href="tel:<?= pesi('phone', '+43 123 456789', 'tel', 'Phone') ?>">Call us</a>
+```
+
+`url` accepts `http://`, `https://`, root-relative paths such as `/kontakt`, query links and `#anchors`. Other schemes and protocol-relative URLs are rejected. Do not put a normal `text` field into `href`; HTML escaping alone does not make a URL safe.
+
+**`image`** — Page-bound image upload with real MIME and size validation. The path is stored in the PHP source and is safe to use in `src`.
+
+```php
+<img src="<?= pesi('portrait', '/uploads/portrait.jpg', 'image', 'Portrait') ?>" alt="">
 ```
 
 **`richtext`** — WYSIWYG editor (Quill, bundled inline — no CDN). For formatted blocks with bold, lists, links, multiple paragraphs. Output is automatically wrapped in `<div class="pesi-richtext">` with sensible default styles for lists and links.
@@ -399,6 +419,19 @@ PESI, 'richtext', 'Label') ?>
 - **Keep labels human.** Not `hero_cta_text`, but *"Main button label"*.
 - **Never rename IDs once the client has edited content.** A renamed ID makes the previously saved content invisible to the dashboard.
 
+### Shared practice details
+
+`pesi-content.php` is an ordinary editable pesi source file, registered as **Stammdaten**. Its values are loaded automatically with `pesi-core.php` and can be reused on any page:
+
+```php
+<h1><?= pesi_global('practice_name') ?></h1>
+<address><?= pesi_global('address') ?></address>
+<a href="mailto:<?= pesi_global('email') ?>"><?= pesi_global('email') ?></a>
+<a href="<?= pesi_global('booking_url') ?>">Book appointment</a>
+```
+
+Edit the field list in `pesi-content.php` to match the site, then reuse the same key everywhere. This prevents address, phone or booking details from drifting between header, footer, contact page and imprint.
+
 ---
 
 ## What should I replace with `pesi()`?
@@ -419,11 +452,11 @@ PESI, 'richtext', 'Label') ?>
 
 **Do not replace (structure, not content):**
 - Navigation / menu structure
-- HTML attributes (`class`, `id`, `href`, `src`, `alt`, `style`)
+- HTML attributes (`class`, `id`, `alt`, `style`). For deliberately editable `href`/`src` values use the dedicated `url`, `email`, `tel`, or `image` type exactly as documented above.
 - PHP logic, loops, conditions, variables
 - CSS and JavaScript
 - `<meta>` tags
-- Image paths (pesi has no image upload — images stay an FTP job)
+- Decorative image paths that are not meant to be page-bound content
 - Dynamic values like `date('Y')`
 - Structural HTML tags themselves (`<nav>`, `<header>`, `<footer>`)
 - Existing `require` / `include` statements
@@ -455,15 +488,16 @@ twice, during setup. The interface is designed for the first group, and the
 second group gets what it needs one click away:
 
 - **Messages name the consequence, never the mechanism.** Not "PHP error
-  detected — rolled back", but "Your page is unchanged — nothing is broken".
+  detected — commit rejected", but "Your page is unchanged — nothing is broken".
 - **Anything the client can fix herself** (image too large, wrong format) says
   exactly that, with no error code — she does not need anyone.
 - **Anything she cannot fix** carries a short code and asks her to pass it on.
   She stays in control, reads you four characters, and never sees a stack of
   jargon. Codes are listed below.
-- **Setup problems are not her problem.** A default password or a missing
-  `php -l` shows up as one calm collapsed line ("nothing for you to do"), with
-  the technical detail inside for whoever reads it.
+- **Setup problems are not her problem.** A missing `php -l` shows up as one
+  calm collapsed line ("nothing for you to do"), with the technical detail
+  inside for whoever reads it. The shipped password fails closed and shows an
+  installation message before anyone can sign in.
 - **Field IDs and types are hidden** behind the *Technical view* toggle in the
   top bar. It remembers its state per browser, so switch it on once and it
   stays on for you.
@@ -475,7 +509,7 @@ install does. Both are your job, not the client's.
 
 | Code | What happened | What to do |
 |------|---------------|------------|
-| `S1` | A save produced a page PHP refused to parse; pesi rolled it back | Check the field content that was being saved; the page itself is intact |
+| `S1` | A candidate version did not parse as valid PHP and was rejected before publishing | Check the field content; the live page itself is intact |
 | `S2` | A field value contained a pesi structure marker (`pesi:item`, `pesi:toggle`, `if (false):`) and was rejected before writing | Remove that text from the field, or escape it in the template |
 | `S3` | A repeatable entry referenced by the dashboard was not found in the source | Usually a stale browser tab — reload. If it persists, the `pesi:item` markers were edited by hand |
 | `S4` | A visibility section was not found in the source | Same as `S3`, for `pesi:toggle` markers |
@@ -486,11 +520,9 @@ install does. Both are your job, not the client's.
 | `T4` | A page listed in `$PESI_PAGES` does not exist | Fix the path in `pesi-core.php` or restore the file |
 | `T5` | The upload folder is not writable | `chmod` the folder named in the message |
 | `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
-| `T7` | `php -l` cannot run, so broken saves are not rolled back automatically | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
+| `T7` | `php -l` cannot run, so pesi cannot verify PHP syntax before publishing | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
 | `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
-| `T9` | The page could not be written completely — almost always a full disk or an exhausted hosting quota. pesi restored the previous state | Free up space or raise the quota, then have the client save again |
-| `T10` | A write failed **and** the restore from `.pesi-backup.1` failed too. The page on the server may be incomplete | Act immediately: restore the page from `.pesi-backup.1`/`.2` or your own backup by hand |
-| `T11` | `PESI_SYNTAX_CHECK` is on while `PESI_BACKUP_ENABLED` is off — detection without recovery | Switch backups on, or accept knowingly that a broken save stays broken |
+| `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
 | `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value | Use single quotes: `pesi('id', 'Text', …)`. Escape apostrophes as `\'` |
 
@@ -515,19 +547,19 @@ cannot silently blank out a label. Updating pesi stays a file swap.
 ## Security
 
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
-- `.pesi-*` files (rotated backups and the login-throttle register) are blocked via `.htaccess`. **On Nginx you must add the equivalent `deny` rules yourself** — it never reads `.htaccess`, and a backup file is a byte-for-byte copy of that page's source. (The password itself lives in `pesi-core.php`, which pages only `require`, so a page backup does not contain it — but the source disclosure alone is reason enough to block these files.)
+- `.pesi-*` files (rotated backups, write locks, short-lived candidates and the login-throttle register) are blocked via `.htaccess`. **On Nginx you must add the equivalent `deny` rules yourself** — it never reads `.htaccess`; backups and candidates contain page source. (The password itself lives in `pesi-core.php`, which pages only `require`, so a page backup does not contain it — but the source disclosure alone is reason enough to block these files.)
 - The dashboard is password-protected (session-based); `PESI_PASSWORD` accepts a `password_hash()` value, which is what you should use
 - Failed logins are slowed down twice: per session, and per client in a small `.pesi-throttle` file so that discarding cookies does not reset the delay
-- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS)
-- Session ID is regenerated on login to prevent session fixation
+- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS), an inactivity timeout and an absolute lifetime
+- Session ID is regenerated on login; changing `PESI_PASSWORD` also revokes existing sessions
 - CSRF tokens protect every form submission
-- `text`, `textarea`, and `image` output is HTML-escaped; image URLs reject script/data-style schemes
+- `text`, `textarea`, `url`, `email`, `tel`, and `image` output is HTML-escaped; context-specific types additionally validate their value before the complete save
 - `richtext` output is sanitized through a small server-side HTML allowlist before it is saved or rendered
 - Image uploads are checked by real MIME type, size, and extension; upload directories must stay inside the project root. The type is read from the file's content, never from its name — via `finfo` where available, otherwise `getimagesize()`; if neither can identify the file, the upload is rejected rather than trusted
-- Writes are verified: a partial write (full disk, exhausted quota) restores the previous state instead of leaving a half-written page behind
+- Writes go to a same-directory temporary file, are flushed and linted there, then atomically replace the live page; a failed write never truncates the live page
 - Before every save, a rotated backup is created (`page.php.pesi-backup.1` = last save, `.2` = previous)
-- After saving, `php -l` runs automatically — on a syntax error, pesi rolls back from `.pesi-backup.1`
-- File locking plus a file mtime/hash check prevents stale overwrites
+- Before publishing, `php -l` runs against the temporary file — invalid PHP never reaches the live path
+- A stable sidecar lock plus the full file hash from the opened form prevents stale overwrites, including changes within the same second
 
 **Important:** always run pesi over HTTPS. The login password is sent via POST — over plain HTTP it would be readable in transit. Most hosts offer free SSL certificates; make sure yours is active.
 
@@ -552,11 +584,15 @@ define('BRAND_NAME',        'My Project');     // Shown in dashboard header and 
 define('BRAND_COLOR',       '#c47a2a');        // Any CSS hex color — dashboard accent
 define('BRAND_LOGO',        '');               // Path to logo image — empty = pesi logo
 define('LANG',              'de');             // 'de' or 'en'
-define('PESI_BACKUP_ENABLED', true);           // Backup before every save
-define('PESI_SYNTAX_CHECK',   true);           // PHP lint check after save
+define('PESI_BACKUP_ENABLED', true);           // Two technical recovery copies
+define('PESI_SYNTAX_CHECK',   true);           // PHP lint before publishing
+define('PESI_SESSION_IDLE',   30 * 60);        // Sign out after inactivity
+define('PESI_SESSION_MAX',    12 * 60 * 60);   // Absolute session lifetime
+define('PESI_GLOBALS_FILE',   'pesi-content.php');
 
 $PESI_PAGES = [
-    'index.php'  => 'Startseite',              // file => sidebar label
+    PESI_GLOBALS_FILE => 'Stammdaten',
+    'index.php'       => 'Startseite',          // file => sidebar label
 ];
 ```
 
@@ -564,7 +600,7 @@ $PESI_PAGES = [
 
 ## FTP workflow
 
-The nice thing about pesi: you can keep editing via FTP in parallel without anything going out of sync:
+The PHP file remains the single source of truth, so developer changes and dashboard content never have to be synchronized between two stores. Do not edit the same file in FTP and the dashboard at the same time: pesi detects a changed file hash and asks the editor to reload instead of overwriting the newer version.
 
 - **Add a new field:** insert a `pesi()` call where you want it — shows up in the dashboard immediately.
 - **Remove a field:** delete the `pesi()` call — disappears from the dashboard.
@@ -588,7 +624,7 @@ What you need to hand over:
 Per field, the client sees:
 1. A **label** ("Company name", "Liability notice", …) — big and clear
 2. The **field type** as a small badge — informational
-3. The matching input — text, textarea, or Quill richtext editor
+3. The matching input — text, textarea, validated link/contact input, image upload, or Quill richtext editor
 
 The client **can't break anything**: no access to code, no HTML in `text`/`textarea` fields, and even in `richtext`, broken HTML only affects that single field's rendering.
 
@@ -614,7 +650,7 @@ Your `.htaccess` has an over-aggressive PHP-stripping rule. See Step 3 — repla
 
 ### Saved text is gone, page shows the old default again
 
-Check if a `.pesi-backup.1` file exists next to the PHP file. After every save, pesi runs `php -l` — on a syntax error in the saved content, it rolls back automatically from `.pesi-backup.1`. This typically happens with broken HTML in a `richtext` field. The previous backup is kept as `.pesi-backup.2`.
+Check whether a `.pesi-backup.1` file exists next to the PHP file. Before publishing, pesi runs `php -l` against a temporary candidate; invalid PHP is rejected while the live page stays unchanged. `.pesi-backup.1` and `.2` remain as technical recovery copies for other unexpected problems.
 
 ### A field doesn't show up in the dashboard
 
@@ -631,10 +667,10 @@ Your site's CSS reset removes default list and link styles. pesi automatically w
 ## Honest limitations
 
 - **No media library** — image upload only swaps page-bound `image` fields; decorative assets stay an FTP job
-- **Replaced images are deleted**, and pesi only looks at the pages listed in `$PESI_PAGES` to decide whether a file is still in use. It checks both the `pesi()` field values and the raw markup of those pages, but it cannot see includes, partials or templates that are not registered pages. If you reference an uploaded file from an unregistered file, register that file too or keep the asset outside `PESI_UPLOAD_DIR`
+- **Replaced images are deleted only after the current page and both technical backups no longer reference them.** pesi checks the files listed in `$PESI_PAGES`, their backups and their raw markup, but it cannot see includes, partials or templates that are not registered pages. If you reference an uploaded file from an unregistered file, register that file too or keep the asset outside `PESI_UPLOAD_DIR`
 - **Toggles must not be nested** — a `pesi:toggle` inside another one is rejected; the dashboard disables switching and says so
 - **No multi-user system** — one password for everyone
-- **No version history.** pesi keeps two rotating backups per page and the
+- **No version history.** pesi keeps two rotating technical safety copies per page and the
   dashboard reaches exactly one of them: "↩ Letzte Version" restores
   `.pesi-backup.1`, and because the current state is rotated into the backup
   first, clicking it again goes forward. That covers the realistic mistake —
@@ -651,7 +687,7 @@ Your site's CSS reset removes default list and link styles. pesi automatically w
 
 ## Requirements
 
-- PHP 7.4+
+- PHP 8.2+
 - Apache with `.htaccess` support — or, on Nginx, the equivalent `deny` rules from Step 3
 - Web server write access to your editable PHP files (standard on all major hosts)
 - HTTPS (strongly recommended)
