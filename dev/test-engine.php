@@ -18,7 +18,8 @@
  *
  * Abgedeckt sind die vier historischen Traps aus dem 2026-07-Audit plus die
  * drei Befunde aus dem 2026-07-31-Audit (Linter-Erkennung, PI/Kommentare im
- * Sanitizer, Struktur-Marker in Feldwerten). Wer Saver, Sanitizer oder die
+ * Sanitizer, Struktur-Marker in Feldwerten) und die beiden Befunde der ersten
+ * Kundenintegration (2026-09-04: Quill-2-Listen, Host-Upload-Limits). Wer Saver, Sanitizer oder die
  * strukturellen Features anfasst, lässt das hier vorher und nachher laufen.
  */
 
@@ -127,6 +128,30 @@ foreach ([
     $out = _pesi_sanitize_html($v);
     ok('entschärft ' . $v, !preg_match('/<script|<img|onerror/i', $out), 'raus: ' . $out);
 }
+
+// ── Quill 2: jede Liste kommt als <ol> mit li[data-list], nie als <ul> ──
+// Ohne die Aufteilung wurde aus jeder Aufzählung beim Speichern 1., 2., 3.
+grp('Sanitizer — Quill-2-Listen');
+$ql = '<span class="ql-ui" contenteditable="false"></span>';
+foreach ([
+    "<ol><li data-list=\"bullet\">{$ql}a</li><li data-list=\"bullet\">{$ql}b</li></ol>"
+        => '<ul><li>a</li><li>b</li></ul>',
+    "<ol><li data-list=\"ordered\">{$ql}a</li></ol>"
+        => '<ol><li>a</li></ol>',
+    "<p>x</p><ol><li data-list=\"bullet\">a</li><li data-list=\"bullet\">b</li><li data-list=\"ordered\">c</li></ol>"
+        => '<p>x</p><ul><li>a</li><li>b</li></ul><ol><li>c</li></ol>',
+    "<div><ol><li data-list=\"bullet\">{$ql}a</li></ol></div>"
+        => '<ul><li>a</li></ul>',
+    "<blockquote><ol><li data-list=\"bullet\">a<ol><li data-list=\"bullet\">{$ql}b</li></ol></li></ol></blockquote>"
+        => '<blockquote><ul><li>a<ul><li>b</li></ul></li></ul></blockquote>',
+    '<ul><li>bleibt</li></ul>' => '<ul><li>bleibt</li></ul>',
+    '<ol><li>bleibt</li></ol>' => '<ol><li>bleibt</li></ol>',
+] as $in => $want) {
+    $out = _pesi_sanitize_html($in);
+    ok('Quill-Liste ' . substr($in, 0, 48) . '…', $out === $want, 'raus: ' . $out);
+}
+ok('keine Quill-Reste im Ergebnis',
+    !preg_match('/data-list|ql-ui|contenteditable/', _pesi_sanitize_html("<ol><li data-list=\"bullet\">{$ql}a</li></ol>")));
 
 // ── Trap 4: Steuerzeichen im href-Schema ─────────────────────
 grp('Trap 4 — Steuerzeichen vor dem Schema');
@@ -510,6 +535,43 @@ ok('nicht-hochgeladene Datei wird verweigert (is_uploaded_file)',
     json_encode($r, JSON_UNESCAPED_UNICODE));
 ok('dabei wird nichts verschoben', is_file($png));
 
+// ── Host-Limits: das Hosting deckelt oft unter PESI_UPLOAD_MAX_BYTES ──
+grp('Upload — Host-Limits');
+foreach (['2M' => 2097152, '512K' => 524288, '1G' => 1073741824, '8388608' => 8388608,
+          '1.5M' => 1572864, '0' => 0, '-1' => 0, '' => 0] as $in => $want) {
+    ok('ini_bytes(' . json_encode($in) . ')', _pesi_ini_bytes((string)$in) === $want, 'bekam: ' . _pesi_ini_bytes((string)$in));
+}
+$hostCaps = array_filter([_pesi_ini_bytes((string)ini_get('upload_max_filesize')), _pesi_ini_bytes((string)ini_get('post_max_size'))]);
+$hostMin  = $hostCaps ? min($hostCaps) : PHP_INT_MAX;
+ok('wirksames Limit = min(Konfiguration, Hosting)', _pesi_upload_limit() === min($maxCfg, $hostMin),
+    _pesi_upload_limit() . ' vs ' . min($maxCfg, $hostMin));
+ok('MB-Format ganzzahlig', _pesi_mb(5242880) === '5', _pesi_mb(5242880));
+ok('MB-Format mit Nachkommastelle (DE)', _pesi_mb(1572864) === '1,5', _pesi_mb(1572864));
+$r = _pesi_handle_uploads($imgField, ['pesi_upload_bild' => ['error' => UPLOAD_ERR_INI_SIZE, 'size' => 0, 'name' => 'foto.jpg', 'tmp_name' => '']], [], $scratch);
+ok('vom Hosting abgewiesen → „zu groß", nicht „noch einmal versuchen"',
+    count($r['errors']) === 1 && strpos($r['errors'][0], 'zu groß') !== false, $r['errors'][0] ?? '');
+ok('Meldung nennt das wirksame Limit',
+    strpos($r['errors'][0] ?? '', _pesi_mb(_pesi_upload_limit()) . ' MB') !== false, $r['errors'][0] ?? '');
+ok('POST über post_max_size (verworfen) wird erkannt',
+    _pesi_post_dropped(['REQUEST_METHOD' => 'POST', 'CONTENT_LENGTH' => '9000000'], [], []));
+ok('normaler POST ist kein Fehlalarm',
+    !_pesi_post_dropped(['REQUEST_METHOD' => 'POST', 'CONTENT_LENGTH' => '300'], ['pesi_csrf' => 'x'], []));
+ok('GET ist kein Fehlalarm', !_pesi_post_dropped(['REQUEST_METHOD' => 'GET'], [], []));
+ok('Meldung dazu trägt keinen Code — die Kundin kann selbst ein kleineres Bild wählen',
+    !preg_match('/\(Code/', $GLOBALS['t']['up_err_post_size']));
+
+// ── Zeilenenden: Browser senden CRLF, der Quelltext hat LF ──
+// Sonst ist ein mehrzeiliges Feld beim ersten Speichern „geändert", ohne dass
+// jemand tippte, und CR-Bytes landen in der PHP-Datei.
+grp('Saver — Zeilenenden');
+$p = page("<?php\n\$x = pesi('t', <<<'PESI'\nZeile 1\nZeile 2\nPESI, 'textarea', 'T');\n\$r = pesi('r', <<<'PESI'\n<p>a</p>\n<ul>\n<li>b</li>\n</ul>\nPESI, 'richtext', 'R');\n");
+$r = _pesi_save($p, _pesi_parse($p), ['pesi_field_t' => "Zeile 1\r\nZeile 2", 'pesi_field_r' => "<p>a</p>\r\n<ul>\r\n<li>b</li>\r\n</ul>"]);
+ok('CRLF-Echo eines unberührten Felds ist keine Änderung', $r['type'] === 'info', $r['msg']);
+$r = _pesi_save($p, _pesi_parse($p), ['pesi_field_t' => "Neu 1\r\nNeu 2\rNeu 3"]);
+ok('neuer Wert wird gespeichert', $r['type'] === 'success', $r['msg']);
+ok('und landet mit LF im Quelltext', (_pesi_parse($p)['t']['value'] ?? '') === "Neu 1\nNeu 2\nNeu 3"
+    && strpos((string)file_get_contents($p), "\r") === false);
+
 // ── Brute-Force-Bremse ───────────────────────────────────────
 grp('Login-Bremse');
 $thr = _pesi_throttle_file();   // liegt neben der Engine, also im Scratch
@@ -636,6 +698,21 @@ ok('CSS neutralisiert [hidden] global',
     strpos($src, '[hidden]{display:none!important}') !== false,
     'Regel fehlt — hidden-Elemente können sichtbar bleiben');
 
+// Quill serialisiert das DOM in eigener Form (Listen als <ol> mit data-list,
+// ohne Zeilenumbrüche). Schreibt der Submit-Handler alle Editoren zurück, zählt
+// ein unberührtes Feld bei jedem Speichern als Änderung.
+ok('Richtext wird nur nach Bearbeitung neu serialisiert',
+    strpos($src, "if(qt.has(id)) document.getElementById('h_'+id).value=q.root.innerHTML;") !== false,
+    'Submit-Handler schreibt alle Editoren zurück');
+
+// ── Standard-Markenfarbe muss die eigene Kontrastprüfung bestehen ──
+// Sonst zeigt jede frische Installation ab Tag eins die T12-Diagnose.
+grp('Markenfarbe — Standardwert');
+$ratio = _pesi_contrast('#ffffff', BRAND_COLOR);
+ok('BRAND_COLOR ' . BRAND_COLOR . ' erreicht 4,5:1 auf Weiss', $ratio >= 4.5, sprintf('%.2f:1', $ratio));
+$fb = preg_match_all("/'(#[0-9a-f]{6})'/i", substr($src, strpos($src, '// ── Render'), 600), $fbm) ? array_unique($fbm[1]) : [];
+ok('Fallback-Farbe in pesi.php ist dieselbe', $fb === [BRAND_COLOR] || $fb === [0 => BRAND_COLOR], json_encode($fb));
+
 // ── i18n-Parität ─────────────────────────────────────────────
 grp('i18n — DE/EN');
 $s = _pesi_strings();
@@ -672,7 +749,7 @@ foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
           'err_file_missing', 'err_marker', 'err_write',
           'up_err_dir', 'up_err_dir_invalid',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'warn_default_pw',
-          'warn_no_exec'] as $k) {
+          'warn_no_exec', 'warn_upload_limit'] as $k) {
     foreach (['de', 'en'] as $l) {
         ok("$l/$k trägt einen Code", (bool)preg_match('/\(Code [ST]\d+/', $s[$l][$k]),
             $s[$l][$k]);
