@@ -12,9 +12,9 @@ uploads/
 # Manual pre-change backups
 *.old
 
-# ── Maintainer-only, never published ─────────────────────────
-# Private dev guide: names unreleased sibling projects and internal
-# conventions. Public positioning lives in README.md instead.
+# ── Development files, excluded from the release branch ─────
+# Every pushed branch and its history are public when the repository is
+# public. Ignore rules and export-ignore are not privacy boundaries.
 CLAUDE.md
 AGENTS.md
 
@@ -26,9 +26,23 @@ dev/
 
 # ── Local tooling / editor config ────────────────────────────
 .claude/
+.codex/
+.public-prep/
 .vscode/
 .idea/
 *.code-workspace
+
+# Local credentials and database exports
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sql
+*.sqlite
+*.sqlite3
 
 # ── OS / sync junk ───────────────────────────────────────────
 .DS_Store

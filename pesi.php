@@ -1524,7 +1524,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 /* ───── LOGIN ───── */
 
 .L{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:radial-gradient(ellipse at 30% 40%,<?=$bc?>0f,transparent 60%),var(--bg)}
-/* Karte auf hellem Grund — gleiche Anmutung wie der Login von the shared design */
+/* Login-Karte auf hellem Grund */
 .L-c{width:100%;max-width:340px;animation:up .45s ease-out;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:2rem;box-shadow:0 4px 24px rgba(26,32,44,.06)}
 .L-logo{display:block;height:42px;width:auto;margin-bottom:.15rem}
 .L-c .sub{font-size:.8rem;color:var(--tx2);margin:.25rem 0 2rem}

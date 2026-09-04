@@ -41,9 +41,10 @@ site/
 └── [page].php      # Editable pages
 ```
 
-**Upload only those files.** Everything else in the pesi repository — every
-`*.md` file and `LICENSE` — is documentation and has no place on a customer
-webspace. Copy `pesi.php`, `pesi-core.php` and `pesi-content.php`, nothing more.
+**Serve only those files.** Copy `pesi.php`, `pesi-core.php` and
+`pesi-content.php` into the web root. Include `LICENSE` and `THIRD-PARTY.md`
+in every customer delivery, for example alongside the installation package
+outside the public web root. The installation guides need not be uploaded.
 
 ## The pesi() function
 

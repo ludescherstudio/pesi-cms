@@ -11,9 +11,10 @@ LICENSE text eol=lf
 # Keep diffs readable by not attempting to merge it.
 pesi.php merge=binary linguist-vendored=false
 
-# Maintainer-only files must not leak into GitHub source archives.
+# Keep development files out of install archives. They remain visible in Git.
 CLAUDE.md export-ignore
 .claude export-ignore
 .claude/** export-ignore
 dev export-ignore
 dev/** export-ignore
+.public-prep export-ignore

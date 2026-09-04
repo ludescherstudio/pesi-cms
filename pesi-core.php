@@ -4,7 +4,8 @@
 
 // ── Config ───────────────────────────────────────────────────
 
-// Admin-Passwort (Plaintext). Vor Production ein starkes Passwort setzen.
+// Admin-Passwort (password_hash() empfohlen, Plaintext unterstützt).
+// Der Demo-Wert sperrt die Anmeldung. Vor Production ein starkes Passwort setzen.
 define('PESI_PASSWORD', 'demo1234');
 define('BRAND_NAME',  'Meine Website');
 define('BRAND_COLOR', '#a3611b');          // beliebiger Hex-Wert; weisse Schrift braucht 4,5:1 (Diagnose T12)
@@ -106,7 +107,7 @@ if (!function_exists('pesi')) {
      * würde beim Speichern 1., 2., 3. Darum vorher nach Art in echte <ul>/<ol>
      * aufteilen. Rückgabe: die neu eingefügten Listen (leer = nichts zu tun).
      * Der Aufrufer muss sie selbst säubern: seine Kindliste ist ein Snapshot
-     * von vorher, die neuen Knoten sähe er sonst nie (Trap 3 in CLAUDE.md).
+     * von vorher, die neuen Knoten sähe er sonst nie.
      */
     function _pesi_split_quill_list(DOMElement $list): array {
         $own  = strtolower($list->nodeName);
