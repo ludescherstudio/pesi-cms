@@ -6,6 +6,7 @@
  *   <?= pesi_global('practice_name') ?>
  *   <a href="mailto:<?= pesi_global('email') ?>"><?= pesi_global('email') ?></a>
  *   <a href="<?= pesi_global('booking_url') ?>">Termin vereinbaren</a>
+ *   <address><?= nl2br(pesi_global('address')) ?></address>   (Zeilenumbrüche bleiben so erhalten)
  */
 if (!function_exists('pesi')) require_once __DIR__ . '/pesi-core.php';
 

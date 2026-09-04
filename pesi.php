@@ -175,6 +175,14 @@ if ($auth) {
                || isset($_POST['pesi_restore']);
     $postedHash = (string)($_POST['pesi_hash'] ?? '');
 
+    // Upload über post_max_size: PHP hat den ganzen POST verworfen. Ohne diese
+    // Meldung lädt die Seite kommentarlos neu und die Kundin glaubt, sie hätte
+    // gespeichert.
+    if ($page && _pesi_post_dropped($_SERVER, $_POST, $_FILES)) {
+        $msg = sprintf($t['up_err_post_size'], _pesi_mb(_pesi_upload_limit()));
+        $msgType = 'error';
+    }
+
     // Block-Operation (Duplizieren / Löschen / Sortieren)
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_block']) && $page) {
         if (!$csrfOk) {
@@ -525,7 +533,11 @@ function _pesi_save(string $file, array $fields, array $post, ?string $expectedH
     foreach ($fields as $id => $fld) {
         $k = 'pesi_field_' . $id;
         if (!isset($post[$k])) continue;
-        $nv = (string)$post[$k];
+        // Formulare liefern Zeilenumbrüche als CRLF, der Quelltext hat LF.
+        // Ohne Angleich zählte jedes mehrzeilige Feld beim ersten Speichern
+        // als Änderung, obwohl niemand es angefasst hat — und die Datei bekäme
+        // CR-Bytes mitten in die Nowdocs.
+        $nv = str_replace(["\r\n", "\r"], "\n", (string)$post[$k]);
         if (($fld['type'] ?? '') === 'richtext' && function_exists('_pesi_sanitize_html')) {
             $nv = _pesi_sanitize_html($nv);
         }
@@ -1019,6 +1031,53 @@ function _pesi_slug(string $name): string {
 }
 
 /**
+ * php.ini-Größenangabe ("2M", "512K", "1G", "8388608") in Bytes.
+ * 0 = kein Limit (leer, 0 oder -1).
+ */
+function _pesi_ini_bytes(string $v): int {
+    $v = trim($v);
+    if ($v === '' || $v === '0' || $v === '-1') return 0;
+    $n = (float)$v;
+    switch (strtolower(substr($v, -1))) {
+        case 'g': $n *= 1024;   // fällt durch
+        case 'm': $n *= 1024;
+        case 'k': $n *= 1024;
+    }
+    return (int)$n;
+}
+
+/**
+ * Wirksame Upload-Obergrenze: PESI_UPLOAD_MAX_BYTES, gedeckelt durch das
+ * Hosting (upload_max_filesize, post_max_size). Viele Hosts stehen auf 2 MB,
+ * ein Handyfoto hat 3–8 — die Kundin muss die Zahl sehen, die wirklich gilt.
+ */
+function _pesi_upload_limit(): int {
+    $limit = defined('PESI_UPLOAD_MAX_BYTES') ? (int)PESI_UPLOAD_MAX_BYTES : 5 * 1024 * 1024;
+    foreach (['upload_max_filesize', 'post_max_size'] as $k) {
+        $b = _pesi_ini_bytes((string)ini_get($k));
+        if ($b > 0 && $b < $limit) $limit = $b;
+    }
+    return $limit;
+}
+
+// Bytes als MB für Meldungen: "5", "1,5" (DE) bzw. "1.5" (EN).
+function _pesi_mb(int $bytes): string {
+    $s = rtrim(rtrim(number_format($bytes / 1048576, 1, '.', ''), '0'), '.');
+    return ($GLOBALS['lang'] ?? 'de') === 'de' ? str_replace('.', ',', $s) : $s;
+}
+
+/**
+ * Übersteigt ein Upload post_max_size, verwirft PHP den kompletten POST: die
+ * Seite lädt ohne jede Meldung neu, Textänderungen sind weg. Erkennbar an
+ * einem POST mit Body, aber ohne ein einziges geparstes Feld.
+ */
+function _pesi_post_dropped(array $server, array $post, array $files): bool {
+    return ($server['REQUEST_METHOD'] ?? '') === 'POST'
+        && $post === [] && $files === []
+        && (int)($server['CONTENT_LENGTH'] ?? 0) > 0;
+}
+
+/**
  * Verarbeitet hochgeladene Bilder (Feld 'pesi_upload_<id>').
  * Bei Erfolg wird der neue Web-Pfad in $post['pesi_field_<id>'] geschrieben,
  * sodass der bestehende String-Replacer ihn ins PHP übernimmt.
@@ -1036,7 +1095,7 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
         'trim',
         explode(',', strtolower(defined('PESI_UPLOAD_TYPES') ? PESI_UPLOAD_TYPES : 'jpg,jpeg,png,webp,avif,gif'))
     ));
-    $maxBytes = defined('PESI_UPLOAD_MAX_BYTES') ? (int)PESI_UPLOAD_MAX_BYTES : 5 * 1024 * 1024;
+    $maxBytes = _pesi_upload_limit();
 
     foreach ($fields as $id => $fld) {
         if ($fld['type'] !== 'image') continue;
@@ -1045,12 +1104,17 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
         $f = $files[$fk];
 
         if (($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) continue; // kein neues Bild
-        if ($f['error'] !== UPLOAD_ERR_OK) {
-            $errors[] = sprintf($t['up_err_failed'], $fld['label'] ?: $id);
+        // Vom Hosting abgewiesen (upload_max_filesize / MAX_FILE_SIZE) heißt
+        // „zu groß", nicht „noch einmal versuchen" — derselbe Versuch scheitert
+        // wieder. Darum dieselbe Meldung wie bei der eigenen Grenze.
+        $tooBig = in_array($f['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
+            || ($f['error'] === UPLOAD_ERR_OK && (($f['size'] ?? 0) <= 0 || $f['size'] > $maxBytes));
+        if ($tooBig) {
+            $errors[] = sprintf($t['up_err_size'], $fld['label'] ?: $id, _pesi_mb($maxBytes));
             continue;
         }
-        if (($f['size'] ?? 0) <= 0 || $f['size'] > $maxBytes) {
-            $errors[] = sprintf($t['up_err_size'], $fld['label'] ?: $id, round($maxBytes / 1048576, 1));
+        if ($f['error'] !== UPLOAD_ERR_OK) {
+            $errors[] = sprintf($t['up_err_failed'], $fld['label'] ?: $id);
             continue;
         }
         if (!is_uploaded_file($f['tmp_name'])) {
@@ -1218,11 +1282,13 @@ function _pesi_strings(): array { return [
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Fehlerhaft erzeugtes PHP kann dann vor dem Live-Austausch nicht automatisch erkannt werden. (Code T7)',
         'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Fast immer steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache. (Code T13)',
         'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
+        'warn_upload_limit' => 'PESI_UPLOAD_MAX_BYTES erlaubt %s MB, das Hosting aber nur %s MB (upload_max_filesize %s, post_max_size %s). Größere Bilder werden abgelehnt — Limit im Hosting anheben oder PESI_UPLOAD_MAX_BYTES angleichen, damit die Kundin die echte Grenze sieht. (Code T14)',
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
         'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
         'up_err_type'       => 'Das Bild für „%s“ hat ein Format, das nicht unterstützt wird. Möglich sind JPG, PNG, WebP, AVIF und GIF.',
         'up_err_dir'        => 'Bilder lassen sich gerade nicht speichern. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T5, Ordner „%s“)',
         'up_err_dir_invalid'=> 'Der Ordner für Bilder ist nicht richtig eingerichtet. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T6)',
+        'up_err_post_size'  => 'Das Bild ist zu groß für diesen Server (höchstens %s MB), deshalb wurde nichts gespeichert — auch Ihre Textänderungen nicht. Bitte wählen Sie ein kleineres Bild und speichern Sie noch einmal.',
         'img_hint'          => 'Neues Bild auswählen oder einen Pfad eintragen. Das bisherige Bild wird dabei ersetzt.',
         'blk_entry'         => 'Eintrag',
         'blk_up'            => '↑',
@@ -1308,11 +1374,13 @@ function _pesi_strings(): array { return [
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Invalid generated PHP then cannot be detected automatically before the live file is replaced. (Code T7)',
         'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Almost always the value is in double quotes instead of single ones — pesi() expects single quotes. (Code T13)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
+        'warn_upload_limit' => 'PESI_UPLOAD_MAX_BYTES allows %s MB, but the hosting only %s MB (upload_max_filesize %s, post_max_size %s). Larger images are rejected — raise the hosting limit or align PESI_UPLOAD_MAX_BYTES so the client sees the real limit. (Code T14)',
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
         'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
         'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
         'up_err_dir'        => 'Images cannot be saved right now. Please contact whoever looks after your website. (Code T5, folder "%s")',
         'up_err_dir_invalid'=> 'The folder for images is not set up correctly. Please contact whoever looks after your website. (Code T6)',
+        'up_err_post_size'  => 'The image is too large for this server (%s MB at most), so nothing was saved — not even your text changes. Please choose a smaller image and save again.',
         'img_hint'          => 'Choose a new image or enter a path. This replaces the current image.',
         'blk_entry'         => 'Entry',
         'blk_up'            => '↑',
@@ -1387,12 +1455,12 @@ function _pesi_contrast(string $a, string $b): float {
 }
 
 // ── Render ───────────────────────────────────────────────────
-$bc   = defined('BRAND_COLOR') ? BRAND_COLOR : '#c47a2a';
+$bc   = defined('BRAND_COLOR') ? BRAND_COLOR : '#a3611b';
 // 3-stelliges Hex (#abc) auf 6-stellig normalisieren — Alpha-Suffixe (…22, …0a) brauchen 6 Stellen
 if (preg_match('/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i', $bc, $m)) {
     $bc = '#' . $m[1].$m[1].$m[2].$m[2].$m[3].$m[3];
 }
-if (!preg_match('/^#[0-9a-f]{6}$/i', $bc)) $bc = '#c47a2a';
+if (!preg_match('/^#[0-9a-f]{6}$/i', $bc)) $bc = '#a3611b';
 $sn   = defined('BRAND_NAME')  ? BRAND_NAME  : 'pesi CMS';
 $logo = defined('BRAND_LOGO') && BRAND_LOGO ? BRAND_LOGO : null;
 $hasRt = false;
@@ -1604,7 +1672,7 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .img-adv[open] summary{margin-bottom:6px}
 .ms{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 .ms-l{font-weight:600;color:inherit;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
-.top-l{display:inline-flex;align-items:center;gap:.3rem;padding:.4rem .8rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2);font-weight:600}
+.top-l{display:inline-flex;align-items:center;gap:.3rem;margin-left:1rem;padding:.4rem .8rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2);font-size:.74rem;font-weight:600;color:var(--b);text-decoration:none}
 .top-l:hover{background:var(--b);color:#fff}
 .sv-info{display:flex;flex-direction:column;gap:.2rem;min-width:0}
 .sv-safe{font-size:.74rem;color:var(--tx3)}
@@ -1650,8 +1718,6 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .blk-add{font:inherit;font-size:13px;padding:8px 14px;border:1px dashed var(--bd);border-radius:6px;background:transparent;color:var(--tx2);cursor:pointer;width:100%}
 .blk-add:hover{border-color:var(--b);color:var(--b)}
 .top-m{font-size:.74rem;color:var(--tx3);margin-left:auto}
-.top-l{font-size:.74rem;color:var(--b);text-decoration:none;margin-left:1rem}
-.top-l:hover{text-decoration:underline}
 .rst-b{font:inherit;font-size:.82rem;padding:.55rem 1rem;background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;margin-right:.6rem}
 .rst-b:hover{border-color:var(--b);color:var(--b)}
 .tgl-sec{border:1px solid var(--bd);border-radius:8px;margin:0 0 18px;background:var(--b-s)}
@@ -1687,8 +1753,13 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
   .S{transform:translateX(-100%)}
   .S.open{transform:translateX(0)}
   .overlay.open{display:block}
-  .M{margin-left:0}
-  .top{padding:.9rem 1.2rem;padding-left:3.5rem}
+  /* Eigene Kopfzeile für den fixierten Hamburger: Diagnose und Onboarding
+     stehen über .top und wurden von ihm überdeckt. .top scrollt mit — der
+     Button schwebt ohnehin über allem, was darunter durchläuft. */
+  .M{margin-left:0;padding-top:3.4rem}
+  .top{position:static;padding:.8rem 1.2rem;flex-wrap:wrap;gap:.4rem .6rem}
+  .top-m{flex-basis:100%;margin-left:0;order:9}
+  .top-l{margin-left:0}
   .cnt-wrap{padding:1.3rem 1.2rem}
   .sv{padding:.8rem 1.2rem}
   .fc{padding:1rem 1.1rem}
@@ -1796,14 +1867,16 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <div class="S-site"><?=htmlspecialchars($sn)?></div>
     <div class="S-lbl"><?=$t['nav_pages']?></div>
     <ul class="S-nav">
-      <?php foreach ($PESI_PAGES as $file => $label):
+      <?php $anyImage = false; foreach ($PESI_PAGES as $file => $label):
         $isActive = $page === $file;
-        // Count fields for this page
+        // Felder zählen; Bildfelder merken (Diagnose T14 nur, wenn es welche gibt)
         $pf = $basePath . '/' . $file;
-        $fc = file_exists($pf) ? count(_pesi_parse($pf)) : 0;
+        $pageFields = file_exists($pf) ? _pesi_parse($pf) : [];
+        $fc = count($pageFields);
+        foreach ($pageFields as $pfld) { if (($pfld['type'] ?? '') === 'image') $anyImage = true; }
       ?>
         <li>
-          <a href="?page=<?=urlencode($file)?>" class="<?=$isActive?'on':''?>" <?php if(true): ?>onclick="closeMobileNav()"<?php endif; ?>>
+          <a href="?page=<?=urlencode($file)?>" class="<?=$isActive?'on':''?>" onclick="closeMobileNav()">
             <span class="ic"><?=mb_strtoupper(mb_substr($label,0,1))?></span>
             <?=htmlspecialchars($label)?>
             <?php if ($fc > 0): ?><span class="cnt"><?=$fc?></span><?php endif; ?>
@@ -1831,6 +1904,11 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       }
       if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
           $diag[] = $t['warn_no_exec'];
+      }
+      $cfgMax = defined('PESI_UPLOAD_MAX_BYTES') ? (int)PESI_UPLOAD_MAX_BYTES : 5 * 1024 * 1024;
+      if ($anyImage && _pesi_upload_limit() < $cfgMax) {
+          $diag[] = sprintf($t['warn_upload_limit'], _pesi_mb($cfgMax), _pesi_mb(_pesi_upload_limit()),
+              (string)ini_get('upload_max_filesize'), (string)ini_get('post_max_size'));
       }
       if ($page) {
           $unparsed = _pesi_unparsed_fields($basePath . '/' . $page);
@@ -2209,15 +2287,19 @@ function closeMobileNav(){
 </script>
 <script>
 const qs={};
+// Nur bearbeitete Editoren werden neu serialisiert. Quill schreibt das DOM in
+// seiner eigenen Form zurück (Listen als <ol> mit data-list, ohne Zeilenumbrüche);
+// ein unberührtes Feld zählte sonst bei jedem Speichern als Änderung.
+const qt=new Set();
 <?php foreach ($fields as $id => $fld): ?>
 <?php if ($fld['type'] === 'richtext'): ?>
 qs['<?=$id?>']=new Quill('#q_<?=$id?>',{theme:'snow',modules:{toolbar:[['bold','italic','underline','strike'],[{header:[2,3,false]}],[{list:'ordered'},{list:'bullet'}],['blockquote'],['link'],['clean']]}});
-qs['<?=$id?>'].on('text-change',function(d,o,src){ if(src==='user'&&window.pesiRtDirty) window.pesiRtDirty('<?=$id?>'); });
+qs['<?=$id?>'].on('text-change',function(d,o,src){ if(src==='user'){ qt.add('<?=$id?>'); if(window.pesiRtDirty) window.pesiRtDirty('<?=$id?>'); } });
 <?php endif; ?>
 <?php endforeach; ?>
 document.getElementById('pf').addEventListener('submit',function(){
   for(const[id,q]of Object.entries(qs)){
-    document.getElementById('h_'+id).value=q.root.innerHTML;
+    if(qt.has(id)) document.getElementById('h_'+id).value=q.root.innerHTML;
   }
 });
 </script>

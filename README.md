@@ -105,7 +105,8 @@ define('PESI_PASSWORD', 'your-secure-password');
 
 // Branding
 define('BRAND_NAME',  'Dr. Müller Practice'); // shown in dashboard header and login screen
-define('BRAND_COLOR', '#c47a2a');             // any hex color — try to match the site's primary color
+define('BRAND_COLOR', '#a3611b');             // any hex color — try to match the site's primary color.
+                                              // White text sits on it: it needs 4.5:1 contrast, or the dashboard reports T12
 define('BRAND_LOGO',  '');                    // path to your logo, e.g. '/assets/logo.svg' — leave empty for the pesi logo
 
 // Language
@@ -135,6 +136,7 @@ Then register the pages you want to appear in the dashboard sidebar:
 
 ```php
 $PESI_PAGES = [
+    PESI_GLOBALS_FILE => 'Stammdaten',   // keep this line — the shared practice details
     'index.php'       => 'Startseite',
     'impressum.php'   => 'Impressum',
     'datenschutz.php' => 'Datenschutz',
@@ -142,7 +144,7 @@ $PESI_PAGES = [
 ];
 ```
 
-Only pages listed here appear in the dashboard. The values on the right are the names shown to the client — keep them plain and human-friendly.
+Only pages listed here appear in the dashboard. The values on the right are the names shown to the client — keep them plain and human-friendly. Keep the `PESI_GLOBALS_FILE` entry: without it the shared details in `pesi-content.php` can no longer be edited.
 
 ### Step 3 — Add a few lines to your existing `.htaccess`
 
@@ -294,7 +296,7 @@ You can now hand over the dashboard URL and password to your client. All the exp
 Open `pesi-core.php` and adapt the dashboard to match your site:
 
 ```php
-define('BRAND_COLOR', '#c47a2a'); // any hex color
+define('BRAND_COLOR', '#a3611b'); // any hex color — white text on it must reach 4.5:1 (see code T12)
 define('BRAND_LOGO',  '');        // path or URL to your logo
 define('BRAND_NAME',  'My Project');
 ```
@@ -321,7 +323,7 @@ pesi CMS ships in German and English. Set your language in `pesi-core.php`:
 define('LANG', 'de'); // 'de' = German, 'en' = English
 ```
 
-**Adding your own language** takes about 5 minutes — open `pesi.php`, find the `$strings` array, copy the `'en'` block, give it a new key (e.g. `'fr'`), translate the strings, and set `LANG` to `'fr'` in your config. All dashboard labels and messages will follow.
+**Adding your own language** takes about 5 minutes — open `pesi.php`, find the `_pesi_strings()` function, copy the `'en'` block, give it a new key (e.g. `'fr'`), translate the strings, and set `LANG` to `'fr'` in your config. All dashboard labels and messages will follow.
 
 ---
 
@@ -352,7 +354,7 @@ define('LANG', 'de'); // 'de' = German, 'en' = English
 <a class="btn"><?= pesi('hero_button', 'Book appointment', 'text', 'Button label') ?></a>
 ```
 
-**`textarea`** — Multi-line plain text. For paragraphs without formatting, disclaimers, simple descriptions.
+**`textarea`** — Multi-line plain text. For paragraphs without formatting, disclaimers, simple descriptions. Line breaks are stored, but HTML collapses them: output the value with `nl2br()` or style the element with `white-space: pre-line` if the breaks matter.
 
 ```php
 <p><?= pesi('disclaimer', 'The content of this website has been prepared with care.', 'textarea', 'Liability notice') ?></p>
@@ -425,7 +427,7 @@ PESI, 'richtext', 'Label') ?>
 
 ```php
 <h1><?= pesi_global('practice_name') ?></h1>
-<address><?= pesi_global('address') ?></address>
+<address><?= nl2br(pesi_global('address')) ?></address>
 <a href="mailto:<?= pesi_global('email') ?>"><?= pesi_global('email') ?></a>
 <a href="<?= pesi_global('booking_url') ?>">Book appointment</a>
 ```
@@ -524,7 +526,8 @@ install does. Both are your job, not the client's.
 | `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
-| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value | Use single quotes: `pesi('id', 'Text', …)`. Escape apostrophes as `\'` |
+| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or a quote character inside the label | Use single quotes: `pesi('id', 'Text', …)`. Escape apostrophes in the value as `\'`; keep labels free of `'` and `"` |
+| `T14` | `PESI_UPLOAD_MAX_BYTES` is higher than the hosting accepts (`upload_max_filesize` / `post_max_size`). Images between the two limits are rejected; the client is shown the smaller, effective limit | Raise the limits in the hosting (php.ini, `.user.ini` or `.htaccess`), or lower `PESI_UPLOAD_MAX_BYTES` to match |
 
 ### Rewording the interface
 
@@ -581,7 +584,7 @@ All settings in `pesi-core.php`:
 ```php
 define('PESI_PASSWORD',     'your-password');  // Dashboard password
 define('BRAND_NAME',        'My Project');     // Shown in dashboard header and browser tab
-define('BRAND_COLOR',       '#c47a2a');        // Any CSS hex color — dashboard accent
+define('BRAND_COLOR',       '#a3611b');        // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',        '');               // Path to logo image — empty = pesi logo
 define('LANG',              'de');             // 'de' or 'en'
 define('PESI_BACKUP_ENABLED', true);           // Two technical recovery copies
@@ -623,7 +626,7 @@ What you need to hand over:
 
 Per field, the client sees:
 1. A **label** ("Company name", "Liability notice", …) — big and clear
-2. The **field type** as a small badge — informational
+2. Nothing technical — field IDs and type badges only appear behind the *Technical view* toggle
 3. The matching input — text, textarea, validated link/contact input, image upload, or Quill richtext editor
 
 The client **can't break anything**: no access to code, no HTML in `text`/`textarea` fields, and even in `richtext`, broken HTML only affects that single field's rendering.
@@ -643,6 +646,10 @@ The web server doesn't have write permissions on the PHP file. Set permissions v
 ### Richtext editor shows only an empty box, no toolbar
 
 Quill is bundled directly inside `pesi.php` — no CDN requests are made. The most likely cause is a strict **Content-Security-Policy** that disallows inline scripts (`script-src` without `'unsafe-inline'`). Look in your `.htaccess` or for a `<meta http-equiv="Content-Security-Policy">` tag. If a restrictive `script-src` is found, add `'unsafe-inline'` or exclude the `/pesi` path from the policy.
+
+### Uploads fail as "too large" well below 5 MB
+
+The hosting caps uploads (`upload_max_filesize`, often 2 MB) below `PESI_UPLOAD_MAX_BYTES`. pesi then shows the smaller, effective limit in the message and reports the mismatch as `T14` in the diagnostics panel. Raise the limit in the hosting or lower `PESI_UPLOAD_MAX_BYTES`. An upload above `post_max_size` is dropped by PHP before pesi runs; pesi detects the empty request and tells the client that nothing, including text changes, was saved.
 
 ### Dashboard links go nowhere, `?page=index.php` doesn't work
 
