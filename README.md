@@ -61,7 +61,10 @@ pesi handles small, page-bound content, and stops there.
 | `THIRD-PARTY.md` | The licence notice for the bundled Quill editor. Ships with every copy you pass on. |
 | `LICENSE` | MIT. |
 
-**Only these three `.php` files belong on your webspace.** The `.md` files stay here on GitHub.
+**Only these three `.php` files need to be served on your webspace.** Keep
+`LICENSE` and `THIRD-PARTY.md` with every copy you hand over, for example in
+the delivery package outside the public web root. The installation guides
+do not need to be uploaded.
 
 After installation your webroot looks like this:
 
@@ -629,7 +632,9 @@ Per field, the client sees:
 2. Nothing technical — field IDs and type badges only appear behind the *Technical view* toggle
 3. The matching input — text, textarea, validated link/contact input, image upload, or Quill richtext editor
 
-The client **can't break anything**: no access to code, no HTML in `text`/`textarea` fields, and even in `richtext`, broken HTML only affects that single field's rendering.
+The client edits content through validated fields, without a code editor or
+layout controls. Keep independent site backups: the two rotating recovery
+copies cover recent edits, not every possible mistake.
 
 ---
 
