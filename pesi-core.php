@@ -7,7 +7,7 @@
 // Admin-Passwort (Plaintext). Vor Production ein starkes Passwort setzen.
 define('PESI_PASSWORD', 'demo1234');
 define('BRAND_NAME',  'Meine Website');
-define('BRAND_COLOR', '#c47a2a');          // beliebiger Hex-Wert
+define('BRAND_COLOR', '#a3611b');          // beliebiger Hex-Wert; weisse Schrift braucht 4,5:1 (Diagnose T12)
 define('BRAND_LOGO',  '');                 // z. B. '/assets/logo.svg' — leer = pesi-Logo
 define('LANG',        'de');               // 'de' oder 'en'
 define('PESI_BACKUP_ENABLED', true);
@@ -99,6 +99,39 @@ if (!function_exists('pesi')) {
         return nl2br(_pesi_e(strip_tags($html)), false);
     }
 
+    /**
+     * Quill 2 serialisiert jede Liste als <ol> und legt die Art in li[data-list]
+     * ab ("bullet" | "ordered"). Die Allowlist im Sanitizer streift das
+     * Attribut, übrig bliebe eine nummerierte Liste — aus jeder Aufzählung
+     * würde beim Speichern 1., 2., 3. Darum vorher nach Art in echte <ul>/<ol>
+     * aufteilen. Rückgabe: die neu eingefügten Listen (leer = nichts zu tun).
+     * Der Aufrufer muss sie selbst säubern: seine Kindliste ist ein Snapshot
+     * von vorher, die neuen Knoten sähe er sonst nie (Trap 3 in CLAUDE.md).
+     */
+    function _pesi_split_quill_list(DOMElement $list): array {
+        $own  = strtolower($list->nodeName);
+        $runs = [];
+        foreach (iterator_to_array($list->childNodes) as $li) {
+            if ($li->nodeType !== XML_ELEMENT_NODE || strtolower($li->nodeName) !== 'li') continue;
+            $kind = strtolower($li->getAttribute('data-list'));
+            $kind = $kind === 'ordered' ? 'ol'
+                  : (in_array($kind, ['bullet', 'checked', 'unchecked'], true) ? 'ul' : $own);
+            $n = count($runs);
+            if ($n === 0 || $runs[$n - 1]['kind'] !== $kind) { $runs[] = ['kind' => $kind, 'items' => []]; $n++; }
+            $runs[$n - 1]['items'][] = $li;
+        }
+        if (count($runs) <= 1 && ($runs[0]['kind'] ?? $own) === $own) return [];
+        $out = [];
+        foreach ($runs as $run) {
+            $el = $list->ownerDocument->createElement($run['kind']);
+            foreach ($run['items'] as $li) $el->appendChild($li);
+            $list->parentNode->insertBefore($el, $list);
+            $out[] = $el;
+        }
+        $list->parentNode->removeChild($list);
+        return $out;
+    }
+
     function _pesi_sanitize_html(string $html): string {
         if ($html === '') return '';
         if (!class_exists('DOMDocument')) return _pesi_sanitize_html_fallback($html);
@@ -147,6 +180,16 @@ if (!function_exists('pesi')) {
                     }
                     $child->parentNode->removeChild($child);
                     continue;
+                }
+
+                // Quill-Listen erst nach Art aufteilen, dann die neuen Listen
+                // säubern — sie stehen nicht im Snapshot dieser Schleife.
+                if ($name === 'ol' || $name === 'ul') {
+                    $split = _pesi_split_quill_list($child);
+                    if ($split) {
+                        foreach ($split as $el) $clean($el);
+                        continue;
+                    }
                 }
 
                 foreach (iterator_to_array($child->attributes ?? []) as $attr) {

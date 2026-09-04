@@ -70,6 +70,9 @@ webspace. Copy `pesi.php`, `pesi-core.php` and `pesi-content.php`, nothing more.
 > the source text while the page shows something else, and saving would write the
 > interpolation away.
 >
+> The same goes for the **label**: an apostrophe or `"` inside it (`'Anna\'s Foto'`)
+> makes the parser skip the whole field. Keep labels free of quote characters.
+>
 > pesi detects this and reports it in the dashboard's diagnostics panel as code
 > `T13`, naming the affected field IDs. If you see it, the fix is the quotes.
 
@@ -86,7 +89,7 @@ in the dashboard. Delete dead code instead of commenting it out.
 | Type | Dashboard renders | Use for |
 |------|-------------------|---------|
 | `text` | Single-line input | Headings, names, button text and short strings used in text context |
-| `textarea` | Multi-line textarea | Plain-text paragraphs, disclaimers, descriptions without formatting |
+| `textarea` | Multi-line textarea | Plain-text paragraphs, disclaimers, descriptions without formatting. Line breaks collapse in HTML unless you output the value with `nl2br()` or style `white-space: pre-line` |
 | `richtext` | Quill WYSIWYG editor | Formatted HTML blocks with `<p>`, `<strong>`, `<ul>`, `<a>` etc. |
 | `image` | Image preview + file upload + path field | Photos that the client must be able to swap (team members, gallery, hero image) |
 | `url` | Validated link input | `http(s)` URLs, `/internal` paths, queries and anchors used in `href` |
@@ -214,7 +217,8 @@ Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrit
 Before placing duplicate practice details into individual pages, adapt
 `pesi-content.php`. Keep one key per shared value (practice name, address,
 phone, email, booking URL) and output it with `pesi_global('key')` wherever it
-is needed. The dashboard exposes this file as **Stammdaten**.
+is needed (a multi-line address as `nl2br(pesi_global('address'))`). The dashboard
+exposes this file as **Stammdaten**.
 
 1. **`PESI_PASSWORD`** — set a strong password for the client.
 
@@ -229,7 +233,7 @@ is needed. The dashboard exposes this file as **Stammdaten**.
    single-quoted PHP string. (Do **not** apply that restriction to a hash; a hash always
    contains `$`, which is safe in single quotes.)
 2. **`BRAND_NAME`** — the client/project name shown in the dashboard header and login screen.
-3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#c47a2a`.
+3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#a3611b`. White text sits on the colour and must reach 4.5:1 contrast; otherwise the dashboard reports code T12 — open the diagnostics panel after the first login and check.
 4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo.
 5. **`LANG`** — `'de'` for German-speaking clients (default), `'en'` if the site is clearly English-only.
 
@@ -238,7 +242,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 | Define | Default | Change it when |
 |---|---|---|
 | `PESI_UPLOAD_DIR` | `'uploads'` | the site already has a media folder you want to reuse. Relative to the root, no leading slash, no `..` |
-| `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size` |
+| `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size`. If it is higher, pesi shows the client the smaller effective limit and reports `T14` in the diagnostics panel — check that panel after the first login |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
 | `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing |
@@ -249,6 +253,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 
 List all `.php` files in the root directory. Exclude:
 - `pesi-core.php`
+- `pesi-content.php` (already registered as Stammdaten)
 - `pesi.php`
 - files inside any subdirectory
 
@@ -437,13 +442,16 @@ Open `pesi-core.php`, find `$PESI_PAGES`, replace with all pages that have pesi 
 
 ```php
 $PESI_PAGES = [
+    PESI_GLOBALS_FILE => 'Stammdaten',   // keep — the shared practice details
     'index.php'       => 'Startseite',
     'impressum.php'   => 'Impressum',
     'datenschutz.php' => 'Datenschutz',
 ];
 ```
 
-Values (right side) are German display names for the dashboard sidebar.
+Values (right side) are German display names for the dashboard sidebar. Keep
+the `PESI_GLOBALS_FILE` line: without it the Stammdaten page disappears from
+the dashboard and `pesi-content.php` can no longer be edited.
 
 **Group slugs become visible names.** A `pesi:item` group `team_mitglieder` is
 shown to the client as "Team mitglieder", a `pesi:toggle` group
@@ -674,6 +682,8 @@ verified or merely assumed.
     <h2><?= pesi('about_titel', 'Über mich', 'text', 'Überschrift Über-mich') ?></h2>
     <?= pesi('about_text', <<<'PESI'
 <p>Ich bin <strong>Dr. Maria Müller</strong>, klinische Psychologin.</p>
+<p>Seit 2015 in eigener Praxis.</p>
+PESI, 'richtext', 'Über-mich-Text') ?>
 </section>
 
 <footer>
