@@ -47,9 +47,22 @@ if (!function_exists('pesi')) {
         return htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
+    // Die Feldtypen, die Parser, Dashboard und Saver kennen. Ein Tippfehler
+    // wie 'urll' ist kein Feld, sondern eine Diagnose (T13).
+    function _pesi_types(): array {
+        return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel'];
+    }
+
+    // BRAND_COLOR landet in einem <style>. Nur Hex-Werte, sonst der Standard.
+    function _pesi_brand_color(): string {
+        $c = defined('BRAND_COLOR') ? (string)BRAND_COLOR : '';
+        return preg_match('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $c) ? $c : '#a3611b';
+    }
+
     function _pesi_safe_asset_url(string $url): string {
         $url = trim($url);
-        if ($url === '' || preg_match('/[\x00-\x1F\x7F<>"\']/', $url)) return '';
+        // Backslash: Browser lesen "\\host/x.jpg" als protokollrelative URL.
+        if ($url === '' || preg_match('/[\x00-\x1F\x7F<>"\'\\\\]/', $url)) return '';
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $url)) {
             return preg_match('/^https?:\/\//i', $url) ? $url : '';
         }
@@ -97,7 +110,12 @@ if (!function_exists('pesi')) {
         // übersehen insbesondere unquotierte Attribute (onclick=…) und
         // dürfen deshalb kein Markup zurückgeben. Der Inhalt bleibt als
         // sicherer Klartext erhalten; Formatierung gibt es erst mit ext/dom.
-        return nl2br(_pesi_e(strip_tags($html)), false);
+        // Block- und Zeilengrenzen werden vorher zu Umbrüchen, sonst wird aus
+        // <p>Alpha</p><p>Beta</p> ein „AlphaBeta“.
+        $text = preg_replace('#<br\b[^>]*>#i', "\n", $html);
+        $text = preg_replace('#</?(p|div|h[1-6]|li|ul|ol|blockquote|pre|tr)\b[^>]*>#i', "\n", (string)$text);
+        $text = trim((string)preg_replace("/\n{3,}/", "\n\n", strip_tags((string)$text)));
+        return nl2br(_pesi_e($text), false);
     }
 
     /**
@@ -209,7 +227,11 @@ if (!function_exists('pesi')) {
                         $ok = $probe === ''
                             || preg_match('/^(https?:|mailto:|tel:|\/|#)/i', $probe)
                             || !preg_match('/^[a-z][a-z0-9+.-]*:/i', $probe);
-                        if (!$ok || substr($probe, 0, 2) === '//') $child->removeAttribute('href');
+                        // Backslashes liest der Browser als Schrägstriche: "\\host"
+                        // wird protokollrelativ. Wie _pesi_safe_link_url() ablehnen.
+                        if (!$ok || substr($probe, 0, 2) === '//' || strpos($probe, '\\') !== false) {
+                            $child->removeAttribute('href');
+                        }
                     }
                     if ($attrName === 'target' && !in_array($attr->nodeValue, ['_blank', '_self'], true)) {
                         $child->removeAttribute('target');
@@ -249,7 +271,7 @@ if (!function_exists('pesi')) {
                 . '.pesi-richtext ol{padding-left:1.5em;margin-bottom:1em}'
                 . '.pesi-richtext ul li{list-style:disc;margin-bottom:.25em;line-height:1.7}'
                 . '.pesi-richtext ol li{list-style:decimal;margin-bottom:.25em;line-height:1.7}'
-                . '.pesi-richtext a{color:' . BRAND_COLOR . ';text-decoration:underline;text-underline-offset:2px}'
+                . '.pesi-richtext a{color:' . _pesi_brand_color() . ';text-decoration:underline;text-underline-offset:2px}'
                 . '.pesi-richtext a:hover{opacity:.75}'
                 . '</style>';
         }

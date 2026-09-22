@@ -138,7 +138,10 @@ Four more from the 2026-07-31 audit. The first is the one that matters most:
   binary makes the shell answer 127 (1 on Windows). Treating that as a failure
   rolls back *every* save on such hosts and blames the client's content.
   `_pesi_lint()` returns `true`/`false`/`null` and only counts a real lint
-  diagnostic as `false`.
+  diagnostic as `false`. `null` does not count as a pass either: with
+  `PESI_SYNTAX_CHECK` on, `_pesi_commit()` publishes only on `true` and answers
+  `null` with its own T7 message (`err_no_lint`), never with the syntax-error
+  one. Unchecked saving is tied to `PESI_SYNTAX_CHECK = false` alone.
 - **`_pesi_sanitize_html()` must delete `XML_PI_NODE` and `XML_COMMENT_NODE`.**
   DOMDocument keeps PHP tags and HTML comments as their own node type, so the
   element allowlist never sees them and `saveHTML()` writes them back verbatim.
@@ -184,6 +187,82 @@ Two from the 2026-09-04 review before the first customer integration:
   with no message at all. `_pesi_upload_limit()` is the effective cap for the
   size check and every message, `_pesi_post_dropped()` catches the empty POST,
   and diagnostic T14 tells the integrator about the mismatch.
+
+Three from the 2026-09-20 login/session review. All three left the throttle
+looking fine in sequential tests:
+
+- **Check and reserve a login attempt under one exclusive lock.**
+  `_pesi_throttle_acquire()` books the attempt as a failure *before* the
+  password check, and a success resets it. Reading the state under `LOCK_SH`
+  and booking the failure afterwards let 12 of 12 parallel requests through.
+- **A register that cannot be used is not a free client.** `acquire()` returns
+  `null` when the lock or the file fails, and the handler refuses sign-in (T15).
+  Falling back to the session brake means no brake at all, because a new cookie
+  resets it.
+- **Check CSRF before the throttle.** A login POST without a valid token must
+  neither check the password nor book a failure. Otherwise a foreign form locks
+  the client's IP through her own browser.
+
+Read request parameters through `_pesi_param()`, not with a `(string)` cast:
+`name[]=` arrives as an array.
+
+Three from the 2026-09-20 storage review. All three pass `php -l` and every
+sequential test:
+
+- **Backup rotation and live swap are one operation.** Each `rename()` is
+  atomic, but the sequence is not. `_pesi_backup_begin()` moves the oldest
+  generation aside instead of overwriting it, and `_pesi_commit()` calls
+  `_pesi_backup_rollback()` when a later step, including the live `rename()`,
+  fails. Moving the rotation after the live swap instead does not fix it: it
+  trades "backups changed, nothing published" for "published, no backup".
+- **Image cleanup deletes only against a complete and locked inventory.** An
+  unreadable page or backup aborts the cleanup. The page sidecar locks stay
+  held (`LOCK_SH`) from the scan until after `unlink()`, so a commit that
+  re-inserts the image either shows up in the scan or waits.
+- **Check for foreign writes again right before the swap.** FTP ignores the
+  pesi lock. The new backup 1 must hash to the snapshot, and the live file is
+  re-hashed after the backups. That narrows the window but cannot close it
+  without the other writer's cooperation, and the README says so. Do not
+  promise more.
+
+Four from the 2026-09-21 dashboard review. They were invisible to the engine
+tests, which is why the suite now also renders real dashboard responses:
+
+- **Enter in a text field presses the form's first submit button.** Every
+  toggle, block and restore button sits inside the save form. So the first
+  button in `#pf` must be the unnamed, visually hidden `.sv-def` Speichern.
+  It has to use `.sr`, not `hidden`: a hidden button does not count as the
+  default. A keydown handler also routes Enter in single-line inputs to it.
+- **One request, one structural action.** Count `pesi_block`/`pesi_toggle`/
+  `pesi_restore` before any side effect and refuse more than one
+  (`err_ambiguous`). The three handlers are an `elseif` chain. The hidden
+  `pesi_save` is always present and does not count.
+- **A refused save keeps the draft.** `_pesi_draft()` re-renders the posted
+  values with `data-saved` holding the stored value, so the JS still counts
+  them as unsaved. The form keeps the *posted* hash: putting the new file
+  hash under an old draft would let the next save overwrite a foreign change.
+- **Nested `pesi:item` is refused (S6), like nested toggles (S5).** The
+  non-greedy block regex ends the outer entry at the first inner end marker.
+
+JS registries keyed by field ID use `Object.create(null)`: `__proto__` is a
+valid field ID.
+
+One from the 2026-09-22 parser review. It changes how the whole engine finds
+fields:
+
+- **Fields come from the tokenizer, not from a regex over the raw text.**
+  `_pesi_scan()` accepts only global `pesi(` calls in real PHP code: not
+  after `->`, `?->`, `::`, `function` or `new`, and never inside comments,
+  strings, nowdocs or inline HTML. It returns the byte spans of the ID and
+  value literals. `_pesi_replace()` and the ID rewrite in block `dup`
+  `substr_replace()` exactly those spans. The old regex turned
+  `pesi('phantom', …)` text inside saved richtext into an editable field and
+  rewrote it, `php -l`-clean. Never go back to scanning the raw source for
+  `pesi\s*\(`, not even for a "quick" diagnostic.
+- Duplicate IDs refuse the save (S7). Unknown types are not fields (T13, via
+  `_pesi_types()` in `pesi-core.php`, the one allowlist). Without ext/dom,
+  richtext is read-only and `_pesi_save()` skips it (T17). Without the
+  tokenizer there are no fields (T16).
 
 ## Two audiences, one interface — the rule for every string
 
@@ -246,10 +325,12 @@ by accident:
 git checkout dev -- dev/test-engine.php && git reset
 ```
 
-It covers all eight traps above, the block round-trip (add → duplicate →
+It covers the traps above, the block round-trip (add → duplicate →
 reorder → delete incl. the `GROUP_N_` ID rewrite), toggle hide/show including
-the *rendered* output, the stale-check, and DE/EN key parity. Exit code 0/1, no
-dependencies. `dev/` is not part of a customer install.
+the *rendered* output, the stale-check, and DE/EN key parity. The login handler
+is tested end-to-end: each request is a separate PHP process running the real
+`pesi.php` with its own session file, including 12 parallel attempts. Exit code
+0/1, no dependencies. `dev/` is not part of a customer install.
 
 The suite works because `pesi.php` is not includable standalone (session and
 headers fire on include), so it slices the function span — `_pesi_parse()` down
