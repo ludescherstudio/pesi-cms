@@ -77,13 +77,14 @@ outside the public web root. The installation guides need not be uploaded.
 > pesi detects this and reports it in the dashboard's diagnostics panel as code
 > `T13`, naming the affected field IDs. If you see it, the fix is the quotes.
 
-Duplicate IDs within one file are **not** an error — the parser silently keeps
-only the first occurrence, and the second location becomes uneditable. Keep them
-unique.
+Duplicate IDs within one file block saving the whole page (code `S7`, listed
+in the diagnostics panel). Keep them unique.
 
-The parser scans the **raw source text**, not executed code. A `pesi()` call
-inside an HTML comment or a commented-out PHP block is still picked up and shown
-in the dashboard. Delete dead code instead of commenting it out.
+The parser reads the page with PHP's tokenizer and only counts real global
+`pesi()` calls in PHP code. Commented-out calls, `->pesi()`, `Foo::pesi()`
+and `pesi(…)` text inside strings, nowdocs or plain HTML are ignored. The type
+must be one of the seven below; an unknown type such as `urll` is reported as
+`T13` and the field does not appear.
 
 ### Types
 
@@ -246,7 +247,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size`. If it is higher, pesi shows the client the smaller effective limit and reports `T14` in the diagnostics panel — check that panel after the first login |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
 | `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
-| `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing |
+| `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
 | `PESI_SESSION_MAX` | 12 hours | only if the client explicitly needs a shorter absolute session lifetime |
 
@@ -391,6 +392,11 @@ Three rules — break any one of them and the feature fails silently:
 The dashboard then renders each entry as its own card with ↑ ↓ · Duplizieren ·
 Löschen, plus one "+ Eintrag hinzufügen" button under the group. pesi refuses to
 delete the last remaining entry, so the template can never be lost.
+
+Do not put a `pesi:item` block inside another one. pesi detects this, shows
+the fields without entry buttons and refuses every entry operation on that
+page (code `S6`). A team with a list of services per person is two separate
+pages or one flat list, not nested entries.
 
 Instance numbers are **stable and never renumbered**. After deleting `:2` you
 legitimately have `team:1` and `team:3`; new entries continue at `max + 1`. Do
