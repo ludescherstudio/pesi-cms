@@ -57,3 +57,10 @@ alongside client work — timelines are best-effort, not contractual.
   candidate before the live page is atomically replaced.
 - Serve the dashboard over HTTPS — session cookies only get the `secure` flag
   when the request is HTTPS.
+- Behind a reverse proxy or CDN, make the web server put the real client IP
+  into `REMOTE_ADDR` (`mod_remoteip` / `real_ip`, trusting only your proxy).
+  Otherwise all visitors share one login-throttle entry.
+- Set `display_errors = Off` in production; PHP messages reveal file paths.
+- Leave `.pesi-throttle` and `.pesi-throttle-lock` writable. If pesi cannot
+  use them it refuses every sign-in (code `T15`) rather than run without the
+  brute-force delay.
