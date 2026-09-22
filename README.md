@@ -461,10 +461,11 @@ PESI, 'richtext', 'Legal notice content') ?>
 ```
 
 **Rules that bite later:**
-- Every ID must be unique per file — a duplicate is silently ignored from the second occurrence onward
+- Every ID must be unique per file. A duplicate is reported as `S7`, and the page cannot be saved until it is fixed
 - The same text in two places gets two IDs: `company_header` and `company_footer`
 - Never rename an ID once the client has saved content — the saved value becomes invisible to the dashboard
-- The parser reads the raw source, so a `pesi()` call in a commented-out block still shows up — delete dead code instead of commenting it out
+- Only real global `pesi()` calls in PHP code count. Commented-out calls, `->pesi()`, `Foo::pesi()`, similarly named functions and `pesi(…)` text inside a string, a nowdoc or plain HTML are not fields
+- The type must be one of `text`, `textarea`, `richtext`, `image`, `url`, `email`, `tel`. A typo like `urll` is reported as `T13` instead of showing a field that cannot be edited
 
 ---
 
@@ -494,18 +495,23 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `S3` | A repeatable entry referenced by the dashboard was not found in the source | Usually a stale browser tab — reload. If it persists, the `pesi:item` markers were edited by hand |
 | `S4` | A visibility section was not found in the source | Same as `S3`, for `pesi:toggle` markers |
 | `S5` | Two `pesi:toggle` sections are nested; switching is disabled for the page | Unnest them — a toggle must not contain another toggle |
+| `S6` | Two `pesi:item` entries are nested; add, duplicate, reorder and delete are disabled for the page, the fields stay editable | Unnest them — an entry must not contain another entry |
+| `S7` | A field ID occurs more than once in the page. Which occurrence the dashboard would edit is not defined, so the page cannot be saved | Give every `pesi()` call in the file its own ID |
 | `T1` | The page file could not be read | Check file permissions and that the file still exists |
-| `T2` | The rotated backup could not be written | The web server needs write access to the project directory |
+| `T2` | The rotated backup could not be written. Nothing was published, and the previous backups were restored | The web server needs write access to the project directory |
 | `T3` | The page file was locked by another request | Transient; if permanent, a stale lock or a hung process |
 | `T4` | A page listed in `$PESI_PAGES` does not exist | Fix the path in `pesi-core.php` or restore the file |
 | `T5` | The upload folder is not writable | `chmod` the folder named in the message |
 | `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
-| `T7` | `php -l` cannot run, so pesi cannot verify PHP syntax before publishing | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
+| `T7` | `php -l` cannot run, so pesi cannot verify PHP syntax. While `PESI_SYNTAX_CHECK` is on, every save is refused with this code; nothing unchecked is published | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
 | `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
-| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or a quote character inside the label | Use single quotes: `pesi('id', 'Text', …)`. Escape apostrophes in the value as `\'`; keep labels free of `'` and `"` |
+| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or an unknown field type | Use single quotes: `pesi('id', 'Text', …)`, and escape apostrophes in the value as `\'`. Use one of the seven documented types |
 | `T14` | `PESI_UPLOAD_MAX_BYTES` is higher than the hosting accepts (`upload_max_filesize` / `post_max_size`). Images between the two limits are rejected; the client is shown the smaller, effective limit | Raise the limits in the hosting (php.ini, `.user.ini` or `.htaccess`), or lower `PESI_UPLOAD_MAX_BYTES` to match |
+| `T15` | The login throttle register (`.pesi-throttle`, `.pesi-throttle-lock`) could not be opened, read or written. pesi then refuses every sign-in, because without it a new cookie per attempt would bypass the brute-force delay. The reason is also written to the PHP error log | Give the web server write access to the pesi directory and check owner and permissions of both files. A directory or other non-file under one of those names blocks it too |
+| `T16` | The PHP extension `tokenizer` is missing. pesi finds fields with the PHP tokenizer, so without it the dashboard shows no fields | Enable `ext/tokenizer` (on by default in PHP; some hosts compile it out) |
+| `T17` | The PHP extension `dom` is missing. `richtext` fields are shown read-only so saving cannot flatten their formatting to plain text; the public site shows them as plain text with line breaks | Enable `ext/dom` |
 
 ---
 
@@ -516,17 +522,25 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
 - `.pesi-*` files — rotated backups, write locks, short-lived candidates and the login throttle — are blocked via `.htaccess`. Backups are full copies of page source; on Nginx you add the equivalent `deny` rules yourself
 - `PESI_PASSWORD` accepts a `password_hash()` value; the shipped default fails closed
-- Failed logins are slowed down twice: per session, and per client in a small `.pesi-throttle` register, so discarding cookies does not reset the delay. The backoff is exponential and capped at five minutes
-- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS), an inactivity timeout and an absolute lifetime. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
+- Failed logins are slowed down twice: per session, and per client IP in a small `.pesi-throttle` register, so discarding cookies does not reset the delay. The backoff starts at 2 seconds and doubles up to 256 seconds. Each attempt is reserved under a lock before the password is checked, so parallel requests do not get through together. If the register cannot be read or written, pesi refuses every sign-in (code `T15`) instead of running without it
+- A login POST without a valid CSRF token is rejected before the password check and does not count as a failed attempt, so a foreign form cannot lock the client out
+- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
+- Request parameters that arrive as arrays (`name[]=…`) are treated as empty instead of raising PHP warnings
 - CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY` and a `frame-ancestors 'none'` policy
 - `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save
 - `richtext` is sanitized through a server-side allowlist before it is saved and on every render; PHP tags and HTML comments inside it are removed
 - Field values containing pesi structure markers are rejected before writing (code `S2`)
 - Image uploads are checked by real MIME type (`finfo`, falling back to `getimagesize()`), size and extension; SVG is deliberately not allowed; the upload folder must stay inside the project root
-- Every write goes to a same-directory temporary file, is flushed and linted with `php -l` there, then atomically replaces the live page; a failed write never truncates the live page
-- A stable sidecar lock plus the full file hash from the opened form prevents stale overwrites — including a parallel FTP upload
+- Every write goes to a same-directory temporary file, is flushed and linted with `php -l` there, then atomically replaces the live page; a failed write never truncates the live page. If the check cannot run, nothing is published (`T7`)
+- The backup rotation and the live swap succeed or fail together: if any step fails, the previous backups are put back
+- A stable sidecar lock plus the full file hash from the opened form prevents stale overwrites between dashboard requests. A parallel FTP upload is detected if it lands before the last check, which runs right before the swap. The FTP server does not know pesi's lock, though, so a few milliseconds of overlap remain (see Limitations)
+- Image cleanup holds the locks of all registered pages while it scans and deletes, and deletes nothing if a page or backup cannot be read
 
 **Important:** always run pesi over HTTPS. The login password is sent via POST — over plain HTTP it would be readable in transit.
+
+**Behind a reverse proxy or CDN**, the web server must pass the real client address in `REMOTE_ADDR` (Apache `mod_remoteip`, Nginx `real_ip`, trusting only your proxy). pesi deliberately ignores `X-Forwarded-For`, since any client can set it. Without that server-side setup, every visitor shares the proxy's address and one failed login slows down everyone.
+
+**In production, set `display_errors = Off`** and log errors on the server instead. PHP messages show file paths.
 
 Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md). Do not open a public issue.
 
@@ -540,8 +554,8 @@ Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY
 | `page.php.pesi-backup.2` | on the second save | The state before that; reachable only via FTP |
 | `page.php.pesi-lock` | on first save | Stable sidecar lock for the write; stays, empty |
 | `page.php.pesi-tmp-*` | during a save | The candidate that is linted and then renamed over the live page; removed on failure |
-| `.pesi-throttle`, `.pesi-throttle-lock` | on the first failed login | Login throttle register: SHA-256 of the client IP and a counter, entries dropped an hour after they expire |
-| `uploads/…` | on image upload | Uploaded images under a collision-free name; replaced images are deleted once neither the page nor its two backups reference them |
+| `.pesi-throttle`, `.pesi-throttle-lock` | on the first sign-in attempt | Login throttle register: SHA-256 of the client IP and a counter, entries dropped an hour after they expire |
+| `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file; replaced images are deleted once neither the page nor its two backups reference them |
 
 All of these are covered by the `.pesi-` rule in Step 3 except the upload folder, which must stay public.
 
@@ -560,7 +574,7 @@ define('LANG',                'de');               // 'de' or 'en'
 define('PESI_BACKUP_ENABLED', true);               // Two rotating recovery copies per page
 define('PESI_SYNTAX_CHECK',   true);               // php -l on the candidate before publishing
 define('PESI_SESSION_IDLE',   30 * 60);            // Sign out after inactivity
-define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime
+define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime, independent of the idle limit
 define('PESI_GLOBALS_FILE',   'pesi-content.php'); // The shared-details file
 
 define('PESI_UPLOAD_DIR',       'uploads');                       // Relative to the web root, no leading slash, no ..
@@ -581,7 +595,7 @@ $PESI_PAGES = [
 ## Privacy & GDPR
 
 - pesi stores nothing about website visitors. No cookies, no logging, no analytics on the public site
-- The dashboard sets one session cookie for the signed-in editor only
+- The dashboard sets one session cookie, starting on its login page (it carries the CSRF token for the sign-in form). The public site sets none
 - The login throttle keeps a **SHA-256 hash** of the client IP plus a counter, never the address, and drops entries an hour after they expire
 - Replaced images are deleted once the page and both technical backups no longer reference them — no orphaned portraits on the web space
 - No external requests at any time: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`
@@ -649,19 +663,20 @@ The syntax check needs `exec()` and a PHP CLI in the `PATH`. Ask your host to en
 - **No media library** — image upload only swaps page-bound `image` fields; decorative assets stay an FTP job
 - **Replaced images are deleted only after the page and both backups no longer reference them.** pesi checks the files listed in `$PESI_PAGES`, their backups and their raw markup, but cannot see includes, partials or templates that are not registered pages. Register such files too, or keep their assets outside `PESI_UPLOAD_DIR`
 - **Toggles must not be nested** — a `pesi:toggle` inside another one disables switching for that page, and the dashboard says so
+- **Repeatable entries must not be nested** — a `pesi:item` inside another one disables add, duplicate, reorder and delete for that page (`S6`); the fields stay editable. A toggle may contain entries
 - **No multi-user system** — one password for everyone
 - **No version history.** pesi keeps two rotating recovery copies per page and the dashboard reaches exactly one of them. That covers *"the previous text was better"* and nothing beyond it. If someone notices on Friday that something broke on Monday, pesi cannot help — that is what your host's backups are for. Check that they are enabled before go-live, and tell the client where the boundary runs
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content
-- **Not meant for simultaneous heavy editing** — dashboard writes are lock-protected, but editing the same file via FTP and dashboard at the same time should be avoided
+- **Not meant for simultaneous heavy editing** — dashboard writes are lock-protected against each other. An FTP upload or deploy does not use that lock: pesi catches most overlaps and asks the editor to reload, but an upload that lands in the last milliseconds before a save is overwritten. Do not upload a page via FTP while the client may be saving it
 
 ---
 
 ## Requirements
 
-- PHP 8.2+ with `ext/dom` (richtext falls back to escaped plain text without it)
+- PHP 8.2+ with `ext/tokenizer` (default; `T16` if missing) and `ext/dom` (without it richtext is read-only in the dashboard and plain text on the site, `T17`)
 - Apache with `.htaccess` support, or the equivalent Nginx rules from Step 3
 - Write access for the web server on the editable pages, the web root and the upload folder
-- A PHP CLI reachable via `exec()` for the syntax check (optional; reported as `T7` if missing)
+- A PHP CLI reachable via `exec()` for the syntax check. Without it, saving is refused (`T7`) unless you set `PESI_SYNTAX_CHECK` to false knowingly
 - HTTPS (strongly recommended)
 
 ---
