@@ -2045,7 +2045,9 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
     $raw   = '';
     foreach (array_keys($pages) as $pg) {
         $pf = $basePath . '/' . $pg;
-        $versions = array_merge(is_file($pf) ? [$pf] : [], array_values(_pesi_backup_files($pf)));
+        // file_exists, nicht is_file: Eine registrierte Seite, die existiert,
+        // aber nicht lesbar ist, muss unten die Bereinigung abbrechen.
+        $versions = array_merge(file_exists($pf) ? [$pf] : [], array_values(_pesi_backup_files($pf)));
         if (!$versions) continue;
         $l = @fopen($pf . '.pesi-lock', 'c+');
         if (!$l || !flock($l, LOCK_SH)) {
