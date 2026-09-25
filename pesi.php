@@ -1,6 +1,6 @@
 <?php
 /**
- * pesi CMS v0.3 — Admin Dashboard
+ * pesi CMS — Admin Dashboard
  * URL: domain.at/pesi
  */
 
@@ -41,6 +41,23 @@ if (!file_exists($corePath)) {
 }
 require_once $corePath;
 
+// pesi.php und pesi-lib.php kommen immer aus demselben Release. Ein halbes
+// Update (nur eine der beiden Dateien ersetzt) oder eine pesi-core.php aus
+// 0.3, die pesi-lib.php noch nicht lädt, würde sonst an irgendeiner Stelle
+// mit einem Fatal Error enden. Die öffentliche Website ist davon nicht
+// betroffen, sie braucht pesi.php nicht.
+$pesiVersion = '0.4.0';
+if (!defined('PESI_VERSION') || PESI_VERSION !== $pesiVersion) {
+    http_response_code(500);
+    header('Content-Type: text/plain; charset=utf-8');
+    die(sprintf(
+        "pesi.php (%s) und pesi-lib.php (%s) passen nicht zusammen. Bitte beide Dateien aus demselben Release hochladen; pesi-core.php muss am Ende pesi-lib.php laden. Siehe README, Updating.\n\n"
+        . "pesi.php (%s) and pesi-lib.php (%s) do not match. Upload both files from the same release; pesi-core.php must load pesi-lib.php at its end. See README, Updating.",
+        $pesiVersion, defined('PESI_VERSION') ? PESI_VERSION : '–',
+        $pesiVersion, defined('PESI_VERSION') ? PESI_VERSION : '–'
+    ));
+}
+
 // i18n früh initialisieren — die POST-Verarbeitung unten ruft Funktionen
 // auf, die per `global $t` auf diese Übersetzungen zugreifen.
 $lang = defined('LANG') ? LANG : 'de';
@@ -56,8 +73,10 @@ if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
 
 $basePath = realpath(__DIR__);
 $sk = 'pesi_auth';
-$storedPassword = (string)PESI_PASSWORD;
-$defaultPassword = in_array($storedPassword, ['demo123', 'demo1234'], true);
+$storedPassword = defined('PESI_PASSWORD') ? (string)PESI_PASSWORD : '';
+// Leer zählt wie der Auslieferungswert: gesperrt. Sonst ließe
+// hash_equals('', '') ein leeres Passwort durch.
+$defaultPassword = in_array(trim($storedPassword), ['', 'demo123', 'demo1234'], true);
 
 // Sitzungen enden bei Inaktivität, nach einer absoluten Höchstdauer oder wenn
 // die Betreuung das Passwort ändert. Damit bleiben alte Cookies nicht gültig.
@@ -1844,7 +1863,7 @@ function _pesi_strings(): array { return [
         'password_ph'       => 'Passwort',
         'login_btn'         => 'Anmelden',
         'login_help'        => 'Passwort vergessen? Ihre Website-Betreuung kann es neu setzen.',
-        'setup_default_pw'  => 'Die Anmeldung ist gesperrt, bis Ihre Website-Betreuung das Auslieferungs-Passwort in pesi-core.php geändert hat. (Code T8)',
+        'setup_default_pw'  => 'Die Anmeldung ist gesperrt, bis Ihre Website-Betreuung in pesi-core.php ein eigenes Passwort gesetzt hat. (Code T8)',
         'nav_pages'         => 'Seiten',
         'to_website'        => '↗ Zur Website',
         'logout'            => 'Abmelden',
@@ -1856,7 +1875,7 @@ function _pesi_strings(): array { return [
         'globals_hint'      => 'Diese Angaben gelten gemeinsam auf der ganzen Website. Änderungen werden überall wirksam, wo die Website das entsprechende Stammdatenfeld verwendet.',
         'diag_summary'      => '⚙ Technischer Hinweis für Ihre Website-Betreuung — für Sie ist nichts zu tun',
         'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
-        'warn_default_pw'   => 'Es ist noch das Auslieferungs-Passwort gesetzt. In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
+        'warn_default_pw'   => 'Es ist kein eigenes Passwort gesetzt (leer oder noch das Auslieferungs-Passwort). In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Solange das so ist, lehnt pesi jedes Speichern ab. exec() und PHP-CLI verfügbar machen oder PESI_SYNTAX_CHECK bewusst auf false setzen. (Code T7)',
         'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Meist steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache —, oder der Feldtyp ist unbekannt (erlaubt: text, textarea, richtext, image, url, email, tel). (Code T13)',
         'warn_dup_ids'      => 'In %s kommen diese Feld-IDs mehrfach vor: %s. Solange das so ist, lässt sich die Seite nicht speichern. Jede ID darf pro Seite nur einmal stehen. (Code S7)',
@@ -1950,7 +1969,7 @@ function _pesi_strings(): array { return [
         'password_ph'       => 'Password',
         'login_btn'         => 'Sign in',
         'login_help'        => 'Forgot your password? Whoever looks after your website can reset it.',
-        'setup_default_pw'  => 'Sign-in is disabled until whoever looks after your website changes the shipped password in pesi-core.php. (Code T8)',
+        'setup_default_pw'  => 'Sign-in is disabled until whoever looks after your website sets a password of their own in pesi-core.php. (Code T8)',
         'nav_pages'         => 'Pages',
         'to_website'        => '↗ Visit Website',
         'logout'            => 'Sign out',
@@ -1962,7 +1981,7 @@ function _pesi_strings(): array { return [
         'globals_hint'      => 'These details are shared across the whole website. A change applies everywhere the corresponding shared field is used.',
         'diag_summary'      => '⚙ Technical note for whoever looks after your website — nothing for you to do',
         'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
-        'warn_default_pw'   => 'The shipped default password is still in use. Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
+        'warn_default_pw'   => 'No password of your own is set (empty, or still the shipped default). Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Until that is fixed, pesi refuses every save. Make exec() and the PHP CLI available, or set PESI_SYNTAX_CHECK to false knowingly. (Code T7)',
         'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Usually the value is in double quotes instead of single ones — pesi() expects single quotes — or the field type is unknown (allowed: text, textarea, richtext, image, url, email, tel). (Code T13)',
         'warn_dup_ids'      => 'In %s these field IDs occur more than once: %s. Until that is fixed the page cannot be saved. Each ID may appear only once per page. (Code S7)',
@@ -2504,7 +2523,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       // Der Linter wird gegen eine garantiert gültige Datei geprobt; auf
       // exec() allein zu schauen übersähe ein fehlendes CLI im PATH.
       $diag = [];
-      if (in_array((string)PESI_PASSWORD, ['demo123', 'demo1234'], true)) {
+      if ($defaultPassword) {
           $diag[] = $t['warn_default_pw'];
       }
       if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {

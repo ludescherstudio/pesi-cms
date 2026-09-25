@@ -8,7 +8,7 @@
 > *Pesi* (Swahili) — lightweight, effortless.
 > **pesi CMS** is exactly that: a featherweight way to let clients edit their own website. No database. No admin sprawl. The PHP file stays the single source of truth.
 
-**An inline CMS for PHP websites — three PHP files, one password, done.**
+**An inline CMS for PHP websites — four PHP files, one password, done.**
 
 No MySQL. No Node.js. No Docker. No build step. Edits are written straight back into the page's PHP source, so what you see via FTP is exactly what the client last saved.
 
@@ -25,7 +25,7 @@ Built for developers who maintain small client websites — practices, studios, 
 | Edits written to source | ✅ | ❌ | ❌ | ❌ |
 | Shared hosting | ✅ | ✅ | ⚠️ | ✅ |
 | Install time | ~5 min | 30+ min | 30+ min | 20+ min |
-| Code size | 3 PHP files | 2,000+ files | 1,000+ files | 500+ files |
+| Code size | 4 PHP files | 2,000+ files | 1,000+ files | 500+ files |
 
 ### What pesi refuses to be
 
@@ -42,25 +42,28 @@ If something needs its own management UI, its own URLs, or has to scale to hundr
 
 ## What's in this repository
 
-Only the three files you actually need:
+Only the four files you actually need:
 
 ```
 pesi.php             ← Dashboard (served at /pesi and /cms)
-pesi-core.php        ← Configuration (password, branding, page list) + the pesi() helper
+pesi-lib.php         ← The pesi() helper and its safety checks — replaced on every update
+pesi-core.php        ← Your settings (password, branding, page list) — never touched by an update
 pesi-content.php     ← Shared details (address, phone, email, booking link), editable as "Stammdaten"
 ```
+
+`pesi.php` and `pesi-lib.php` are pesi's code. `pesi-core.php` and `pesi-content.php` are yours. See [Updating](#updating).
 
 No `.htaccess` in the project root, no `robots.txt`. You almost certainly already have both — the instructions below show exactly which lines to add to your existing files.
 
 The repository also includes [`pesi-agent.md`](pesi-agent.md) — an optional integration guide for AI coding agents (see [Installation](#installation)).
 
-> **Downloaded the whole repository?** Only `pesi.php`, `pesi-core.php` and `pesi-content.php` are served from your web root. `README.md`, `SECURITY.md`, `pesi-agent.md`, `.gitignore` and the `assets/` folder are just for GitHub. Keep `LICENSE` and `THIRD-PARTY.md` with every copy you hand over — for example in the delivery package outside the public web root — because the bundled Quill editor requires its notice to travel with the code. The dashboard logo is embedded in `pesi.php`, so `assets/` is not needed at runtime.
+> **Downloaded the whole repository?** Only `pesi.php`, `pesi-lib.php`, `pesi-core.php` and `pesi-content.php` are served from your web root. `README.md`, `SECURITY.md`, `pesi-agent.md`, `.gitignore` and the `assets/` folder are just for GitHub. Keep `LICENSE` and `THIRD-PARTY.md` with every copy you hand over — for example in the delivery package outside the public web root — because the bundled Quill editor requires its notice to travel with the code. The dashboard logo is embedded in `pesi.php`, so `assets/` is not needed at runtime.
 
 ---
 
 ## Installation
 
-> **Using an AI coding agent?** If you work with an AI agent that can edit your project (Claude Code, Cursor, Copilot, …), you don't have to follow the steps manually. Copy the three pesi files into your project, then prompt:
+> **Using an AI coding agent?** If you work with an AI agent that can edit your project (Claude Code, Cursor, Copilot, …), you don't have to follow the steps manually. Copy the four pesi files into your project, then prompt:
 >
 > > Read `pesi-agent.md` and integrate pesi into this site.
 >
@@ -68,11 +71,12 @@ The repository also includes [`pesi-agent.md`](pesi-agent.md) — an optional in
 
 ### Step 1 — Upload the files
 
-Upload `pesi.php`, `pesi-core.php` and `pesi-content.php` via FTP into your web root — the folder that contains `index.php`:
+Upload `pesi.php`, `pesi-lib.php`, `pesi-core.php` and `pesi-content.php` via FTP into your web root — the folder that contains `index.php`:
 
 ```
 your-webroot/
 ├── pesi.php
+├── pesi-lib.php
 ├── pesi-core.php
 ├── pesi-content.php
 ├── index.php
@@ -504,7 +508,7 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `T5` | The upload folder is not writable | `chmod` the folder named in the message |
 | `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
 | `T7` | `php -l` cannot run, so pesi cannot verify PHP syntax. While `PESI_SYNTAX_CHECK` is on, every save is refused with this code; nothing unchecked is published | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
-| `T8` | The shipped default password is still active | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
+| `T8` | No password of your own is set — `PESI_PASSWORD` is empty, missing or still the shipped default. Sign-in stays locked | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
 | `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or an unknown field type | Use single quotes: `pesi('id', 'Text', …)`, and escape apostrophes in the value as `\'`. Use one of the seven documented types |
@@ -565,7 +569,7 @@ All of these are covered by the `.pesi-` rule in Step 3 except the upload folder
 
 ## Configuration reference
 
-All settings in `pesi-core.php`:
+All settings in `pesi-core.php`. A setting you leave out falls back to the default shown here, except `PESI_PASSWORD`: without it, sign-in stays locked (`T8`).
 
 ```php
 define('PESI_PASSWORD',       'your-password');    // Dashboard password or password_hash() value
@@ -615,7 +619,28 @@ The PHP file remains the single source of truth, so developer changes and dashbo
 - **Change a default or a label:** edit the second or fourth parameter
 - **Add a page:** create the PHP file, add `require_once 'pesi-core.php'` at the top, set your fields, register it in `$PESI_PAGES`
 - **Remove a page:** delete its entry from `$PESI_PAGES`
-- **Update pesi:** replace `pesi.php`. Your configuration lives in `pesi-core.php`, your wording in `$PESI_STRINGS`
+- **Update pesi:** replace `pesi.php` and `pesi-lib.php` — see [Updating](#updating)
+
+---
+
+## Updating
+
+An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload both from the same release. `pesi-core.php` (your settings, your `$PESI_STRINGS`) and `pesi-content.php` (the client's shared details) are never part of an update, and your pages keep their `require_once 'pesi-core.php'`.
+
+Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
+
+### From 0.3 to 0.4 (once)
+
+Up to 0.3, `pesi-core.php` held the settings *and* the code, so an update either overwrote your settings or left security fixes in the helper behind. 0.4 moves the code into `pesi-lib.php`. Migrate each site once, in this order — the public site keeps working at every step:
+
+1. Upload `pesi-lib.php`
+2. In your existing `pesi-core.php`, delete everything from the line `// ── Inline Helper` to the end of the file and put this line in its place:
+   ```php
+   require_once __DIR__ . '/pesi-lib.php';
+   ```
+3. Upload the new `pesi.php` and sign in once to check the dashboard
+
+Uploading `pesi-lib.php` before editing `pesi-core.php` matters: a `pesi-core.php` that loads a missing `pesi-lib.php` takes every page down.
 
 ---
 
