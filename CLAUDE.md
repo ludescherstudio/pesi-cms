@@ -42,7 +42,7 @@ Every feature must stay lightweight and keep these invariants:
   never generates layout or lets the client create pages/structure via UI.
 - **Safety net is sacred.** Every source-rewriting operation must route through
   `_pesi_commit()`: stable sidecar lock, complete same-directory candidate,
-  `php -l`, rotating `.pesi-backup.1/.2`, then atomic `rename()`. Never write
+  `php -l`, rotating `.pesi-backup.1` … `.N` (`PESI_BACKUP_COUNT`), then atomic `rename()`. Never write
   the live page file directly.
 - **Self-contained.** No CDN, no Composer deps. Quill is vendored inline.
 - If a feature wants a real management UI / its own URLs / scales to
@@ -55,7 +55,8 @@ When unsure, prefer doing less. "Stay clean" beats "more features".
 
 | File | Role |
 |------|------|
-| `pesi-core.php` | Config (`define`s) + the `pesi()` helper included by every page. ~tiny. |
+| `pesi-core.php` | The integrator's settings only (`define`s, `$PESI_PAGES`, `$PESI_STRINGS`), included by every page; its last line loads `pesi-lib.php`. An update never replaces it, so it must never contain code. |
+| `pesi-lib.php` | The `pesi()` helper, sanitizer, typed-value checks, defaults for every setting except the password, and `PESI_VERSION`. Replaced on every update together with `pesi.php`. |
 | `pesi-content.php` | Editable shared practice details, registered as “Stammdaten”. |
 | `pesi.php` | The whole dashboard: auth, parser, saver, block/toggle/restore engine, all HTML/CSS/JS, vendored Quill (one ~210 KB minified line — do not try to Read the whole file; use offset/limit or grep). |
 | `pesi-agent.md` | Installation guide for an agent integrating pesi into a site. |
@@ -89,14 +90,27 @@ the same source and commit the same way.
 - Field types: `text`, `textarea`, `richtext` (Quill, heredoc), `image`,
   `url`, `email`, `tel`
   (upload + MIME/size validation + orphan cleanup; config in `pesi-core.php`).
+- **Images**: every upload loses EXIF/XMP/IPTC losslessly in plain PHP
+  (`_pesi_jpeg_strip()` & co.) and, with gd, is scaled down to
+  `PESI_IMAGE_MAX_EDGE`. A `text` field `<image-id>_alt` is the image's
+  description and is shown in its card (`_pesi_alt_pairs()`). The card can
+  pick a file already in the upload folder (`_pesi_upload_list()`), nothing
+  more — no renaming, deleting or cropping.
 - **Repeatable blocks**: `<!-- pesi:item GROUP:N -->…<!-- /pesi:item -->`,
   field IDs prefixed `GROUP_N_`. Dashboard offers duplicate / delete /
   reorder (↑↓) / add. See `_pesi_block_*`.
 - **Visibility toggle**: `<!-- pesi:toggle G -->…<!-- /pesi:toggle -->`;
   hidden state wraps the body in `<?php if (false): ?> … <?php endif; ?>`.
   See `_pesi_toggle_*`.
-- **Restore**: `_pesi_restore()` rolls the page back to `.pesi-backup.1`
-  (reversible — current state rotates into backup first).
+- **Versions**: the dashboard lists every backup generation with the fields
+  that differ from now (`_pesi_version_diff()`). `_pesi_restore($file, $gen,
+  $hash)` restores one; the hash must match the listed generation, and the
+  current state rotates into backup 1 first, so a restore can be undone.
+- **Password**: the client can change it; the hash goes to `.pesi-password`
+  and takes precedence over `PESI_PASSWORD`. Deleting the file resets it.
+- Word count under textarea/richtext (JS only, guidance, never a limit).
+  `pesi()` has exactly four arguments. Field options (limits, hints, flags)
+  were tried and removed: every extra argument clutters the page source.
 - Unsaved-changes guard (JS) warns before structural actions / unload.
 
 ## Traps — verified the hard way, do not re-introduce
@@ -152,7 +166,7 @@ Four more from the 2026-07-31 audit. The first is the one that matters most:
   still passes `php -l`, so the safety net stays silent. `_pesi_has_marker()`
   rejects the save instead.
 
-Watch the comment style in `pesi-core.php` and `pesi.php`: a `?>` inside a `//`
+Watch the comment style in `pesi-lib.php` and `pesi.php`: a `?>` inside a `//`
 comment ends PHP mode. Use `/* … */` when a comment needs to mention PHP tags.
 
 Two more, both about assuming the host is like yours:
@@ -175,7 +189,7 @@ Two from the 2026-09-04 review before the first customer integration:
   `q.root.innerHTML` never contains a `<ul>`; the sanitizer's attribute
   allowlist stripped `data-list`, and every bullet list became numbered on
   save — even when the editor was never touched, because the submit handler
-  re-serialised all editors. `_pesi_split_quill_list()` in `pesi-core.php`
+  re-serialised all editors. `_pesi_split_quill_list()` in `pesi-lib.php`
   splits such lists by kind *before* the allowlist runs (and the new nodes are
   cleaned explicitly — the snapshot rule from Trap 3), and the submit handler
   only writes back editors the client edited (`qt` set). Do not switch to
@@ -260,9 +274,34 @@ fields:
   rewrote it, `php -l`-clean. Never go back to scanning the raw source for
   `pesi\s*\(`, not even for a "quick" diagnostic.
 - Duplicate IDs refuse the save (S7). Unknown types are not fields (T13, via
-  `_pesi_types()` in `pesi-core.php`, the one allowlist). Without ext/dom,
+  `_pesi_types()` in `pesi-lib.php`, the one allowlist). Without ext/dom,
   richtext is read-only and `_pesi_save()` skips it (T17). Without the
   tokenizer there are no fields (T16).
+
+Six from the 0.4 work (2026-09-25):
+
+- **An existing but unreadable registered page aborts the image cleanup.**
+  Collect versions with `file_exists()`, not `is_file()`: a page that exists
+  but cannot be read must stop the scan, not be skipped. Skipping it deleted
+  images it still used; the suite's "Lesefehler" group caught it.
+- **Check an upload's structure before scaling it.** gd pads a truncated JPEG
+  with grey and writes a valid file, so scaling first would publish a broken
+  photo. `_pesi_prepare_image()` strips (and thereby validates) first, scales
+  second, strips again (gd writes a `CREATOR` comment).
+- **Stripping EXIF must keep the orientation.** Without it every portrait
+  photo from a phone lands sideways. The strip writes a one-entry EXIF with
+  the orientation; the gd path burns the rotation in instead.
+- **`copy()` stamps the current time.** A backup made with it shows when its
+  state *ended*. `_pesi_backup_begin()` touches the copy with the live file's
+  mtime; the older generations keep theirs because they only move by
+  `rename()`.
+- **An empty `PESI_PASSWORD` passed `hash_equals('', '')`.** Empty counts as
+  the shipped default and locks sign-in (T8). A damaged `.pesi-password`
+  locks too (T20) instead of falling back to `pesi-core.php`.
+- **`pesi.php` and `pesi-lib.php` carry the same version.** Bump
+  `PESI_VERSION` in `pesi-lib.php` and `$pesiVersion` in `pesi.php` together;
+  the dashboard refuses to start on a mismatch (the public site does not
+  need `pesi.php` and keeps working).
 
 ## Two audiences, one interface — the rule for every string
 
@@ -335,11 +374,11 @@ is tested end-to-end: each request is a separate PHP process running the real
 The suite works because `pesi.php` is not includable standalone (session and
 headers fire on include), so it slices the function span — `_pesi_parse()` down
 to `_pesi_strings()`, all pure functions — into a temp file, requires
-`pesi-core.php` alongside it, and sets `$GLOBALS['t'] = _pesi_strings()['de']`
+`pesi-core.php` with `pesi-lib.php` next to it, and sets `$GLOBALS['t'] = _pesi_strings()['de']`
 (the ops read `$t` via `global`). If you add a function outside that span, the
 suite will not see it; extend the slice bounds in the script rather than
 loosening what the span contains.
 
 Work in a scratch directory, never against the real repo files.
 
-Always finish with `php -l pesi.php && php -l pesi-core.php`.
+Always finish with `php -l pesi.php && php -l pesi-lib.php && php -l pesi-core.php`.

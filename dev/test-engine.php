@@ -7,7 +7,7 @@
  * NUR ÜBER DIE KOMMANDOZEILE. Dieses Skript legt Dateien an, ruft shell_exec()
  * und eval() auf und gibt Interna aus — über HTTP erreichbar wäre es ein
  * Einfallstor. `dev/` gehört nicht in eine Kundeninstallation (dorthin kommen
- * nur pesi.php und pesi-core.php); die Sperre unten ist die Absicherung für
+ * nur pesi.php, pesi-lib.php und pesi-core.php); die Sperre unten ist die Absicherung für
  * den Fall, dass doch einmal der ganze Ordner auf den Webspace synchronisiert
  * wird. .gitattributes hält den Ordner zusätzlich aus ZIP-Downloads heraus.
  *
@@ -29,7 +29,10 @@
  * Enter als Speichern, eine Strukturaktion pro Anfrage, verschachtelte
  * Einträge, Tastaturzugang zur Bildauswahl) und die des Parser-Reviews vom
  * 2026-09-22 (Tokenizer statt Regex, doppelte IDs, unbekannte Typen,
- * Richtext-Fallback ohne DOM, Backslashes in URLs). Wer
+ * Richtext-Fallback ohne DOM, Backslashes in URLs) und die Funktionen aus 0.4
+ * (Bild-Metadaten und Verkleinern, N Sicherungen mit Versionsliste,
+ * Einstellungen getrennt vom Code, Passwort im Dashboard, Bildbeschreibung,
+ * Bildauswahl). Wer
  * Saver, Sanitizer oder die
  * strukturellen Features anfasst, lässt das hier vorher und nachher laufen.
  */
@@ -48,8 +51,8 @@ if (PHP_SAPI !== 'cli') {
 //   php dev/test-engine.php                    # diese Arbeitskopie
 //   php ../pesi-cms-dev/dev/test-engine.php .  # aus einem Worktree heraus
 $root = isset($argv[1]) ? rtrim($argv[1], "/\\") : dirname(__DIR__);
-if (!is_file($root . '/pesi.php') || !is_file($root . '/pesi-core.php')) {
-    fwrite(STDERR, "Kein pesi.php/pesi-core.php in: $root\n");
+if (!is_file($root . '/pesi.php') || !is_file($root . '/pesi-core.php') || !is_file($root . '/pesi-lib.php')) {
+    fwrite(STDERR, "Kein pesi.php/pesi-core.php/pesi-lib.php in: $root\n");
     fwrite(STDERR, "Aufruf: php test-engine.php [pfad-zur-arbeitskopie]\n");
     exit(2);
 }
@@ -78,7 +81,9 @@ if ($start === false || $end === false || $end <= $start) {
     fwrite(STDERR, "Konnte den Funktionsblock in pesi.php nicht finden.\n");
     exit(2);
 }
+// pesi-core.php lädt pesi-lib.php aus ihrem eigenen Ordner: beide nebeneinander.
 copy($root . '/pesi-core.php', $scratch . '/core.php');
+copy($root . '/pesi-lib.php', $scratch . '/pesi-lib.php');
 file_put_contents(
     $scratch . '/engine.php',
     "<?php\nrequire __DIR__ . '/core.php';\n" . substr($src, $start, $end - $start)
@@ -98,7 +103,8 @@ function ok(string $what, bool $cond, string $detail = '') {
 function page(string $body): string {
     global $scratch;
     $p = $scratch . '/page.php';
-    foreach (['', '.pesi-backup.1', '.pesi-backup.2'] as $s) @unlink($p . $s);
+    @unlink($p);
+    foreach (glob($p . '.pesi-*') ?: [] as $f) @unlink($f);
     file_put_contents($p, $body);
     return $p;
 }
@@ -296,7 +302,7 @@ $p = page("<?php\n\$x = pesi('f', 'A', 'text', 'L');\n");
 _pesi_backup($p);
 $opened = hash('sha256', (string)file_get_contents($p));
 file_put_contents($p, "<?php\n\$x = pesi('f', 'B', 'text', 'L');\n");
-$stale = _pesi_restore($p, $opened);
+$stale = _pesi_restore($p, 1, hash_file('sha256', $p . '.pesi-backup.1'), $opened);
 ok('veraltete Wiederherstellung wird abgelehnt', $stale['type'] === 'error');
 ok('neuerer Live-Stand bleibt erhalten', (_pesi_parse($p)['f']['value'] ?? null) === 'B');
 
@@ -872,7 +878,7 @@ ok('Save ohne Änderung meldet „nichts zu speichern"', $r['type'] === 'info', 
 ok('Rotation unangetastet',
     versionOf($p . '.pesi-backup.1') === 'V1' && versionOf($p . '.pesi-backup.2') === 'V0',
     versionOf($p . '.pesi-backup.1') . '/' . versionOf($p . '.pesi-backup.2'));
-ok('„Letzte Version" führt noch zurück', _pesi_restore($p)['type'] === 'success');
+ok('„Letzte Version" führt noch zurück', _pesi_restore($p, 1, hash_file('sha256', $p . '.pesi-backup.1'))['type'] === 'success');
 ok('nämlich auf V1', versionOf($p) === 'V1');
 
 // Abgelehnter Wert darf ebenfalls nicht rotieren
@@ -932,26 +938,24 @@ ok('Erfolg rotiert V3/V2/V1', _pesi_commit($p, $V3) === null && gens($p) === 'V3
 ok('keine Zwischendateien', !$leftovers($p), implode(', ', $leftovers($p)));
 
 if (PHP_OS_FAMILY === 'Windows') {
-    // Ein offenes Handle verhindert unter Windows das Ersetzen des Ziels —
-    // genau so hat das Review die späten Fehlschläge erzwungen.
-    foreach (['' => 'Live-Datei', '.pesi-backup.1' => 'Sicherung 1'] as $sfx => $label) {
+    // Ein offenes Handle verhindert unter Windows das Ersetzen des Ziels, nicht
+    // das Umbenennen. Ersetzt wird nur noch die Live-Datei; die Sicherungen
+    // rücken per rename() auf freie Namen weiter.
+    $p = v210();
+    $h = fopen($p, 'r');
+    $r = _pesi_commit($p, $V3);
+    fclose($h);
+    ok('Live-Datei nicht ersetzbar → Fehler gemeldet', $r !== null && $r['type'] === 'error');
+    ok('… und Historie unverändert V2/V1/V0', gens($p) === 'V2/V1/V0', gens($p));
+    ok('… ohne Zwischendateien', !$leftovers($p), implode(', ', $leftovers($p)));
+    foreach (['.pesi-backup.1' => 'Sicherung 1', '.pesi-backup.2' => 'Sicherung 2'] as $sfx => $label) {
         $p = v210();
         $h = fopen($p . $sfx, 'r');
         $r = _pesi_commit($p, $V3);
         fclose($h);
-        ok("$label nicht ersetzbar → Fehler gemeldet", $r !== null && $r['type'] === 'error');
-        ok("… und Historie unverändert V2/V1/V0", gens($p) === 'V2/V1/V0', gens($p));
-        ok("… ohne Zwischendateien", !$leftovers($p), implode(', ', $leftovers($p)));
+        ok("offene $label blockiert den Commit nicht", $r === null && gens($p) === 'V3/V2/V1', gens($p));
+        ok('… ohne Zwischendateien', !$leftovers($p), implode(', ', $leftovers($p)));
     }
-    // Sicherung 2 wird beiseitegelegt statt überschrieben. Umbenennen ist trotz
-    // offenem Handle erlaubt, Ersetzen nicht — die frühere Rotation scheiterte
-    // hier mit T2 und hatte Sicherung 2 schon verloren.
-    $p = v210();
-    $h = fopen($p . '.pesi-backup.2', 'r');
-    $r = _pesi_commit($p, $V3);
-    fclose($h);
-    ok('offene Sicherung 2 blockiert den Commit nicht', $r === null && gens($p) === 'V3/V2/V1', gens($p));
-    ok('… ohne Zwischendateien', !$leftovers($p), implode(', ', $leftovers($p)));
 } else {
     echo "  (übersprungen: späte rename()-Fehler lassen sich nur unter Windows per offenem Handle erzwingen)\n";
 }
@@ -959,15 +963,17 @@ if (PHP_OS_FAMILY === 'Windows') {
 // ── Externe Änderung während des Commits ─────────────────────
 // Ein FTP-Server kennt den pesi-Lock nicht. Schreibt er, während pesi die
 // Sicherungen anlegt, muss der Commit abbrechen statt seinen Stand zu
-// überschreiben. Eine große Sicherung 1 macht das Kopierfenster sicher treffbar.
+// überschreiben. Kopiert wird nur noch die Live-Datei (die älteren Sicherungen
+// rücken per rename() weiter); eine große Live-Datei macht dieses Kopierfenster
+// sicher treffbar.
 grp('Commit — fremder Schreibvorgang während der Sicherung');
 $p = v210();
-file_put_contents($p . '.pesi-backup.1', "<?php\n\$x = pesi('f', 'V1', 'text', 'L');\n//" . str_repeat('x', 32 * 1024 * 1024) . "\n");
+file_put_contents($p, "<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n//" . str_repeat('x', 32 * 1024 * 1024) . "\n");
 $w = bgStart('$p = ' . var_export($p, true) . ";\n" . <<<'BG'
 touch($READY);
 $until = microtime(true) + 20;
 while (microtime(true) < $until) {
-    if (glob($p . '.pesi-backup.2.pesi-tmp-backup-*')) {
+    if (glob($p . '.pesi-backup.1.pesi-tmp-backup-*')) {
         file_put_contents($p, "<?php\n\$x = pesi('f', 'EXTERN', 'text', 'L');\n");
         echo 'geschrieben';
         exit;
@@ -996,6 +1002,7 @@ $nolint = function (bool $check, string $candidate) use ($scratch): array {
     $dir = $scratch . '/nolint';
     @mkdir($dir);
     copy($scratch . '/engine.php', $dir . '/engine.php');
+    copy($scratch . '/pesi-lib.php', $dir . '/pesi-lib.php');
     $core = (string)file_get_contents($scratch . '/core.php');
     if (!$check) {
         $core = preg_replace_callback("/define\('PESI_SYNTAX_CHECK',[^\n]*\n/",
@@ -1111,6 +1118,408 @@ ok('Richtext wird nur nach Bearbeitung neu serialisiert',
     strpos($src, "if(qt.has(id)) document.getElementById('h_'+id).value=q.root.innerHTML;") !== false,
     'Submit-Handler schreibt alle Editoren zurück');
 
+// ── Funktionen ab 0.4: Bilder, Versionen, Release, Passwort ──
+// Diese Gruppen legen eigene Unterordner im Scratch an; ein eigener
+// Shutdown-Handler räumt sie rekursiv weg, auch nach einem Fatal Error.
+register_shutdown_function(function () use ($scratch) {
+    if (!is_dir($scratch)) return;
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($scratch, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+    foreach ($it as $f) { $f->isDir() && !$f->isLink() ? @rmdir($f->getPathname()) : @unlink($f->getPathname()); }
+    @rmdir($scratch);
+});
+
+// ── Bild-Bereinigung: Metadaten raus, Größe runter ───────────
+grp('Bild — Metadaten und Verkleinern');
+
+// Testbild: vier Quadranten R G / B Y, damit sich Drehungen prüfen lassen.
+function quad(int $w, int $h) {
+    $im = imagecreatetruecolor($w, $h);
+    $c = [imagecolorallocate($im, 255, 0, 0), imagecolorallocate($im, 0, 255, 0),
+          imagecolorallocate($im, 0, 0, 255), imagecolorallocate($im, 255, 255, 0)];
+    imagefilledrectangle($im, 0, 0, intdiv($w, 2) - 1, intdiv($h, 2) - 1, $c[0]);
+    imagefilledrectangle($im, intdiv($w, 2), 0, $w - 1, intdiv($h, 2) - 1, $c[1]);
+    imagefilledrectangle($im, 0, intdiv($h, 2), intdiv($w, 2) - 1, $h - 1, $c[2]);
+    imagefilledrectangle($im, intdiv($w, 2), intdiv($h, 2), $w - 1, $h - 1, $c[3]);
+    return $im;
+}
+function enc($im, string $fn): string { ob_start(); $fn($im); return (string)ob_get_clean(); }
+// Farbe an relativer Position → R, G, B oder Y
+function col($im, float $fx, float $fy): string {
+    $rgb = imagecolorat($im, (int)(imagesx($im) * $fx), (int)(imagesy($im) * $fy));
+    $r = ($rgb >> 16) & 255; $g = ($rgb >> 8) & 255; $b = $rgb & 255;
+    if ($r > 128 && $g > 128) return 'Y';
+    if ($r > 128) return 'R';
+    if ($g > 128) return 'G';
+    return $b > 128 ? 'B' : '?';
+}
+function corners($im): string {
+    return col($im, .1, .1) . col($im, .9, .1) . col($im, .1, .9) . col($im, .9, .9);
+}
+// EXIF wie aus dem Handy: Beschreibung, Orientierung und GPS-Block (big endian)
+function exifApp1(int $orient): string {
+    $desc = "SECRET-DESC\0";
+    $ifd0 = 8; $n0 = 3; $gpsOff = $ifd0 + 2 + $n0 * 12 + 4; $descOff = $gpsOff + 2 + 12 + 4;
+    $t  = "MM\x00\x2A" . pack('N', $ifd0) . pack('n', $n0);
+    $t .= pack('nnNN', 0x010E, 2, strlen($desc), $descOff);
+    $t .= pack('nnNnn', 0x0112, 3, 1, $orient, 0);
+    $t .= pack('nnNN', 0x8825, 4, 1, $gpsOff);
+    $t .= pack('N', 0);
+    $t .= pack('n', 1) . pack('nnN', 0x0001, 2, 2) . "N\0\0\0" . pack('N', 0);   // GPSLatitudeRef
+    $t .= $desc;
+    return "\xFF\xE1" . pack('n', 8 + strlen($t)) . "Exif\0\0" . $t;
+}
+function seg(int $m, string $p): string { return "\xFF" . chr($m) . pack('n', 2 + strlen($p)) . $p; }
+// Metadaten hinter APP0 einfügen, Müll hinter das Bildende hängen
+function dirtyJpeg(string $jpg, int $orient): string {
+    $app0 = strncmp(substr($jpg, 2), "\xFF\xE0", 2) === 0 ? 4 + unpack('n', $jpg, 4)[1] : 2;
+    $meta = exifApp1($orient)
+          . seg(0xE1, "http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>SECRET-XMP</x:xmpmeta>")
+          . seg(0xE2, "ICC_PROFILE\0\x01\x01FAKE-ICC")
+          . seg(0xED, "Photoshop 3.0\0SECRET-IPTC")
+          . seg(0xFE, 'SECRET-COMMENT');
+    return substr($jpg, 0, $app0) . $meta . substr($jpg, $app0) . 'SECRET-TRAILER';
+}
+function tmpImg(string $bytes, string $ext = 'jpg'): string {
+    global $scratch;
+    $f = $scratch . '/img-' . bin2hex(random_bytes(4)) . '.' . $ext;
+    file_put_contents($f, $bytes);
+    return $f;
+}
+
+$small = enc(quad(300, 200), 'imagejpeg');
+$f = tmpImg(dirtyJpeg($small, 6));
+ok('verschmutztes JPEG ist lesbar (Testaufbau)', (bool)@imagecreatefromstring((string)file_get_contents($f)));
+ok('JPEG unter der Grenze wird bereinigt', _pesi_prepare_image($f, 'image/jpeg', 2560));
+$out = (string)file_get_contents($f);
+ok('kein SECRET mehr in der Datei', strpos($out, 'SECRET') === false,
+    implode(',', array_unique(preg_match_all('/SECRET-[A-Z]+/', $out, $mm) ? $mm[0] : [])));
+ok('Farbprofil (ICC) bleibt', strpos($out, 'FAKE-ICC') !== false);
+$ex = @exif_read_data($f);
+ok('keine GPS-Daten mehr', is_array($ex) && !isset($ex['GPSLatitudeRef']) && !isset($ex['GPSVersion']), json_encode(array_keys($ex ?: [])));
+ok('Orientierung 6 bleibt erhalten', is_array($ex) && ($ex['Orientation'] ?? 0) === 6, json_encode($ex['Orientation'] ?? null));
+$im = @imagecreatefromstring($out);
+ok('bereinigtes JPEG ist lesbar, gleiche Größe', $im && imagesx($im) === 300 && imagesy($im) === 200);
+ok('Pixel unverändert (nicht neu kodiert)', $im && corners($im) === 'RGBY');
+
+$f = tmpImg(dirtyJpeg($small, 1));
+_pesi_prepare_image($f, 'image/jpeg', 2560);
+$out = (string)file_get_contents($f);
+ok('Orientierung 1: gar kein EXIF mehr', strpos($out, 'Exif') === false);
+
+// Progressives JPEG: mehrere Scans mit Tabellen dazwischen
+$pim = quad(300, 200); imageinterlace($pim, true);
+$f = tmpImg(dirtyJpeg(enc($pim, 'imagejpeg'), 3));
+ok('progressives JPEG wird bereinigt', _pesi_prepare_image($f, 'image/jpeg', 2560));
+$out = (string)file_get_contents($f);
+ok('progressiv: kein SECRET, lesbar',
+    strpos($out, 'SECRET') === false && ($im = @imagecreatefromstring($out)) && corners($im) === 'RGBY');
+
+// Verkleinern + Drehung einbrennen, alle acht EXIF-Orientierungen
+$expect = [1 => 'RGBY', 2 => 'GRYB', 3 => 'YBGR', 4 => 'BYRG',
+           5 => 'RBGY', 6 => 'BRYG', 7 => 'YGBR', 8 => 'GYRB'];
+$big = enc(quad(600, 400), 'imagejpeg');
+foreach ($expect as $o => $want) {
+    $f = tmpImg(dirtyJpeg($big, $o));
+    $okp = _pesi_prepare_image($f, 'image/jpeg', 300);
+    $out = (string)file_get_contents($f);
+    $im  = @imagecreatefromstring($out);
+    $dims = $im ? imagesx($im) . 'x' . imagesy($im) : '-';
+    $wantDims = $o >= 5 ? '200x300' : '300x200';
+    ok("Orientierung $o: verkleinert, richtig gedreht, ohne EXIF",
+        $okp && $im && $dims === $wantDims && corners($im) === $want
+            && strpos($out, 'Exif') === false && strpos($out, 'SECRET') === false,
+        "$dims, Ecken " . ($im ? corners($im) : '-') . ", erwartet $wantDims $want");
+}
+$out = (string)file_get_contents($f);
+ok('GD-Kommentar (CREATOR: gd-jpeg) entfernt', strpos($out, 'CREATOR') === false);
+
+ok('PESI_IMAGE_MAX_EDGE 0 verkleinert nie',
+    _pesi_prepare_image($f = tmpImg($big), 'image/jpeg', 0)
+        && getimagesize($f)[0] === 600);
+
+// PNG: Textblöcke und eXIf raus, Transparenz bleibt
+function pngChunk(string $type, string $data): string {
+    return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
+}
+$tp = imagecreatetruecolor(600, 400);
+imagealphablending($tp, false); imagesavealpha($tp, true);
+imagefill($tp, 0, 0, imagecolorallocatealpha($tp, 0, 0, 0, 127));
+imagefilledrectangle($tp, 0, 0, 299, 199, imagecolorallocatealpha($tp, 255, 0, 0, 0));
+$png = enc($tp, 'imagepng');
+$iend = strrpos($png, 'IEND') - 4;
+$dirtyPng = substr($png, 0, $iend) . pngChunk('tEXt', "Comment\0SECRET-PNG")
+          . pngChunk('eXIf', 'MM' . 'SECRET-EXIF') . pngChunk('tIME', "\x07\xEA\x01\x01\0\0\0")
+          . substr($png, $iend) . 'SECRET-TRAILER';
+$f = tmpImg($dirtyPng, 'png');
+ok('PNG wird bereinigt', _pesi_prepare_image($f, 'image/png', 2560));
+$out = (string)file_get_contents($f);
+ok('PNG: kein SECRET, kein tIME', strpos($out, 'SECRET') === false && strpos($out, 'tIME') === false);
+ok('PNG: lesbar', (bool)@imagecreatefromstring($out));
+$f = tmpImg($dirtyPng, 'png');
+_pesi_prepare_image($f, 'image/png', 300);
+$im = @imagecreatefromstring((string)file_get_contents($f));
+ok('PNG verkleinert', $im && imagesx($im) === 300 && imagesy($im) === 200);
+ok('PNG: Transparenz bleibt beim Verkleinern',
+    $im && ((imagecolorat($im, 250, 150) >> 24) & 127) === 127 && col($im, .2, .2) === 'R');
+
+// WebP mit VP8X-Kopf und EXIF-Chunk
+if (function_exists('imagewebp')) {
+    $wp  = enc(quad(300, 200), 'imagewebp');
+    $vp8 = substr($wp, 12);                                  // der VP8-Chunk
+    $x   = 'VP8X' . pack('V', 10) . chr(0x08) . "\0\0\0" . substr(pack('V', 299), 0, 3) . substr(pack('V', 199), 0, 3);
+    $exc = 'EXIF' . pack('V', 11) . 'SECRET-WEBP' . "\0";
+    $body = $x . $vp8 . $exc;
+    $f = tmpImg('RIFF' . pack('V', 4 + strlen($body)) . 'WEBP' . $body, 'webp');
+    ok('WebP wird bereinigt', _pesi_prepare_image($f, 'image/webp', 2560));
+    $out = (string)file_get_contents($f);
+    ok('WebP: kein SECRET, EXIF-Flag gelöscht',
+        strpos($out, 'SECRET') === false && (ord($out[20]) & 0x08) === 0);
+    ok('WebP: RIFF-Länge stimmt', unpack('V', $out, 4)[1] === strlen($out) - 8);
+    ok('WebP: lesbar', (bool)@imagecreatefromstring($out));
+}
+
+// Ablehnen statt ungeprüft veröffentlichen
+$f = tmpImg(substr(dirtyJpeg($small, 6), 0, 40));
+ok('abgeschnittenes JPEG wird abgelehnt', _pesi_prepare_image($f, 'image/jpeg', 2560) === false);
+$f = tmpImg(substr($small, 0, (int)(strlen($small) * .6)));
+ok('JPEG ohne Bildende wird abgelehnt', _pesi_prepare_image($f, 'image/jpeg', 2560) === false);
+$f = tmpImg(substr(enc(quad(600, 400), 'imagejpeg'), 0, 2000));
+ok('abgeschnittenes großes JPEG wird abgelehnt, nicht von GD aufgefüllt',
+    _pesi_prepare_image($f, 'image/jpeg', 300) === false);
+$f = tmpImg('keinbild', 'png');
+ok('kaputtes PNG wird abgelehnt', _pesi_prepare_image($f, 'image/png', 2560) === false);
+
+// GIF: bleibt Byte für Byte
+$gif = enc(quad(40, 40), 'imagegif');
+$f = tmpImg($gif, 'gif');
+ok('GIF bleibt unverändert', _pesi_prepare_image($f, 'image/gif', 10) && file_get_contents($f) === $gif);
+
+// Zu wenig Speicher: unverkleinert, aber bereinigt, kein Fatal Error
+$oldLimit = ini_get('memory_limit');
+ini_set('memory_limit', (string)(memory_get_usage() + 8 * 1048576));
+$f = tmpImg(dirtyJpeg(enc(quad(3000, 3000), 'imagejpeg'), 6));
+$okp = _pesi_prepare_image($f, 'image/jpeg', 300);
+ini_set('memory_limit', $oldLimit);
+$out = (string)file_get_contents($f);
+ok('knapper Speicher: bleibt groß, aber ohne Metadaten',
+    $okp && getimagesize($f)[0] === 3000 && strpos($out, 'SECRET') === false);
+
+// ── pesi() hat genau vier Argumente ──────────────────────────
+grp('Signatur — kein fünftes Argument');
+$c = _pesi_scan("<?php\npesi('t', 'Hallo', 'text', 'Titel', ['hint' => 'x']);\n")['calls'];
+ok('fünftes Argument → Feld nicht lesbar (T13)', !$c || $c[0]['error'] !== '');
+
+// ── Bildbeschreibung: <bild-id>_alt ──────────────────────────
+grp('Bildbeschreibung — Zuordnung');
+$fx = [
+    'portrait'     => ['id' => 'portrait', 'value' => '/uploads/a.jpg', 'type' => 'image', 'label' => 'Porträt'],
+    'portrait_alt' => ['id' => 'portrait_alt', 'value' => 'Anna Muster', 'type' => 'text', 'label' => 'Bildbeschreibung'],
+    'logo'         => ['id' => 'logo', 'value' => '/uploads/l.png', 'type' => 'image', 'label' => 'Logo'],
+    'titel_alt'    => ['id' => 'titel_alt', 'value' => 'x', 'type' => 'text', 'label' => ''],
+    'hero'         => ['id' => 'hero', 'value' => '/uploads/h.jpg', 'type' => 'image', 'label' => 'Hero'],
+    'hero_alt'     => ['id' => 'hero_alt', 'value' => 'x', 'type' => 'textarea', 'label' => ''],
+];
+ok('Bild mit _alt-Textfeld wird gepaart, sonst nichts', _pesi_alt_pairs($fx) === ['portrait' => 'portrait_alt'], json_encode(_pesi_alt_pairs($fx)));
+
+grp('Bildbeschreibung — Erinnerung nach Bildtausch');
+ok('neues Bild, gleiche Beschreibung → erinnern',
+    _pesi_alt_unchecked($fx, ['pesi_field_portrait' => '/uploads/b.jpg', 'pesi_field_portrait_alt' => 'Anna Muster']) === ['Porträt']);
+ok('neues Bild, neue Beschreibung → nichts',
+    _pesi_alt_unchecked($fx, ['pesi_field_portrait' => '/uploads/b.jpg', 'pesi_field_portrait_alt' => 'Anna Muster im Garten']) === []);
+ok('gleiches Bild → nichts', _pesi_alt_unchecked($fx, ['pesi_field_portrait' => '/uploads/a.jpg', 'pesi_field_portrait_alt' => 'Anna Muster']) === []);
+ok('Beschreibung nicht mitgesendet zählt als unverändert',
+    _pesi_alt_unchecked($fx, ['pesi_field_portrait' => '/uploads/b.jpg']) === ['Porträt']);
+
+grp('Bildbeschreibung — Einträge duplizieren');
+$ap = page("<?php ?>\n<!-- pesi:item team:1 -->\n<img src=\"<?= pesi('team_1_foto', '/uploads/a.jpg', 'image', 'Foto') ?>\" alt=\"<?= pesi('team_1_foto_alt', 'Anna', 'text', 'Bildbeschreibung') ?>\">\n<!-- /pesi:item -->\n");
+$r = _pesi_block_op($ap, 'team', 1, 'dup');
+$pairs = _pesi_alt_pairs(_pesi_parse($ap));
+ok('Duplikat bringt seine eigene Beschreibung mit', $r['type'] === 'success' && ($pairs['team_2_foto'] ?? '') === 'team_2_foto_alt', json_encode($pairs) . ' ' . $r['msg']);
+file_put_contents($scratch . '/alt-page.php', "<?php require '" . $scratch . "/core.php'; ?><img alt=\"<?= pesi('p_alt', 'Anna \"Anni\" <Muster>', 'text', 'B') ?>\">");
+ok('Beschreibung ist im alt-Attribut sicher escaped',
+    render($scratch . '/alt-page.php') === '<img alt="Anna &quot;Anni&quot; &lt;Muster&gt;">', render($scratch . '/alt-page.php'));
+
+// ── Vorhandenes Bild wiederverwenden ─────────────────────────
+grp('Bildauswahl — Upload-Ordner');
+$ls = $scratch . '/libsite';
+@mkdir($ls . '/uploads/sub', 0777, true);
+$mk = function (string $n, int $t) use ($ls) { file_put_contents("$ls/uploads/$n", 'x'); touch("$ls/uploads/$n", $t); };
+$mk('alt.jpg', 1000); $mk('neu.png', 3000); $mk('mitte.webp', 2000); $mk('GROSS.JPG', 1500);
+$mk('logo.svg', 4000); $mk('shell.php', 4000); $mk('.versteckt.jpg', 4000); $mk('notiz.txt', 4000);
+$mk("anf'uehrung.jpg", 4000); $mk('sub/tief.jpg', 4000);
+@symlink("$ls/uploads/alt.jpg", "$ls/uploads/link.jpg");
+$list = _pesi_upload_list($ls);
+$names = array_column($list, 'name');
+ok('nur erlaubte Bilder, neueste zuerst', $names === ['neu.png', 'mitte.webp', 'GROSS.JPG', 'alt.jpg'], json_encode($names));
+ok('Pfade sind Web-Pfade im Upload-Ordner', ($list[0]['path'] ?? '') === '/uploads/neu.png');
+ok('Obergrenze greift', count(_pesi_upload_list($ls, 2)) === 2);
+ok('fehlender Ordner → leere Liste', _pesi_upload_list($scratch . '/gibtsnicht') === []);
+
+// ── Versionsliste: N Generationen, Wiederherstellen, Diff ────
+grp('Versionen — Rotation über PESI_BACKUP_COUNT');
+$vp = page("<?php\n\$x = pesi('titel', 'v0', 'text', 'Titel');\n");
+$gen = fn(int $n) => (string)@file_get_contents(_pesi_backup_path($vp, $n));
+ok('PESI_BACKUP_COUNT ist 5', _pesi_backup_count() === 5);
+for ($i = 1; $i <= 7; $i++) {
+    $r = _pesi_commit($vp, "<?php\n\$x = pesi('titel', 'v$i', 'text', 'Titel');\n");
+    if ($r !== null) break;
+}
+ok('7 Speichervorgänge ohne Fehler', $r === null, json_encode($r, JSON_UNESCAPED_UNICODE));
+ok('live ist v7', strpos((string)file_get_contents($vp), "'v7'") !== false);
+$order = [];
+foreach (_pesi_backup_files($vp) as $n => $p) $order[] = $n . '=' . (preg_match("/'(v\d)'/", $gen($n), $m) ? $m[1] : '?');
+ok('Generationen 1–5 = v6 … v2, jüngste zuerst', implode(' ', $order) === '1=v6 2=v5 3=v4 4=v3 5=v2', implode(' ', $order));
+ok('keine Zwischendateien übrig', !glob($vp . '*pesi-tmp*'), implode(', ', glob($vp . '*pesi-tmp*') ?: []));
+
+// Die Sicherung trägt das Datum, seit dem ihr Stand galt, nicht die Kopierzeit
+touch($vp, 1700000000);
+clearstatcache();
+_pesi_commit($vp, "<?php\n\$x = pesi('titel', 'v8', 'text', 'Titel');\n");
+clearstatcache();
+ok('Sicherung 1 behält das Datum der Live-Datei', filemtime(_pesi_backup_path($vp, 1)) === 1700000000,
+    (string)filemtime(_pesi_backup_path($vp, 1)));
+ok('ältere Generation behält ihr Datum beim Weiterrücken', filemtime(_pesi_backup_path($vp, 2)) !== 1700000000);
+
+// Rücknahme stellt die ganze Historie exakt wieder her
+$before = [];
+foreach (_pesi_backup_files($vp) as $n => $p) $before[$n] = hash_file('sha256', $p);
+$st = _pesi_backup_begin($vp);
+ok('Rotation begonnen', is_array($st));
+_pesi_backup_rollback($st);
+clearstatcache();
+$after = [];
+foreach (_pesi_backup_files($vp) as $n => $p) $after[$n] = hash_file('sha256', $p);
+ok('Rollback: alle Generationen wie vorher', $before === $after);
+ok('Rollback: keine Zwischendateien', !glob($vp . '*pesi-tmp*'));
+
+// Nach einer Verkleinerung von PESI_BACKUP_COUNT liegen alte Generationen
+// jenseits der Anzahl. Die nächste Rotation räumt sie weg.
+foreach ([6, 7, 9] as $n) file_put_contents(_pesi_backup_path($vp, $n), "<?php\n\$x = pesi('bild', '/uploads/alt$n.jpg', 'image', 'Bild');\n");
+file_put_contents(_pesi_backup_path($vp, 5), "<?php\n\$x = pesi('bild', '/uploads/gen5.jpg', 'image', 'Bild');\n");
+$exp = _pesi_expiring_images($vp);
+sort($exp);
+ok('herausfallende Bilder: Generation 5 und alles dahinter',
+    $exp === ['/uploads/alt6.jpg', '/uploads/alt7.jpg', '/uploads/alt9.jpg', '/uploads/gen5.jpg'], json_encode($exp));
+_pesi_commit($vp, "<?php\n\$x = pesi('titel', 'v9', 'text', 'Titel');\n");
+ok('Generationen jenseits der Anzahl sind weg', array_keys(_pesi_backup_files($vp)) === [1, 2, 3, 4, 5],
+    json_encode(array_keys(_pesi_backup_files($vp))));
+
+grp('Versionen — Bild-Aufräumen sieht alle Generationen');
+$vs = $scratch . '/vsite';
+@mkdir($vs . '/uploads', 0777, true);
+foreach (['live', 'gen4', 'weg'] as $b) file_put_contents("$vs/uploads/$b.jpg", 'x');
+file_put_contents("$vs/index.php", "<?php\n\$x = pesi('bild', '/uploads/live.jpg', 'image', 'Bild');\n");
+file_put_contents(_pesi_backup_path("$vs/index.php", 4), "<?php\n\$x = pesi('bild', '/uploads/gen4.jpg', 'image', 'Bild');\n");
+_pesi_cleanup_old($vs, ['/uploads/gen4.jpg', '/uploads/weg.jpg'], ['index.php' => 'Start']);
+ok('Bild, das nur Sicherung 4 noch nutzt, bleibt', is_file("$vs/uploads/gen4.jpg"));
+ok('Bild, das kein Stand mehr nutzt, ist gelöscht', !is_file("$vs/uploads/weg.jpg"));
+
+grp('Versionen — Wiederherstellen');
+$vp = page("<?php\n\$x = pesi('titel', 'A', 'text', 'Titel');\n");
+foreach (['B', 'C', 'D'] as $v) _pesi_commit($vp, "<?php\n\$x = pesi('titel', '$v', 'text', 'Titel');\n");
+// live D, 1=C, 2=B, 3=A
+$h3 = hash('sha256', $gen(3));
+$live = hash_file('sha256', $vp);
+$r = _pesi_restore($vp, 3, str_repeat('0', 64), $live);
+ok('falscher Versions-Hash wird abgelehnt', $r['msg'] === $GLOBALS['t']['err_stale'], $r['msg']);
+ok('dabei bleibt die Seite unverändert', hash_file('sha256', $vp) === $live);
+$r = _pesi_restore($vp, 9, $h3, $live);
+ok('nicht vorhandene Generation → rst_none', $r['msg'] === $GLOBALS['t']['rst_none'], $r['msg']);
+$r = _pesi_restore($vp, 3, $h3, str_repeat('f', 64));
+ok('veraltete Seite (Live-Hash) wird abgelehnt', $r['msg'] === $GLOBALS['t']['err_stale'], $r['msg']);
+$r = _pesi_restore($vp, 3, $h3, $live);
+ok('Generation 3 wiederhergestellt', $r['type'] === 'success', $r['msg']);
+ok('live ist jetzt A', strpos((string)file_get_contents($vp), "'A'") !== false);
+ok('der Stand davor (D) ist jetzt Generation 1', strpos($gen(1), "'D'") !== false);
+ok('A bleibt zusätzlich in der Historie', strpos($gen(4), "'A'") !== false, $gen(4));
+$r = _pesi_restore($vp, 4, hash('sha256', $gen(4)), hash_file('sha256', $vp));
+ok('Wiederherstellen des gleichen Stands → rst_same', $r['msg'] === $GLOBALS['t']['rst_same'], $r['msg']);
+
+grp('Versionen — Unterschiede');
+$now  = ['a' => ['id' => 'a', 'value' => 'neu', 'type' => 'text', 'label' => 'Titel'],
+         'b' => ['id' => 'b', 'value' => 'gleich', 'type' => 'text', 'label' => 'B'],
+         'n' => ['id' => 'n', 'value' => 'x', 'type' => 'text', 'label' => '']];
+$then = ['a' => ['id' => 'a', 'value' => 'alt', 'type' => 'text', 'label' => 'Titel'],
+         'b' => ['id' => 'b', 'value' => 'gleich', 'type' => 'text', 'label' => 'B'],
+         'g' => ['id' => 'g', 'value' => 'weg', 'type' => 'text', 'label' => 'Gelöscht']];
+$d = _pesi_version_diff($now, $then);
+ok('Diff: geändert, neu, entfernt; gleiches fehlt',
+    $d === [['Titel', 'text', 'alt', 'neu'], [_pesi_human('n'), 'text', null, 'x'], ['Gelöscht', 'text', 'weg', null]],
+    json_encode($d, JSON_UNESCAPED_UNICODE));
+ok('Text: nicht vorhanden', _pesi_version_text(null, 'text') === $GLOBALS['t']['vh_absent']);
+ok('Text: leer', _pesi_version_text("  \n", 'text') === $GLOBALS['t']['vh_empty']);
+ok('Text: Bild zeigt den Dateinamen', _pesi_version_text('/uploads/foto-abc.jpg', 'image') === 'foto-abc.jpg');
+ok('Text: Richtext ohne Tags, Absätze getrennt',
+    _pesi_version_text('<p>Eins &amp; <b>zwei</b></p><p>drei</p>', 'richtext') === 'Eins & zwei drei',
+    _pesi_version_text('<p>Eins &amp; <b>zwei</b></p><p>drei</p>', 'richtext'));
+$long = str_repeat('ä', 100);
+$cut  = _pesi_version_text($long, 'text');
+ok('Text: nach 80 Zeichen gekürzt, UTF-8 bleibt ganz', $cut === str_repeat('ä', 80) . '…' && preg_match('//u', $cut) === 1, $cut);
+
+// ── Release: Einstellungen und Code getrennt ─────────────────
+grp('Release — pesi-core.php ist nur Einstellung');
+$coreSrc = (string)file_get_contents($root . '/pesi-core.php');
+$fnTokens = array_filter(token_get_all($coreSrc), fn($tk) => is_array($tk) && $tk[0] === T_FUNCTION);
+ok('pesi-core.php definiert keine Funktionen', !$fnTokens);
+ok('pesi-core.php lädt pesi-lib.php am Ende',
+    (bool)preg_match("#require_once __DIR__ \. '/pesi-lib\.php';\s*$#", $coreSrc));
+preg_match("/\\\$pesiVersion = '([^']+)'/", $src, $vm);
+ok('pesi.php und pesi-lib.php tragen dieselbe Version', ($vm[1] ?? '') === PESI_VERSION,
+    ($vm[1] ?? '?') . ' / ' . PESI_VERSION);
+
+// Minimale pesi-core.php: nur das Passwort. Alles andere kommt aus den
+// Standardwerten, damit neue Einstellungen kein Update der Konfiguration brauchen.
+$mini = $scratch . '/mini';
+@mkdir($mini);
+copy($root . '/pesi-lib.php', $mini . '/pesi-lib.php');
+file_put_contents($mini . '/pesi-core.php',
+    "<?php\ndefine('PESI_PASSWORD', 'x');\nrequire_once __DIR__ . '/pesi-lib.php';\n");
+$probe = 'require "' . $mini . '/pesi-core.php"; $m = [];'
+       . ' foreach (["BRAND_NAME","BRAND_COLOR","BRAND_LOGO","LANG","PESI_BACKUP_ENABLED","PESI_BACKUP_COUNT","PESI_PASSWORD_CHANGE","PESI_SYNTAX_CHECK",'
+       . '"PESI_SESSION_IDLE","PESI_SESSION_MAX","PESI_GLOBALS_FILE","PESI_UPLOAD_DIR","PESI_UPLOAD_MAX_BYTES",'
+       . '"PESI_UPLOAD_TYPES","PESI_IMAGE_MAX_EDGE"] as $c) if (!defined($c)) $m[] = $c;'
+       . ' echo implode(",", $m), "|", pesi("x", "<b>", "text"), "|", isset($pesiKey) ? "leak" : "clean";';
+$res = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($probe) . ' 2>&1');
+ok('fehlende Einstellungen bekommen Standardwerte', strpos($res, '|') === 0, $res);
+ok('pesi() funktioniert mit minimaler Konfiguration', strpos($res, '|&lt;b&gt;|') !== false, $res);
+ok('Schleifenvariablen landen nicht im Seiten-Scope', substr($res, -5) === 'clean', $res);
+file_put_contents($mini . '/pesi-core.php',
+    "<?php\ndefine('BRAND_NAME', 'Eigene');\nrequire_once __DIR__ . '/pesi-lib.php';\n");
+$res = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require "' . $mini . '/pesi-core.php"; echo BRAND_NAME, "|", defined("PESI_PASSWORD") ? "pw" : "nopw";') . ' 2>&1');
+ok('eigene Werte haben Vorrang vor den Standardwerten', strpos($res, 'Eigene|') === 0, $res);
+ok('PESI_PASSWORD hat keinen Standardwert', substr($res, -4) === 'nopw', $res);
+
+// ── Passwort im Dashboard ändern ─────────────────────────────
+grp('Passwort — Prüfen und Speichern');
+$pwf = _pesi_password_file();
+@unlink($pwf);
+ok('Datei liegt neben pesi.php und fällt unter die .pesi--Regel', basename($pwf) === '.pesi-password');
+ok('ohne Datei gilt pesi-core.php', _pesi_password_override() === null);
+ok('Klartext aus pesi-core.php', _pesi_password_verify('geheim', 'geheim') && !_pesi_password_verify('falsch', 'geheim'));
+ok('Hash', _pesi_password_verify('geheim', password_hash('geheim', PASSWORD_DEFAULT)));
+ok('leerer gespeicherter Wert lässt nichts durch', !_pesi_password_verify('', ''));
+$chk = fn($c, $n, $r) => _pesi_password_check($c, $n, $r, 'alt-passwort-123');
+ok('falsches aktuelles Passwort', $chk('x', 'neues-passwort', 'neues-passwort') === 'pw_err_current');
+ok('falsches aktuelles hat Vorrang vor allen anderen Regeln', $chk('x', 'kurz', 'anders') === 'pw_err_current');
+ok('Wiederholung stimmt nicht', $chk('alt-passwort-123', 'neues-passwort', 'neues-passwortt') === 'pw_err_repeat');
+ok('zu kurz', $chk('alt-passwort-123', 'kurz', 'kurz') === 'pw_err_short');
+ok('10 Zeichen zählen Umlaute einzeln', $chk('alt-passwort-123', 'ääääääääää', 'ääääääääää') === '');
+ok('nur Leerzeichen gilt nicht', $chk('alt-passwort-123', str_repeat(' ', 12), str_repeat(' ', 12)) === 'pw_err_short');
+ok('gleich wie bisher', $chk('alt-passwort-123', 'alt-passwort-123', 'alt-passwort-123') === 'pw_err_same');
+ok('gültiger Wechsel', $chk('alt-passwort-123', 'Sonne über dem See', 'Sonne über dem See') === '');
+
+$h = _pesi_password_write('Sonne über dem See');
+ok('Hash geschrieben und zurückgelesen', is_string($h) && _pesi_password_override() === $h);
+ok('Datei enthält keinen Klartext', strpos((string)file_get_contents($pwf), 'Sonne') === false);
+ok('neues Passwort passt zum Hash', _pesi_password_verify('Sonne über dem See', (string)$h));
+ok('keine Temp-Datei übrig', !glob($pwf . '-tmp-*'));
+ok('Datei nur für den Besitzer lesbar', (fileperms($pwf) & 0077) === 0, decoct(fileperms($pwf) & 0777));
+file_put_contents($pwf, "kaputt\n");
+ok('beschädigte Datei sperrt, statt auf pesi-core.php zurückzufallen', _pesi_password_override() === '');
+file_put_contents($pwf, "  " . $h . "\n");
+ok('Leerraum um den Hash wird toleriert', _pesi_password_override() === $h);
+@unlink($pwf);
+
 // ── Standard-Markenfarbe muss die eigene Kontrastprüfung bestehen ──
 // Sonst zeigt jede frische Installation ab Tag eins die T12-Diagnose.
 grp('Markenfarbe — Standardwert');
@@ -1156,7 +1565,8 @@ foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
           'up_err_dir', 'up_err_dir_invalid',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'blk_nested', 'err_no_lint', 'err_dup_ids', 'rt_no_dom',
           'warn_dup_ids', 'warn_no_tokenizer', 'warn_no_dom', 'warn_unparsed', 'warn_default_pw',
-          'warn_no_exec', 'warn_upload_limit', 'login_unavailable'] as $k) {
+          'warn_no_exec', 'warn_upload_limit', 'login_unavailable',
+          'warn_no_gd', 'pw_err_write', 'pw_err_file'] as $k) {
     foreach (['de', 'en'] as $l) {
         ok("$l/$k trägt einen Code", (bool)preg_match('/\(Code [ST]\d+/', $s[$l][$k]),
             $s[$l][$k]);
@@ -1210,6 +1620,7 @@ $e2e = $scratch . '/e2e';
 @mkdir($e2e, 0777, true);
 copy($root . '/pesi.php', $e2e . '/pesi.php');
 copy($root . '/pesi-core.php', $e2e . '/pesi-core.php');
+copy($root . '/pesi-lib.php', $e2e . '/pesi-lib.php');
 $render = function (string $dir): string {
     $cmd = 'cd ' . escapeshellarg($dir) . ' && '
          . escapeshellarg(PHP_BINARY) . ' pesi.php';
@@ -1246,6 +1657,7 @@ $ctlClean = function () use ($ctl) {
 };
 register_shutdown_function($ctlClean);
 copy($root . '/pesi.php', $ctl . '/site/pesi.php');
+copy($root . '/pesi-lib.php', $ctl . '/site/pesi-lib.php');
 $ctlPw = 'richtig-Passwort-42';
 // Callback statt Ersetzungsstring: `$2y$10$…` wäre dort ein Rückverweis (Trap 2).
 $ctlHash = password_hash($ctlPw, PASSWORD_BCRYPT, ['cost' => 10]);
