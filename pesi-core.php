@@ -22,6 +22,7 @@ define('PESI_GLOBALS_FILE',  'pesi-content.php');
 define('PESI_UPLOAD_DIR',       'uploads');
 define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);          // 5 MB
 define('PESI_UPLOAD_TYPES',     'jpg,jpeg,png,webp,avif,gif'); // SVG bewusst nicht erlaubt
+define('PESI_IMAGE_MAX_EDGE',   2560);   // längere Kante in px, größere Bilder werden verkleinert (braucht gd); 0 = nie
 
 $PESI_PAGES = [
     PESI_GLOBALS_FILE => 'Stammdaten',
