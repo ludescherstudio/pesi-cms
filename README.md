@@ -357,6 +357,15 @@ Shipped German uses formal address (*Sie*), which suits practices and firms; the
 <img src="<?= pesi('portrait', '/uploads/portrait.jpg', 'image', 'Portrait') ?>" alt="">
 ```
 
+**Image description.** A `text` field whose ID is the image ID plus `_alt` belongs to that image. Put it in the `alt` attribute:
+
+```php
+<img src="<?= pesi('portrait', '/uploads/portrait.jpg', 'image', 'Porträt') ?>"
+     alt="<?= pesi('portrait_alt', 'Anna Muster in ihrer Praxis', 'text', 'Bildbeschreibung') ?>">
+```
+
+The dashboard shows it inside the image's card, directly under the image, with one line explaining what it is for. When the client picks a new image, the card asks whether the description still fits; saving a new image with an unchanged description repeats the question in the success message. Nothing is enforced. Give content images — portraits, team, projects — a description; leave decorative images at `alt=""` and without one. In a `pesi:item` entry, name it like the image (`team_1_foto` → `team_1_foto_alt`) so a duplicated entry brings its own.
+
 **`richtext`** — WYSIWYG editor (Quill, bundled inline). Bold, italic, lists, links, headings h2/h3, blockquotes, multiple paragraphs. The output is wrapped in `<div class="pesi-richtext">` with default styles for lists and links. Only these tags survive the sanitizer, on save and on every render:
 
 ```
@@ -408,7 +417,7 @@ For any list the client should be able to grow or shrink: team members, services
 <section class="team">
 <!-- pesi:item team:1 -->
   <article class="member">
-    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Photo') ?>" alt="">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Photo') ?>" alt="<?= pesi('team_1_foto_alt', 'Anna Muster', 'text', 'Image description') ?>">
     <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
     <p><?= pesi('team_1_rolle', 'Psychologist', 'text', 'Role') ?></p>
   </article>
@@ -451,7 +460,7 @@ Edit the field list in `pesi-content.php` to match the site, then reuse the same
 
 **Replace:** practice name, contact person, tagline · address, phone, email · opening hours · headings · body text, descriptions · legal texts · team and service descriptions · prices · quotes · button labels (the text, not the link) · footer text · swappable photos.
 
-**Leave static:** navigation and menu structure · HTML attributes such as `class`, `id`, `alt`, `style` (for deliberately editable `href`/`src` use `url`, `email`, `tel` or `image`) · PHP logic · CSS and JavaScript · `<meta>` tags · decorative images · dynamic values like `date('Y')` · structural tags themselves · existing `require`/`include` statements.
+**Leave static:** navigation and menu structure · HTML attributes such as `class`, `id`, `style` (for deliberately editable `href`/`src` use `url`, `email`, `tel` or `image`; for `alt`, the `_alt` description field) · PHP logic · CSS and JavaScript · `<meta>` tags · decorative images · dynamic values like `date('Y')` · structural tags themselves · existing `require`/`include` statements.
 
 **Pure-text pages** (imprint, privacy policy) get **one** `richtext` field for the whole body under the `<h1>`, not one field per paragraph:
 
