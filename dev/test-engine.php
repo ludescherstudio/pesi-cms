@@ -1730,18 +1730,24 @@ $mini = $scratch . '/mini';
 copy($root . '/pesi-lib.php', $mini . '/pesi-lib.php');
 file_put_contents($mini . '/pesi-core.php',
     "<?php\ndefine('PESI_PASSWORD', 'x');\nrequire_once __DIR__ . '/pesi-lib.php';\n");
-$probe = 'require "' . $mini . '/pesi-core.php"; $m = [];'
+$probe = 'require ' . var_export($mini . '/pesi-core.php', true) . '; $m = [];'
        . ' foreach (["BRAND_NAME","BRAND_COLOR","BRAND_LOGO","LANG","PESI_BACKUP_ENABLED","PESI_BACKUP_COUNT","PESI_PASSWORD_CHANGE","PESI_SYNTAX_CHECK",'
        . '"PESI_SESSION_IDLE","PESI_SESSION_MAX","PESI_GLOBALS_FILE","PESI_UPLOAD_DIR","PESI_UPLOAD_MAX_BYTES",'
        . '"PESI_UPLOAD_TYPES","PESI_IMAGE_MAX_EDGE"] as $c) if (!defined($c)) $m[] = $c;'
        . ' echo implode(",", $m), "|", pesi("x", "<b>", "text"), "|", isset($pesiKey) ? "leak" : "clean";';
-$res = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($probe) . ' 2>&1');
+// Als Datei, nicht mit php -r: Unter Windows ersetzt escapeshellarg() jedes "
+// im Code durch ein Leerzeichen.
+$runProbe = function (string $code) use ($mini): string {
+    file_put_contents($mini . '/probe.php', "<?php\n" . $code);
+    return (string)shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($mini . '/probe.php') . ' 2>&1');
+};
+$res = $runProbe($probe);
 ok('fehlende Einstellungen bekommen Standardwerte', strpos($res, '|') === 0, $res);
 ok('pesi() funktioniert mit minimaler Konfiguration', strpos($res, '|&lt;b&gt;|') !== false, $res);
 ok('Schleifenvariablen landen nicht im Seiten-Scope', substr($res, -5) === 'clean', $res);
 file_put_contents($mini . '/pesi-core.php',
     "<?php\ndefine('BRAND_NAME', 'Eigene');\nrequire_once __DIR__ . '/pesi-lib.php';\n");
-$res = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require "' . $mini . '/pesi-core.php"; echo BRAND_NAME, "|", defined("PESI_PASSWORD") ? "pw" : "nopw";') . ' 2>&1');
+$res = $runProbe('require ' . var_export($mini . '/pesi-core.php', true) . '; echo BRAND_NAME, "|", defined("PESI_PASSWORD") ? "pw" : "nopw";');
 ok('eigene Werte haben Vorrang vor den Standardwerten', strpos($res, 'Eigene|') === 0, $res);
 ok('PESI_PASSWORD hat keinen Standardwert', substr($res, -4) === 'nopw', $res);
 
@@ -1769,7 +1775,11 @@ ok('Hash geschrieben und zurückgelesen', is_string($h) && _pesi_password_overri
 ok('Datei enthält keinen Klartext', strpos((string)file_get_contents($pwf), 'Sonne') === false);
 ok('neues Passwort passt zum Hash', _pesi_password_verify('Sonne über dem See', (string)$h));
 ok('keine Temp-Datei übrig', !glob($pwf . '-tmp-*'));
-ok('Datei nur für den Besitzer lesbar', (fileperms($pwf) & 0077) === 0, decoct(fileperms($pwf) & 0777));
+if (PHP_OS_FAMILY === 'Windows') {
+    echo "  (übersprungen: Windows kennt keine Unix-Dateirechte; geschützt wird die Datei durch die .pesi--Regel)\n";
+} else {
+    ok('Datei nur für den Besitzer lesbar', (fileperms($pwf) & 0077) === 0, decoct(fileperms($pwf) & 0777));
+}
 file_put_contents($pwf, "kaputt\n");
 ok('beschädigte Datei sperrt, statt auf pesi-core.php zurückzufallen', _pesi_password_override() === '');
 file_put_contents($pwf, "  " . $h . "\n");
