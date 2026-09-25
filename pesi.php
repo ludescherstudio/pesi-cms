@@ -73,7 +73,8 @@ if (isset($PESI_STRINGS) && is_array($PESI_STRINGS)) {
 
 $basePath = realpath(__DIR__);
 $sk = 'pesi_auth';
-$storedPassword = defined('PESI_PASSWORD') ? (string)PESI_PASSWORD : '';
+$pwOverride = _pesi_password_override();
+$storedPassword = $pwOverride ?? (defined('PESI_PASSWORD') ? (string)PESI_PASSWORD : '');
 // Leer zählt wie der Auslieferungswert: gesperrt. Sonst ließe
 // hash_equals('', '') ein leeres Passwort durch.
 $defaultPassword = in_array(trim($storedPassword), ['', 'demo123', 'demo1234'], true);
@@ -156,9 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_login'])) {
             $pw = _pesi_param($_POST, 'pesi_password');
             $stored = $storedPassword;
             // Akzeptiert sowohl Plaintext als auch password_hash() ($2y$, $argon, …)
-            $ok = !$defaultPassword && ((strlen($stored) > 3 && $stored[0] === '$')
-                ? password_verify($pw, $stored)
-                : hash_equals($stored, $pw));
+            $ok = !$defaultPassword && _pesi_password_verify($pw, $stored);
             if ($ok) {
                 // Session-Fixation verhindern
                 session_regenerate_id(true);
@@ -181,6 +180,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_login'])) {
 }
 
 $auth = !empty($_SESSION[$sk]);
+
+// ── Passwort ändern ──────────────────────────────────────────
+// Nur angemeldet und nur, solange PESI_PASSWORD_CHANGE es erlaubt. Die Prüfung
+// des aktuellen Passworts läuft durch dieselbe Bremse wie der Login, sonst
+// ließe sich mit einer fremden, offenen Sitzung das Passwort durchprobieren
+// und der Besitzer anschließend aussperren.
+$pwChange = $auth && PESI_PASSWORD_CHANGE;
+$pwView   = $pwChange && _pesi_param($_GET, 'password') !== '';
+$pwMsg = '';
+$pwMsgType = '';
+if ($pwChange && _pesi_param($_GET, 'password') === 'done') {
+    $pwMsg = $t['pw_done'];
+    $pwMsgType = 'success';
+}
+if ($pwChange && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_pw_change'])) {
+    $pwView = true;
+    $pwMsgType = 'error';
+    if (!$csrfOk) {
+        $pwMsg = $t['err_session'];
+    } elseif (_pesi_session_throttle_check() > 0) {
+        $pwMsg = $t['pw_err_current'];
+    } else {
+        $wait = _pesi_throttle_acquire();
+        if ($wait === null) {
+            error_log('pesi: login throttle register unavailable (T15)');
+            $pwMsg = $t['login_unavailable'];
+        } elseif ($wait > 0) {
+            $pwMsg = $t['pw_err_current'];
+        } else {
+            $err = _pesi_password_check(_pesi_param($_POST, 'pesi_pw_current'), _pesi_param($_POST, 'pesi_pw_new'),
+                                        _pesi_param($_POST, 'pesi_pw_repeat'), $storedPassword);
+            if ($err === 'pw_err_current') {
+                _pesi_session_throttle_fail();
+                $pwMsg = $t[$err];
+            } else {
+                // Das aktuelle Passwort stimmte: der reservierte Versuch zählt nicht.
+                _pesi_throttle_reset();
+                _pesi_session_throttle_reset();
+                $hash = $err === '' ? _pesi_password_write(_pesi_param($_POST, 'pesi_pw_new')) : null;
+                if ($err !== '') {
+                    $pwMsg = $t[$err];
+                } elseif ($hash === null) {
+                    $pwMsg = $t['pw_err_write'];
+                } else {
+                    // Diese Sitzung bleibt angemeldet, alle anderen enden beim
+                    // nächsten Aufruf: Ihr Fingerabdruck passt nicht mehr.
+                    session_regenerate_id(true);
+                    $_SESSION['pesi_csrf'] = bin2hex(random_bytes(16));
+                    $_SESSION['pesi_pw_fingerprint'] = hash('sha256', $hash);
+                    header('Location: ' . $selfUrl . '?password=done');
+                    exit;
+                }
+            }
+        }
+    }
+}
 
 // ── Page & Fields ────────────────────────────────────────────
 $page = null;
@@ -1245,6 +1300,70 @@ function _pesi_human(string $slug): string {
 // passt damit zu pesis „kein Content-Store“-Prinzip. Ist es nicht nutzbar,
 // verweigert der Login-Handler die Anmeldung (Code T15), statt ohne IP-Bremse
 // weiterzulaufen.
+// ── Passwort ─────────────────────────────────────────────────
+// Das im Dashboard gesetzte Passwort liegt als password_hash() in
+// .pesi-password neben pesi.php. Die Datei hat Vorrang vor PESI_PASSWORD.
+// Löscht die Betreuung sie per FTP, gilt wieder pesi-core.php: das ist der
+// Rettungsweg, wenn die Kundin ihr Passwort vergessen hat. Die .htaccess-Regel
+// für \.pesi- sperrt die Datei wie Backups und Throttle.
+function _pesi_password_file(): string { return __DIR__ . '/.pesi-password'; }
+
+// null = keine Datei, pesi-core.php gilt. '' = Datei vorhanden, aber kein
+// gültiger Hash: Anmeldung gesperrt (T20), nicht still auf pesi-core.php
+// zurückfallen.
+function _pesi_password_override(): ?string {
+    $f = _pesi_password_file();
+    if (!file_exists($f)) return null;
+    $h = @file_get_contents($f);
+    $h = is_string($h) ? trim($h) : '';
+    return $h !== '' && $h[0] === '$' && password_get_info($h)['algoName'] !== 'unknown' ? $h : '';
+}
+
+// Prüft ein Passwort gegen den gespeicherten Wert: password_hash() oder,
+// aus pesi-core.php, Klartext.
+function _pesi_password_verify(string $pw, string $stored): bool {
+    if ($stored === '') return false;
+    return strlen($stored) > 3 && $stored[0] === '$'
+        ? password_verify($pw, $stored)
+        : hash_equals($stored, $pw);
+}
+
+/**
+ * Prüft einen Passwortwechsel. Rückgabe: '' = in Ordnung, sonst der Key der
+ * Meldung. Das aktuelle Passwort zuerst: Wer es nicht kennt, erfährt nichts
+ * über die Regeln für das neue.
+ */
+function _pesi_password_check(string $current, string $new, string $repeat, string $stored): string {
+    if (!_pesi_password_verify($current, $stored)) return 'pw_err_current';
+    if ($new !== $repeat) return 'pw_err_repeat';
+    if (preg_match_all('/./su', $new) < 10 || trim($new) === '') return 'pw_err_short';
+    if ($new === $current) return 'pw_err_same';
+    return '';
+}
+
+// Schreibt den Hash vollständig in eine Temp-Datei und tauscht sie atomar aus.
+// Rückgabe: der neue Hash, oder null, wenn nichts geschrieben wurde.
+function _pesi_password_write(string $new): ?string {
+    $hash = password_hash($new, PASSWORD_DEFAULT);
+    $f = _pesi_password_file();
+    try {
+        $tmp = $f . '-tmp-' . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        return null;
+    }
+    $fp = @fopen($tmp, 'x+b');
+    $ok = $fp && fwrite($fp, $hash) === strlen($hash) && fflush($fp);
+    if ($fp && function_exists('fsync')) $ok = fsync($fp) && $ok;
+    if ($fp) fclose($fp);
+    if ($ok) {
+        @chmod($tmp, 0600);
+        $ok = @rename($tmp, $f);
+    }
+    if (!$ok) { @unlink($tmp); return null; }
+    clearstatcache(true, $f);
+    return _pesi_password_override() === $hash ? $hash : null;
+}
+
 function _pesi_throttle_file(): string { return __DIR__ . '/.pesi-throttle'; }
 function _pesi_throttle_lock_file(): string { return __DIR__ . '/.pesi-throttle-lock'; }
 
@@ -1969,6 +2088,22 @@ function _pesi_strings(): array { return [
         'nav_pages'         => 'Seiten',
         'to_website'        => '↗ Zur Website',
         'logout'            => 'Abmelden',
+        'pw_link'           => 'Passwort ändern',
+        'pw_title'          => 'Passwort ändern',
+        'pw_intro'          => 'Das neue Passwort gilt sofort. Andere Geräte, auf denen Sie angemeldet sind, werden dabei abgemeldet.',
+        'pw_current'        => 'Aktuelles Passwort',
+        'pw_new'            => 'Neues Passwort',
+        'pw_repeat'         => 'Neues Passwort wiederholen',
+        'pw_rule'           => 'Mindestens 10 Zeichen. Ein Satz aus mehreren Wörtern ist sicher und leicht zu merken.',
+        'pw_btn'            => 'Passwort ändern',
+        'pw_forgot'         => 'Passwort vergessen? Ihre Website-Betreuung kann es zurücksetzen.',
+        'pw_done'           => 'Das Passwort ist geändert. Sie bleiben angemeldet.',
+        'pw_err_current'    => 'Das aktuelle Passwort stimmt nicht.',
+        'pw_err_repeat'     => 'Die beiden neuen Passwörter stimmen nicht überein.',
+        'pw_err_short'      => 'Das neue Passwort braucht mindestens 10 Zeichen.',
+        'pw_err_same'       => 'Das neue Passwort ist dasselbe wie das bisherige.',
+        'pw_err_write'      => 'Das Passwort ließ sich nicht speichern, es gilt weiterhin das bisherige. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T20)',
+        'pw_err_file'       => 'Die Anmeldung ist gesperrt, weil die Passwortdatei .pesi-password beschädigt ist. Ihre Website-Betreuung kann sie löschen, dann gilt wieder das Passwort aus pesi-core.php. (Code T20)',
         'no_fields'         => 'Auf dieser Seite gibt es nichts zum Bearbeiten.',
         'save_hint'         => 'Ihre Änderungen werden erst mit „Speichern“ übernommen. Frühere Stände finden Sie unter „Frühere Versionen“.',
         'save_btn'          => 'Speichern',
@@ -2095,6 +2230,22 @@ function _pesi_strings(): array { return [
         'nav_pages'         => 'Pages',
         'to_website'        => '↗ Visit Website',
         'logout'            => 'Sign out',
+        'pw_link'           => 'Change password',
+        'pw_title'          => 'Change password',
+        'pw_intro'          => 'The new password takes effect immediately. Other devices where you are signed in are signed out.',
+        'pw_current'        => 'Current password',
+        'pw_new'            => 'New password',
+        'pw_repeat'         => 'Repeat new password',
+        'pw_rule'           => 'At least 10 characters. A sentence of several words is safe and easy to remember.',
+        'pw_btn'            => 'Change password',
+        'pw_forgot'         => 'Forgot your password? Whoever looks after your website can reset it.',
+        'pw_done'           => 'Your password has been changed. You stay signed in.',
+        'pw_err_current'    => 'The current password is not correct.',
+        'pw_err_repeat'     => 'The two new passwords do not match.',
+        'pw_err_short'      => 'The new password needs at least 10 characters.',
+        'pw_err_same'       => 'The new password is the same as the current one.',
+        'pw_err_write'      => 'The password could not be saved; the previous one still applies. Please contact whoever looks after your website. (Code T20)',
+        'pw_err_file'       => 'Sign-in is locked because the password file .pesi-password is damaged. Whoever looks after your website can delete it; the password from pesi-core.php then applies again. (Code T20)',
         'no_fields'         => 'There is nothing to edit on this page.',
         'save_hint'         => 'Your changes only take effect once you click "Save". Earlier states are under "Earlier versions".',
         'save_btn'          => 'Save',
@@ -2362,6 +2513,12 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 /* Welcome */
 .W{display:flex;align-items:center;justify-content:center;flex:1;padding:3rem 1.5rem}
 .W-in{text-align:center;max-width:320px;animation:up .4s ease-out}
+.W-in.pw{text-align:left;max-width:380px;width:100%}
+.W-in.pw h2{margin-bottom:.4rem}
+.W-in.pw>p{margin-bottom:1.2rem}
+.pw-f{display:flex;flex-direction:column;gap:.35rem;margin-bottom:1rem}
+.pw-f label{font-size:.85rem;font-weight:600;margin-top:.6rem}
+.pw-f .sv-b{margin-top:1rem;align-self:flex-start}
 .W-ic{width:52px;height:52px;border-radius:13px;background:var(--b-s);border:1px solid <?=$bc?>18;display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem}
 .W-ic svg{width:22px;height:22px;stroke:var(--b);fill:none;stroke-width:1.5;stroke-linecap:round}
 .W h2{font-size:1.08rem;font-weight:600;margin-bottom:.4rem}
@@ -2623,7 +2780,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi cms" class="L-logo">
     <?php endif; ?>
     <p class="sub"><?=htmlspecialchars($sn)?></p>
-    <?php if ($defaultPassword): ?><div class="err"><?=htmlspecialchars($t['setup_default_pw'])?></div><?php endif; ?>
+    <?php if ($defaultPassword): ?><div class="err"><?=htmlspecialchars($t[$pwOverride === '' ? 'pw_err_file' : 'setup_default_pw'])?></div><?php endif; ?>
     <?php if ($loginError !== ''): ?><div class="err"><?=htmlspecialchars($loginError)?></div><?php endif; ?>
     <form method="POST">
       <input type="hidden" name="pesi_login" value="1">
@@ -2675,6 +2832,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     </ul>
     <div class="S-ft">
       <a href="/" target="_blank" rel="noopener noreferrer"><?=$t['to_website']?></a>
+      <?php if ($pwChange): ?><a href="?password=1"><?=htmlspecialchars($t['pw_link'])?></a><?php endif; ?>
       <form method="POST">
         <input type="hidden" name="pesi_csrf" value="<?=htmlspecialchars($csrf)?>">
         <button type="submit" name="pesi_logout" value="1"><?=$t['logout']?></button>
@@ -3029,6 +3187,30 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           <iframe title="<?=htmlspecialchars($t['pv_title'])?>" src="<?=htmlspecialchars($liveUrl . (strpos($liveUrl, '?') !== false ? '&' : '?') . 'pesi_pv=' . $mtime)?>" loading="lazy" sandbox="allow-scripts"></iframe>
         </div>
       </aside><?php endif; ?>
+      </div>
+
+    <?php elseif ($pwView): ?>
+      <div class="W">
+        <div class="W-in pw">
+          <h2><?=htmlspecialchars($t['pw_title'])?></h2>
+          <p><?=htmlspecialchars($t['pw_intro'])?></p>
+          <?php if ($pwMsg): ?><div class="ms <?=$pwMsgType?>" role="status"><span><?=htmlspecialchars($pwMsg)?></span></div><?php endif; ?>
+          <?php if ($pwMsgType !== 'success'): ?>
+          <form method="POST" action="?password=1" class="pw-f">
+            <input type="hidden" name="pesi_csrf" value="<?=htmlspecialchars($csrf)?>">
+            <input type="hidden" name="pesi_pw_change" value="1">
+            <label for="pw_cur"><?=htmlspecialchars($t['pw_current'])?></label>
+            <input class="fi" type="password" id="pw_cur" name="pesi_pw_current" autocomplete="current-password" required>
+            <label for="pw_new"><?=htmlspecialchars($t['pw_new'])?></label>
+            <input class="fi" type="password" id="pw_new" name="pesi_pw_new" autocomplete="new-password" minlength="10" required aria-describedby="pw_new_h">
+            <p class="img-hint" id="pw_new_h"><?=htmlspecialchars($t['pw_rule'])?></p>
+            <label for="pw_rep"><?=htmlspecialchars($t['pw_repeat'])?></label>
+            <input class="fi" type="password" id="pw_rep" name="pesi_pw_repeat" autocomplete="new-password" minlength="10" required>
+            <button type="submit" class="sv-b"><?=htmlspecialchars($t['pw_btn'])?></button>
+          </form>
+          <?php endif; ?>
+          <p class="img-hint"><?=htmlspecialchars($t['pw_forgot'])?></p>
+        </div>
       </div>
 
     <?php else: ?>

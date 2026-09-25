@@ -9,6 +9,7 @@
 // Admin-Passwort (password_hash() empfohlen, Plaintext unterstützt).
 // Der Demo-Wert sperrt die Anmeldung. Vor Production ein starkes Passwort setzen.
 define('PESI_PASSWORD', 'demo1234');
+define('PESI_PASSWORD_CHANGE', true);   // Kundin darf es im Dashboard ändern; Datei .pesi-password löschen = zurücksetzen
 define('BRAND_NAME',  'Meine Website');
 define('BRAND_COLOR', '#a3611b');          // beliebiger Hex-Wert; weisse Schrift braucht 4,5:1 (Diagnose T12)
 define('BRAND_LOGO',  '');                 // z. B. '/assets/logo.svg' — leer = pesi-Logo

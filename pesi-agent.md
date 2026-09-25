@@ -267,6 +267,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
 | `PESI_IMAGE_MAX_EDGE` | 2560 | the design needs sharper full-screen images. Larger uploads are scaled down to this longer edge; needs `gd`, otherwise the diagnostics panel reports `T18`. Metadata (GPS) is removed regardless |
 | `PESI_BACKUP_ENABLED` | `true` | never in production. It keeps the earlier states the client can restore |
+| `PESI_PASSWORD_CHANGE` | `true` | the integrator explicitly wants to keep sole control of the password. The client's own password lives in `.pesi-password`; deleting it resets to `pesi-core.php` |
 | `PESI_BACKUP_COUNT` | 5 | the client edits often and wants to go back further. 1–20 states per page |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
@@ -660,6 +661,8 @@ robots.txt: updated
 .htaccess:  updated
 
 Dashboard password: <the plaintext password — stored hashed in pesi-core.php>
+                    (the client can change it under "Passwort ändern"; delete
+                    .pesi-password via FTP to reset it to this one)
 
 Next steps:
 - Test dashboard: domain.at/pesi

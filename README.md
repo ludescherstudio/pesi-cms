@@ -113,7 +113,9 @@ php -r "echo password_hash('your-secure-password', PASSWORD_DEFAULT), PHP_EOL;"
 define('PESI_PASSWORD', '$2y$12$K1p2....rest-of-the-hash');
 ```
 
-Plaintext still works for a quick test. The shipped value `demo1234` fails closed: nobody can sign in until it is changed.
+Plaintext still works for a quick test. The shipped value `demo1234` fails closed: nobody can sign in until it is changed, and so does an empty value.
+
+**The client can change the password herself** under *Change password* in the sidebar. The new password is stored as a hash in `.pesi-password` next to `pesi.php` and takes precedence over `PESI_PASSWORD`; every other device is signed out. That file is also your reset: if the client forgets her password, delete `.pesi-password` via FTP and the password from `pesi-core.php` applies again. Set `PESI_PASSWORD_CHANGE` to `false` to hide the form; an existing `.pesi-password` still applies until you delete it.
 
 Then register the pages that should appear in the dashboard sidebar:
 
@@ -527,6 +529,7 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `T16` | The PHP extension `tokenizer` is missing. pesi finds fields with the PHP tokenizer, so without it the dashboard shows no fields | Enable `ext/tokenizer` (on by default in PHP; some hosts compile it out) |
 | `T17` | The PHP extension `dom` is missing. `richtext` fields are shown read-only so saving cannot flatten their formatting to plain text; the public site shows them as plain text with line breaks | Enable `ext/dom` |
 | `T18` | The PHP extension `gd` is missing, so uploaded images go online at full size instead of being scaled down. Their metadata is still removed | Enable `ext/gd`, or set `PESI_IMAGE_MAX_EDGE` to 0 knowingly |
+| `T20` | The dashboard could not save a new password, or `.pesi-password` exists but holds no valid hash. A failed change keeps the previous password; a damaged file locks sign-in instead of silently falling back to `pesi-core.php` | Check write access to the web root. Delete a damaged `.pesi-password` via FTP; the password from `pesi-core.php` then applies |
 
 ---
 
@@ -537,6 +540,7 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 - `pesi-core.php` is blocked from web access via `.htaccess` — no one can read the password from the browser
 - `.pesi-*` files — rotated backups, write locks, short-lived candidates and the login throttle — are blocked via `.htaccess`. Backups are full copies of page source; on Nginx you add the equivalent `deny` rules yourself
 - `PESI_PASSWORD` accepts a `password_hash()` value; the shipped default fails closed
+- Changing the password in the dashboard needs the current one, goes through the same throttle as sign-in, and signs out every other session. The new password is stored only as a `password_hash()` in `.pesi-password` (mode 0600, covered by the `.pesi-` rule)
 - Failed logins are slowed down twice: per session, and per client IP in a small `.pesi-throttle` register, so discarding cookies does not reset the delay. The backoff starts at 2 seconds and doubles up to 256 seconds. Each attempt is reserved under a lock before the password is checked, so parallel requests do not get through together. If the register cannot be read or written, pesi refuses every sign-in (code `T15`) instead of running without it
 - A login POST without a valid CSRF token is rejected before the password check and does not count as a failed attempt, so a foreign form cannot lock the client out
 - Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
@@ -569,6 +573,7 @@ Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY
 | `page.php.pesi-backup.1` … `.5` | on every successful save | The earlier states listed under "Earlier versions", newest first. The number follows `PESI_BACKUP_COUNT`; each file keeps the time its state was saved |
 | `page.php.pesi-lock` | on first save | Stable sidecar lock for the write; stays, empty |
 | `page.php.pesi-tmp-*` | during a save | The candidate that is linted and then renamed over the live page; removed on failure |
+| `.pesi-password` | when the client changes her password | `password_hash()` of the dashboard password; takes precedence over `PESI_PASSWORD`. Delete it to reset to `pesi-core.php` |
 | `.pesi-throttle`, `.pesi-throttle-lock` | on the first sign-in attempt | Login throttle register: SHA-256 of the client IP and a counter, entries dropped an hour after they expire |
 | `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file; replaced images are deleted once neither the page nor any of its backups references them |
 
@@ -582,6 +587,7 @@ All settings in `pesi-core.php`. A setting you leave out falls back to the defau
 
 ```php
 define('PESI_PASSWORD',       'your-password');    // Dashboard password or password_hash() value
+define('PESI_PASSWORD_CHANGE', true);              // Client may change it in the dashboard (.pesi-password)
 define('BRAND_NAME',          'My Project');       // Shown in the sidebar and the browser tab
 define('BRAND_COLOR',         '#a3611b');          // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',          '');                 // Path to logo image — empty = pesi logo
@@ -675,6 +681,10 @@ The hosting caps uploads (`upload_max_filesize`, often 2 MB) below `PESI_UPLOAD_
 ### Dashboard links go nowhere, `?page=index.php` doesn't work
 
 Your `.htaccess` has an over-aggressive PHP-stripping rule. See Step 3 — replace `(.+?)` with `([^?]+)`.
+
+### The password from `pesi-core.php` no longer works
+
+The client has changed it in the dashboard. Her password lives in `.pesi-password` and takes precedence. To reset it, delete `.pesi-password` via FTP; the password from `pesi-core.php` applies again.
 
 ### Saved text is gone, page shows the old default again
 
