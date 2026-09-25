@@ -14,6 +14,7 @@ define('BRAND_COLOR', '#a3611b');          // beliebiger Hex-Wert; weisse Schrif
 define('BRAND_LOGO',  '');                 // z. B. '/assets/logo.svg' — leer = pesi-Logo
 define('LANG',        'de');               // 'de' oder 'en'
 define('PESI_BACKUP_ENABLED', true);
+define('PESI_BACKUP_COUNT',   5);           // frühere Stände pro Seite, 1–20 (Versionsliste im Dashboard)
 define('PESI_SYNTAX_CHECK', true);
 define('PESI_SESSION_IDLE',  30 * 60);      // 30 Minuten ohne Aktivität
 define('PESI_SESSION_MAX',   12 * 60 * 60); // spätestens nach 12 Stunden neu anmelden

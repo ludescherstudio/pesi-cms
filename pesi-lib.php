@@ -16,6 +16,7 @@ foreach ([
     'BRAND_LOGO'            => '',
     'LANG'                  => 'de',
     'PESI_BACKUP_ENABLED'   => true,
+    'PESI_BACKUP_COUNT'     => 5,
     'PESI_SYNTAX_CHECK'     => true,
     'PESI_SESSION_IDLE'     => 30 * 60,
     'PESI_SESSION_MAX'      => 12 * 60 * 60,

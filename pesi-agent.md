@@ -250,7 +250,8 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size`. If it is higher, pesi shows the client the smaller effective limit and reports `T14` in the diagnostics panel — check that panel after the first login |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
 | `PESI_IMAGE_MAX_EDGE` | 2560 | the design needs sharper full-screen images. Larger uploads are scaled down to this longer edge; needs `gd`, otherwise the diagnostics panel reports `T18`. Metadata (GPS) is removed regardless |
-| `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
+| `PESI_BACKUP_ENABLED` | `true` | never in production. It keeps the earlier states the client can restore |
+| `PESI_BACKUP_COUNT` | 5 | the client edits often and wants to go back further. 1–20 states per page |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
 | `PESI_SESSION_MAX` | 12 hours | only if the client explicitly needs a shorter absolute session lifetime |
@@ -499,7 +500,7 @@ it. Without it the two `RewriteRule` lines are inert and `/pesi` returns 404.
 
 The `\.pesi-` pattern covers every internal pesi file: the rotated backups,
 the stable write locks and short-lived candidate files
-(`page.php.pesi-backup.1`/`.2`, `.pesi-lock`, `.pesi-tmp-*`) **and** the
+(`page.php.pesi-backup.1` … `.5`, `.pesi-lock`, `.pesi-tmp-*`) **and** the
 login-throttle register (`.pesi-throttle`). Backups and candidate files contain
 page source, so a
 leak would expose that page's full PHP source — blocking them is
@@ -593,7 +594,7 @@ is the single most common reason a fresh install "saves nothing". Verify that
 the PHP user can write:
 
 - every file listed in `$PESI_PAGES`
-- the project root (pesi creates `page.php.pesi-backup.1/.2` next to each page,
+- the project root (pesi creates `page.php.pesi-backup.1` … `.5` next to each page,
   plus a `.pesi-throttle` register)
 - the upload folder (`PESI_UPLOAD_DIR`), if any `image` field exists
 
