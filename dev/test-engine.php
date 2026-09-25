@@ -963,22 +963,28 @@ if (PHP_OS_FAMILY === 'Windows') {
 // ── Externe Änderung während des Commits ─────────────────────
 // Ein FTP-Server kennt den pesi-Lock nicht. Schreibt er, während pesi die
 // Sicherungen anlegt, muss der Commit abbrechen statt seinen Stand zu
-// überschreiben. Kopiert wird nur noch die Live-Datei (die älteren Sicherungen
-// rücken per rename() weiter); eine große Live-Datei macht dieses Kopierfenster
-// sicher treffbar.
+// überschreiben. Kopiert wird nur noch die Live-Datei; danach prüft pesi die
+// Kopie, verschiebt die Generationen und hasht die Live-Datei vor dem Austausch
+// noch einmal. In dieses Fenster schreibt der Hilfsprozess. Während der Kopie
+// selbst geht es unter Windows nicht: Dort sperrt copy() die Quelle. Darum
+// versucht er es so lange, bis die Kopie vollständig und das Schreiben
+// gelungen ist, und meldet nur einen Erfolg als „geschrieben“. Eine große
+// Live-Datei macht das Fenster (Hash der Kopie) sicher treffbar.
 grp('Commit — fremder Schreibvorgang während der Sicherung');
 $p = v210();
 file_put_contents($p, "<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n//" . str_repeat('x', 32 * 1024 * 1024) . "\n");
-$w = bgStart('$p = ' . var_export($p, true) . ";\n" . <<<'BG'
+$w = bgStart('$p = ' . var_export($p, true) . ";\n\$size = " . filesize($p) . ";\n" . <<<'BG'
 touch($READY);
 $until = microtime(true) + 20;
 while (microtime(true) < $until) {
-    if (glob($p . '.pesi-backup.1.pesi-tmp-backup-*')) {
-        file_put_contents($p, "<?php\n\$x = pesi('f', 'EXTERN', 'text', 'L');\n");
+    $tmp = glob($p . '.pesi-backup.1.pesi-tmp-backup-*');
+    clearstatcache();
+    if ($tmp && @filesize($tmp[0]) === $size
+        && @file_put_contents($p, "<?php\n\$x = pesi('f', 'EXTERN', 'text', 'L');\n") !== false) {
         echo 'geschrieben';
         exit;
     }
-    usleep(500);
+    usleep(200);
 }
 echo 'kein Fenster';
 BG
@@ -1129,9 +1135,254 @@ register_shutdown_function(function () use ($scratch) {
 });
 
 // ── Bild-Bereinigung: Metadaten raus, Größe runter ───────────
+// Das Entfernen der Metadaten braucht kein gd, darum stammen die Testbilder aus
+// festen Daten und diese Tests laufen überall. Verkleinern, Drehen und
+// Pixelvergleiche brauchen gd, EXIF-Auslesen ext/exif; ohne sie werden genau
+// diese Prüfungen sichtbar übersprungen.
 grp('Bild — Metadaten und Verkleinern');
+$hasGd   = function_exists('imagecreatetruecolor') && function_exists('imagecreatefromstring');
+$hasExif = function_exists('exif_read_data');
+if (!$hasGd)   echo "  (gd fehlt: Verkleinern, Drehen und Pixelvergleich werden übersprungen)\n";
+if (!$hasExif) echo "  (exif fehlt: GPS/Orientierung werden über pesis eigenen Leser geprüft)\n";
+$FX = [
+    'jpg' => '/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcg'
+        . 'SlBFRyB2ODApLCBxdWFsaXR5ID0gNjAK/9sAQwANCQoLCggNCwoLDg4NDxMgFRMSEhMnHB4XIC4p'
+        . 'MTAuKS0sMzpKPjM2RjcsLUBXQUZMTlJTUjI+WmFaUGBKUVJP/9sAQwEODg4TERMmFRUmTzUtNU9P'
+        . 'T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09P/8AAEQgAyAEs'
+        . 'AwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMF'
+        . 'BQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkq'
+        . 'NDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqi'
+        . 'o6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/E'
+        . 'AB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMR'
+        . 'BAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVG'
+        . 'R0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKz'
+        . 'tLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A'
+        . '5+iiivGP0kKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigC3pX/IRi/H+Rro65zSv+QjF+'
+        . 'P8jXR1w4r416H5Xxx/yMIf4F/wClSCiiiuY+NCiiigAooooAKKKKACiiigAooooAKKKKACiiigAo'
+        . 'oooA5GiiivXP6GCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAt6V/wAhGL8f5GujrnNK'
+        . '/wCQjF+P8jXR1w4r416H5Xxx/wAjCH+Bf+lSCiiiuY+NCiiigAooooAKKKKACiiigAooooAKKKKA'
+        . 'CiiigAooooA5GiiivXP6GCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAt6V/yEYvx/ka'
+        . '6Ouc0r/kIxfj/I10dcOK+Neh+V8cf8jCH+Bf+lSCiiiuY+NCiiigAooooAKKKKACiiigAooooAKK'
+        . 'KKACiiigAooooA5GiiivXP6GCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAt6V/yEYvx'
+        . '/ka6Ouc0r/kIxfj/ACNdHXDivjXoflfHH/Iwh/gX/pUgooormPjQooooAKKKKACiiigAooooAKKK'
+        . 'KACiiigAooooAKKKKAORooor1z+hgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKALelf8'
+        . 'hGL8f5GujrnNK/5CMX4/yNdHXDivjXoflfHH/Iwh/gX/AKVIKKKK5j40KKKKACiiigAooooAKKKK'
+        . 'ACiiigAooooAKKKKACiiigDkaKKK9c/oYKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigC'
+        . '3pX/ACEYvx/ka6Ouc0r/AJCMX4/yNdHXDivjXoflfHH/ACMIf4F/6VIKKKK5j40KKKKACiiigAoo'
+        . 'ooAKKKKACiiigAooooAKKKKACiiigDg/7R/6Zf8Aj3/1qP7R/wCmX/j3/wBaqFFfsH9gZd/z7/GX'
+        . '+Z+jf23jv+fn4L/Iv/2j/wBMv/Hv/rUf2j/0y/8AHv8A61UKKP7Ay7/n3+Mv8w/tvHf8/PwX+Rf/'
+        . 'ALR/6Zf+Pf8A1qP7R/6Zf+Pf/WqhRR/YGXf8+/xl/mH9t47/AJ+fgv8AIv8A9o/9Mv8Ax7/61H9o'
+        . '/wDTL/x7/wCtVCij+wMu/wCff4y/zD+28d/z8/Bf5F/+0f8Apl/49/8AWo/tH/pl/wCPf/WqhRR/'
+        . 'YGXf8+/xl/mH9t47/n5+C/yL/wDaP/TL/wAe/wDrUf2j/wBMv/Hv/rVQoo/sDLv+ff4y/wAw/tvH'
+        . 'f8/PwX+Rf/tH/pl/49/9aj+0f+mX/j3/ANaqFFH9gZd/z7/GX+Yf23jv+fn4L/Iv/wBo/wDTL/x7'
+        . '/wCtR/aP/TL/AMe/+tVCij+wMu/59/jL/MP7bx3/AD8/Bf5F/wDtH/pl/wCPf/Wo/tH/AKZf+Pf/'
+        . 'AFqoUUf2Bl3/AD7/ABl/mH9t47/n5+C/yOj8MTfbtftrbb5e/f8ANnOMIT0/Cu//ALD/AOnn/wAc'
+        . '/wDr1534H/5G6x/7af8Aotq9br834woU8DjoU8OuVOCffW8u9+xy1qccxl7bFLmktL7ab9Ld2ZH9'
+        . 'h/8ATz/45/8AXo/sP/p5/wDHP/r1r0V8p9YqdzL+yMH/ACfi/wDMyP7D/wCnn/xz/wCvR/Yf/Tz/'
+        . 'AOOf/XrXoo+sVO4f2Rg/5Pxf+Zkf2H/08/8Ajn/16P7D/wCnn/xz/wCvWvRR9Yqdw/sjB/yfi/8A'
+        . 'MyP7D/6ef/HP/r0f2H/08/8Ajn/1616KPrFTuH9kYP8Ak/F/5mR/Yf8A08/+Of8A16P7D/6ef/HP'
+        . '/r1r0UfWKncP7Iwf8n4v/MyP7D/6ef8Axz/69H9h/wDTz/45/wDXrXoo+sVO4f2Rg/5Pxf8AmZH9'
+        . 'h/8ATz/45/8AXo/sP/p5/wDHP/r1r0UfWKncP7Iwf8n4v/MyP7D/AOnn/wAc/wDr0f2H/wBPP/jn'
+        . '/wBeteij6xU7h/ZGD/k/F/5mR/Yf/Tz/AOOf/Xo/sP8A6ef/ABz/AOvWvRR9Yqdw/sjB/wAn4v8A'
+        . 'zPBqKKK/owxCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA3vA/8AyN1j/wBtP/RbV63X'
+        . 'kngf/kbrH/tp/wCi2r1uvyPj3/kZQ/wL/wBKkd+F+B+oUUUV8SdIUUUUAFFFFABRRRQAUUUUAFFF'
+        . 'FABRRRQAUUUUAFFFFAHg1FFFf0keOFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQBveB/'
+        . '+Rusf+2n/otq9bryTwP/AMjdY/8AbT/0W1et1+R8e/8AIyh/gX/pUjvwvwP1CiiiviTpCiiigAoo'
+        . 'ooAKKKKACiiigAooooAKKKKACiiigAooooA8Gooor+kjxwooooAKKKKACiiigAooooAKKKKACiii'
+        . 'gAooooAKKKKAN7wP/wAjdY/9tP8A0W1et15J4H/5G6x/7af+i2r1uvyPj3/kZQ/wL/0qR34X4H6h'
+        . 'RRRXxJ0hRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAeDUUUV/SR44UUUUAFFFFABRRRQ'
+        . 'AUUUUAFFFFABRRRQAUUUUAFFFFAG94H/AORusf8Atp/6LavW68k8D/8AI3WP/bT/ANFtXrdfkfHv'
+        . '/Iyh/gX/AKVI78L8D9Qooor4k6QooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAPBqKKK/'
+        . 'pI8cKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigDe8D/8jdY/9tP/AEW1et15J4H/AORu'
+        . 'sf8Atp/6LavW6/I+Pf8AkZQ/wL/0qR34X4H6hRRRXxJ0hRRRQAUUUUAFFFFABRRRQAUUUUAFFFFA'
+        . 'BRRRQAUUUUAeDUUUV/SR44UUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAG94H/wCRusf+'
+        . '2n/otq9boor8j49/5GUP8C/9Kkd+F+B+oUUUV8SdIUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUU'
+        . 'UAFFFFAH/9k=',
+    'prog' => '/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcg'
+        . 'SlBFRyB2ODApLCBxdWFsaXR5ID0gNjAK/9sAQwANCQoLCggNCwoLDg4NDxMgFRMSEhMnHB4XIC4p'
+        . 'MTAuKS0sMzpKPjM2RjcsLUBXQUZMTlJTUjI+WmFaUGBKUVJP/9sAQwEODg4TERMmFRUmTzUtNU9P'
+        . 'T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09P/8IAEQgAyAEs'
+        . 'AwEiAAIRAQMRAf/EABgAAQEBAQEAAAAAAAAAAAAAAAAEBQYD/8QAGgEBAAIDAQAAAAAAAAAAAAAA'
+        . 'AAMGBAUHAv/aAAwDAQACEAMQAAABzxhWQAAAAAAAD10s3SgqoR6YAAAAAAADIGX0MAAAAAAAD10s'
+        . '3SgqoR6YAAAAAAADIGX0MAAAAAAAD10s3SgqoR6YAAAAAAADIGX0MAAAAAAAD10s3SgqoR6YAAAA'
+        . 'AAADIGX0MAAAAAAAD10s3SgqoR6YAAAAAAADIGX0MAAAAAAAD10s3SgqoR6YAAAAAAADBTrhY6E4'
+        . 'oTihOKE4oTihOKE4oTjS3+d66txRrGp8xrBGsEawRrBGsEawRrBGsHBDo3gAAAAAAAC/ruR66ozh'
+        . 'pJQAAAAAAAOCHScMAAAAAAAC/ruR66ozhpJQAAAAAAAOCHScMAAAAAAAC/ruR66ozhpJQAAAAAAA'
+        . 'OCHScMAAAAAAAC/ruR66ozhpJQAAAAAAAOCHScMAAAAAAAC/ruR66ozhpJQAAAAAAAOCHScMAAAA'
+        . 'AAAC/riozhpJQAAAAAAAP//EAB0QAAICAwEBAQAAAAAAAAAAAAATA1AEMzRAARL/2gAIAQEAAQUC'
+        . '8UWyli2UsWyli2UsWyli2UsWyli2UsWyli2UsWyli2eNgwYMGDBgwYMGDBgwYMGDDG+/udAgQIEC'
+        . 'BAgQIECBAgQIECBHjweulweulweulweulweulweulweulweulweulweulweulwevx//EACQRAAAE'
+        . 'BQUAAwAAAAAAAAAAAAABAxQFMUBRUgIwNHHBBBIh/9oACAEDAQE/AdmOcguvTo45yC69OjjnILr0'
+        . '6OOcguvTo45yC69OjjnILr09p6vkHq+Qer5B6vkHq+Qer5B6vkHq+Qer5DXpL5B/dX9MNEbBojYN'
+        . 'EbBojYNEbBojYNEbBojYNEbbSUqNKVGlKjSlRpSo0pbX/8QAJREAAAIJBQEBAAAAAAAAAAAAAAEC'
+        . 'AwQFExRAUrEwMTRxwSHR/9oACAECAQE/AdFbvRrd6NbvRrd6NbvRrd9KQZ7ciQZ7ciQZ7ciQZ7ci'
+        . 'QZ7ciQZ7ciQZ7ciQZ7ciQZ7ch8IIqF5Iq/nz9ERIREhESERIREhESERIREhES0n9yS69Ojf3JLr0'
+        . '6N/ckuvTo39yS69Ojf3JLr06N/ckuvT0v//EABwQAAEEAwEAAAAAAAAAAAAAAAACMTJQAYGxQP/a'
+        . 'AAgBAQAGPwLxYpsU2KbFNimxTYpsU2KbFNimx5GGGGGGGGGGGGGGGGGGEpYkSJEiRIkSJEiRIkSJ'
+        . 'EiRIl40b5TI3ymRvlMjfKZG+UyN8pkb5TI3ymRvlMjfKZG+UyN88n//EABwQAAMBAQEBAQEAAAAA'
+        . 'AAAAAAAR8GFQIUCAgf/aAAgBAQABPyH9kAAAAAAQyGQyGQyGQyGQyGQyGQyGQyGQyGeeen7/AAhE'
+        . 'IhEIhEIhEIhEIhEIhEIhEIhEIhfHNrjTa402uNNrjTa402uNNrjTa402uNNrjTa402vk/9oADAMB'
+        . 'AAIAAwAAABAMMMMMMMMOsEEEEEEEEEMMMMMMMMOsEEEEEEEEEMMMMMMMMOsEEEEEEEEEMMMMMMMM'
+        . 'OsEEEEEEEEEMMMMMMMMOsEEEEEEEEEMMMMMMMMOsEEEEEEEEE000000001nLLLLLLLLL77777777'
+        . '6sIIIIIIIIL777777776sIIIIIIIIL777777776sIIIIIIIIL777777776sIIIIIIIIL77777777'
+        . '6sIIIIIIIIL777777776MIIIIIIIIL//xAAgEQABAwQDAQEAAAAAAAAAAAABANHwMUBxoREhMEFR'
+        . '/9oACAEDAQE/EPHR2Zo7M0dmaOzNHZmj8iQBlIAykAZSAMpAGUgDKQBlIAykAZcCODrmnVfnH6VK'
+        . 'S6lJdSkupSXUpLqUl1KS6lJdSkv5Vc2dXNnVzZ1c2dXNnVz5f//EACARAAECBgMBAAAAAAAAAAAA'
+        . 'AAABQDFhcaHR8BEwUSH/2gAIAQIBAT8Q6YNGcGjODRnBozg0ZwadW5cjcuRuXI3LkblyNy5G5cjc'
+        . 'uRuXIRE4KlffvPrnwmEwmEwmEwmEwmdVrZlrZlrZlrZlrZlr6j//xAAeEAADAQEBAAMBAQAAAAAA'
+        . 'AAAA8PGxAVARQIExgP/aAAgBAQABPxD6W/O+Nvzvjb8742/O+Nvzvjb8742/O+Nvzvjb8742/O+N'
+        . 'vzvjb879R4HgeB4HgeB4HgeB4HgeB4HgeB4HgeD9nN8/Hx33+fgti2LYti2LYti2LYti2LYti2LY'
+        . 'ti2LYt/7JAAAAAAAAAAAA//Z',
+    'big' => '/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcg'
+        . 'SlBFRyB2ODApLCBxdWFsaXR5ID0gNjAK/9sAQwANCQoLCggNCwoLDg4NDxMgFRMSEhMnHB4XIC4p'
+        . 'MTAuKS0sMzpKPjM2RjcsLUBXQUZMTlJTUjI+WmFaUGBKUVJP/9sAQwEODg4TERMmFRUmTzUtNU9P'
+        . 'T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09P/8AAEQgBkAJY'
+        . 'AwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMF'
+        . 'BQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkq'
+        . 'NDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqi'
+        . 'o6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/E'
+        . 'AB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMR'
+        . 'BAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVG'
+        . 'R0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKz'
+        . 'tLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A'
+        . '5+iiivGP0kKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKK'
+        . 'KKACiiigAooooAKKKKACiiigArX0H/lv/wAB/rWRWvoP/Lf/AID/AFrLEfw2fO8V/wDIorf9u/8A'
+        . 'pUTXooorzT8bCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKA'
+        . 'CiiigAooooAKKKKACiiigAooooAKKKKAORooor1z+hgooooAKKKKACiiigAooooAKKKKACiiigAo'
+        . 'oooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACtfQf8Alv8A8B/rWRWv'
+        . 'oP8Ay3/4D/WssR/DZ87xX/yKK3/bv/pUTXooorzT8bCiiigAooooAKKKKACiiigAooooAKKKKACi'
+        . 'iigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAORooor1z+hgooo'
+        . 'oAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiig'
+        . 'AooooAKKKKACtfQf+W//AAH+tZFa+g/8t/8AgP8AWssR/DZ87xX/AMiit/27/wClRNeiiivNPxsK'
+        . 'KKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoo'
+        . 'ooAKKKKACiiigAooooA5GiiivXP6GCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKK'
+        . 'ACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAK19B/wCW/wDwH+tZFa+g/wDLf/gP9ayx'
+        . 'H8NnzvFf/Iorf9u/+lRNeiiivNPxsKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoooo'
+        . 'AKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA5GiiivXP6GCiiigAooooAKKKKAC'
+        . 'iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAK1'
+        . '9B/5b/8AAf61kVr6D/y3/wCA/wBayxH8NnzvFf8AyKK3/bv/AKVE16KKK80/GwooooAKKKKACiii'
+        . 'gAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKA'
+        . 'CiiigDkaKKK9c/oYKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAo'
+        . 'oooAKKKKACiiigAooooAKKKKACiiigArX0H/AJb/APAf61kVr6D/AMt/+A/1rLEfw2fO8V/8iit/'
+        . '27/6VE16KKK80/GwooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACi'
+        . 'iigAooooAKKKKACiiigAooooAKKKKACiiigDkaKKK9c/oYKKKKACiiigAooooAKKKKACiiigAooo'
+        . 'oAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigArX0H/lv/wAB/rWR'
+        . 'WvoP/Lf/AID/AFrLEfw2fO8V/wDIorf9u/8ApUTXooorzT8bCiiigAooooAKKKKACiiigAooooAK'
+        . 'KKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAORooor1z'
+        . '+hgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKK'
+        . 'ACiiigAooooAKKKKACtfQf8Alv8A8B/rWRWvoP8Ay3/4D/WssR/DZ87xX/yKK3/bv/pUTXooorzT'
+        . '8bCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoooo'
+        . 'AKKKKACiiigAooooAKKKKAORooor1z+hgooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAC'
+        . 'iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACtfQf+W//AAH+tZFa+g/8t/8AgP8A'
+        . 'WssR/DZ87xX/AMiit/27/wClRNeiiivNPxsKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiii'
+        . 'gAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA5GiiivXP6GCiiigAooooA'
+        . 'KKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAo'
+        . 'oooAK19B/wCW/wDwH+tZFa+g/wDLf/gP9ayxH8NnzvFf/Iorf9u/+lRNeiiivNPxsKKKKACiiigA'
+        . 'ooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACi'
+        . 'iigAooooA5GiiivXP6GCiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooo'
+        . 'oAKKKKACiiigAooooAKKKKACiiigAooooAK19B/5b/8AAf61kVr6D/y3/wCA/wBayxH8NnzvFf8A'
+        . 'yKK3/bv/AKVE16KKK80/GwooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAK'
+        . 'KKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigDkaKKK9c/oYKKKKACiiigAooooAKKKKACii'
+        . 'igAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigArX0H/AJb/'
+        . 'APAf61kVr6D/AMt/+A/1rLEfw2fO8V/8iit/27/6VE16KKK80/GwooooAKKKKACiiigAooooAKKK'
+        . 'KACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigDkaKw'
+        . 'qK/SP9U/+n3/AJL/APbH63/rN/06/wDJv+AbtFYVFH+qf/T7/wAl/wDtg/1m/wCnX/k3/AN2isKi'
+        . 'j/VP/p9/5L/9sH+s3/Tr/wAm/wCAbtFYVFH+qf8A0+/8l/8Atg/1m/6df+Tf8A3aKwqKP9U/+n3/'
+        . 'AJL/APbB/rN/06/8m/4Bu0VhUUf6p/8AT7/yX/7YP9Zv+nX/AJN/wDdorCoo/wBU/wDp9/5L/wDb'
+        . 'B/rN/wBOv/Jv+AbtFYVFH+qf/T7/AMl/+2D/AFm/6df+Tf8AAN2isKij/VP/AKff+S//AGwf6zf9'
+        . 'Ov8Ayb/gG7RWFRR/qn/0+/8AJf8A7YP9Zv8Ap1/5N/wDdorCoo/1T/6ff+S//bB/rN/06/8AJv8A'
+        . 'gG7RWFRR/qn/ANPv/Jf/ALYP9Zv+nX/k3/AN2isKij/VP/p9/wCS/wD2wf6zf9Ov/Jv+AbtFYVFH'
+        . '+qf/AE+/8l/+2D/Wb/p1/wCTf8A3aKwqKP8AVP8A6ff+S/8A2wf6zf8ATr/yb/gG7RWFRR/qn/0+'
+        . '/wDJf/tg/wBZv+nX/k3/AADdorCoo/1T/wCn3/kv/wBsH+s3/Tr/AMm/4Bu0VhUUf6p/9Pv/ACX/'
+        . 'AO2D/Wb/AKdf+Tf8A3a19B/5b/8AAf61xdd78MP+Yn/2y/8AZ68rO8h+oYGpifac3LbS1t2lvd9z'
+        . 'izLNP7Tw0sJycvNbW97Wae1l27l6iuuor8/+t+R8r/q9/wBPPw/4JyNFddRR9b8g/wBXv+nn4f8A'
+        . 'BORorrqKPrfkH+r3/Tz8P+CcjRXXUUfW/IP9Xv8Ap5+H/BORorrqKPrfkH+r3/Tz8P8AgnI0V11F'
+        . 'H1vyD/V7/p5+H/BORorrqKPrfkH+r3/Tz8P+CcjRXXUUfW/IP9Xv+nn4f8E5Giuuoo+t+Qf6vf8A'
+        . 'Tz8P+CcjRXXUUfW/IP8AV7/p5+H/AATkaK66ij635B/q9/08/D/gnI0V11FH1vyD/V7/AKefh/wT'
+        . 'kaK66ij635B/q9/08/D/AIJyNFddRR9b8g/1e/6efh/wTkaK66ij635B/q9/08/D/gnI0V11FH1v'
+        . 'yD/V7/p5+H/BORorrqKPrfkH+r3/AE8/D/gnI0V11FH1vyD/AFe/6efh/wAE5Giuuoo+t+Qf6vf9'
+        . 'PPw/4J4NRRRX9DHaFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAU'
+        . 'UUUAFFFFABRRRQAUUUUAFFFFABRRRQAV3vww/wCYn/2y/wDZ64Ku9+GH/MT/AO2X/s9fNcX/APIm'
+        . 'rf8Abv8A6VE2w/8AER3lFFFfiR6QUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQA'
+        . 'UUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB4NRRRX9JHjhRRRQAUUUUAFFFFABR'
+        . 'RRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFd7'
+        . '8MP+Yn/2y/8AZ64Ku9+GH/MT/wC2X/s9fNcX/wDImrf9u/8ApUTbD/xEd5RRRX4kekFFFFABRRRQ'
+        . 'AUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAB'
+        . 'RRRQAUUUUAeDUUUV/SR44UUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFF'
+        . 'FFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABXe/DD/mJ/wDbL/2euCrvfhh/zE/+2X/s9fNcX/8A'
+        . 'Imrf9u/+lRNsP/ER3lFFFfiR6QUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUU'
+        . 'UUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB4NRRRX9JHjhRRRQAUUUUAFFFFABRRR'
+        . 'QAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFd78M'
+        . 'P+Yn/wBsv/Z64Ku9+GH/ADE/+2X/ALPXzXF//Imrf9u/+lRNsP8AxEd5RRRX4kekFFFFABRRRQAU'
+        . 'UUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRR'
+        . 'RQAUUUUAeDUUUV/SR44UUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFF'
+        . 'ABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABXe/DD/AJif/bL/ANnrgq734Yf8xP8A7Zf+z181xf8A'
+        . '8iat/wBu/wDpUTbD/wARHeUUUV+JHpBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFF'
+        . 'FABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAHg1FFFf0keOFFFFABRRRQAUUUU'
+        . 'AFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQA'
+        . 'V3vww/5if/bL/wBnrgq734Yf8xP/ALZf+z181xf/AMiat/27/wClRNsP/ER3lFFFfiR6QUUUUAFF'
+        . 'FFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUU'
+        . 'UAFFFFABRRRQB4NRRRX9JHjhRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQ'
+        . 'AUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFd78MP+Yn/ANsv/Z64Ku9+GH/MT/7Zf+z181xf'
+        . '/wAiat/27/6VE2w/8RHeUUUV+JHpBRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFA'
+        . 'BRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAHg1FFFf0keOFFFFABRRRQAUUUUAF'
+        . 'FFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAV3'
+        . 'vww/5if/AGy/9nrgq734Yf8AMT/7Zf8As9fNcX/8iat/27/6VE2w/wDER3lFFFfiR6QUUUUAFFFF'
+        . 'ABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUA'
+        . 'FFFFABRRRQB4NRRRX9JHjhRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAU'
+        . 'UUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFd78MP8AmJ/9sv8A2euCrvfhh/zE/wDtl/7PXzXF'
+        . '/wDyJq3/AG7/AOlRNsP/ABEd5RRRX4kekFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQA'
+        . 'UUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAeDUUUV/SR44UUUUAFFFFABR'
+        . 'RRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFF'
+        . 'FABXe/DD/mJ/9sv/AGeuCrvfhh/zE/8Atl/7PXzXF/8AyJq3/bv/AKVE2w/8RHeUUUV+JHpBRRRQ'
+        . 'AUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFAB'
+        . 'RRRQAUUUUAFFFFAHg1FFFf0keOFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFF'
+        . 'FFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAV3vww/5if8A2y/9nrgq734Yf8xP/tl/7PXz'
+        . 'XF//ACJq3/bv/pUTbD/xEd5RRRX4kekFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUU'
+        . 'UUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAeDUUUV/SR44UUUUAFFFFABRRR'
+        . 'QAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFA'
+        . 'BXe/DD/mJ/8AbL/2euCrvfhh/wAxP/tl/wCz181xf/yJq3/bv/pUTbD/AMRHeUUUV+JHpBRRRQAU'
+        . 'UUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRR'
+        . 'RQAUUUUAFFFFAH//2Q==',
+    'png' => 'iVBORw0KGgoAAAANSUhEUgAAAlgAAAGQCAYAAAByNR6YAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAE'
+        . '2ElEQVR42u3WsQ0AMAzDMLv//5zc0DEAeYImdZIJwAFNqgJwwZMAAMBgAQAYLAAAgwUAgMECADBY'
+        . 'AAAGCwAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAIMFAIDBAgAwWAAABgsAAIMFAGCwAAAMFgAABgsA'
+        . 'wGABABgsAAAMFgCAwQIAMFgAAAYLAACDBQBgsAAADBYAAAYLAMBgAQAYLAAADBYAgMECADBYAAAY'
+        . 'LAAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAAwWAIDBAgAwWAAAGCwAAIMFAGCwAAAwWAAABgsAwGAB'
+        . 'ABgsAAAMFgCAwQIAMFgAABgsAACDBQBgsAAAMFgAAAYLAMBgAQAYLAAADBYAgMECADBYAAAYLAAA'
+        . 'gwUAYLAAADBYAAAGCwDAYAEAYLAAAAwWAIDBAgAwWAAAGCwAAIMFAGCwAAAwWAAABgsAwGABAGCw'
+        . 'AAAMFgCAwQIAwGABABgsAACDBQBgsAAAMFgAAAYLAMBgAQBgsAAADBYAgMECAMBgAQAYLAAAgwUA'
+        . 'gMECADBYAAAGCwDAYAEAYLAAAAwWAIDBAgDAYAEAGCwAAIMFAIDBAgAwWAAABgsAwGABAGCwAAAM'
+        . 'FgCAwQIAwGABABgsAACDBQCAwQIAMFgAAAYLAACDBQBgsAAADBYAgMECAMBgAQAYLAAAgwUAgMEC'
+        . 'ADBYAAAGCwAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAIMFAIDBAgAwWAAABgsAAIMFAGCwAAAMFgAA'
+        . 'BgsAwGABABgsAAAMFgCAwQIAMFgAAAYLAACDBQBgsAAADBYAAAYLAMBgAQAYLAAADBYAgMECADBY'
+        . 'AAAGCwAAgwUAYLAAAAwWAAAGCwDAYAEAGCwAAAwWAIDBAgAwWAAAGCwAAIMFAGCwAAAMFgAABgsA'
+        . 'wGABABgsAAAMFgCAwQIAMFgAABgsAACDBQBgsAAAMFgAAAYLAMBgAQAYLAAADBYAgMECADBYAAAY'
+        . 'LAAAgwUAYLAAADBYAAAGCwDAYAEAYLAAAAwWAIDBAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+        . 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAHwt78wOQylEy/gAAAABJ'
+        . 'RU5ErkJggg==',
+    'gif' => 'R0lGODdhKAAoAJEAAP//AP8AAAD/AAAA/ywAAAAAKAAoAAACgoyPmcLt/5SUsNaJj90tZ855GLiJ'
+        . 'E2mZFAqpCtu6CBzJGt3ZBp7rPKPb/YKBn4BoRA6DSebS97QZB9Sq9XoFaLfcbhcLBnvH47C5Sk5v'
+        . 'z2e1mm12p+FhOZkutnvxWP2eb+X3BYgmuEZIZXiIqKiFmNj4ONAIIElpGfl4qZnJ2ElIWQAAOw==',
+    'webp' => 'UklGRrgBAABXRUJQVlA4IKwBAAAQGQCdASosAcgAPrVaqE8nJSQiJCgA4BaJZ27hdVD5wS7GpzD7'
+        . 'AP0zoUD2Afyu3AP8BlAH6wegn/sf7l1gACWWQUNK2nK/f89YFknLAsgR+fMxWwLIKGyMZTO2BmyR'
+        . 'csgoRsEvC/6zMVsCxxLqGjywM2SLljiXUNHlgR4F3M1QSCQSCQSCQR8HlV/5JJJJJJJJJJJKKA6b'
+        . 'EvoRKvVZNl5p7skXIePELorYFkFDZGMuAR6zMVsCyCaWXXLIKGyRcsgR/Y4rYFkFDZItUAFtki5A'
+        . 'AAD+/pkv+iZVpY//rgPF5zZfsubNCsWgQKRhPp3VfeF64QTNOK/8NfS5Hmb/+a7V9iJEof/81fLc'
+        . 'h97kShPX4l+GL4EBFQ27+IF/IAXFKBT65bbLtH0CsWOk1oaxY6TYeLz9XX99ZZX2zQxD/rEbzmP9'
+        . 'b3TBFIQdbb3TBFIQdbMHqzNvPCIR//4ueX6Hz1UguFeD8qK/k2OzqfT3Zf8OHge2KmzbvcJnQ8Jo'
+        . 'N38neGNJSRcPjVws9oYb0wrLkS4OlL8BgCz88IJ4cT16iABthBGIG0oFUgEscAAAAA==',
+];
+$FX = array_map('base64_decode', $FX);
 
-// Testbild: vier Quadranten R G / B Y, damit sich Drehungen prüfen lassen.
+// Testbild für gd-Tests: vier Quadranten R G / B Y, damit sich Drehungen prüfen lassen.
 function quad(int $w, int $h) {
     $im = imagecreatetruecolor($w, $h);
     $c = [imagecolorallocate($im, 255, 0, 0), imagecolorallocate($im, 0, 255, 0),
@@ -1185,124 +1436,129 @@ function tmpImg(string $bytes, string $ext = 'jpg'): string {
     file_put_contents($f, $bytes);
     return $f;
 }
+// Orientierung einer Datei: ext/exif, sonst pesis eigener Leser.
+function orientOf(string $f): int {
+    if (function_exists('exif_read_data')) return (int)(@exif_read_data($f)['Orientation'] ?? 1);
+    return _pesi_jpeg_orientation((string)file_get_contents($f));
+}
 
-$small = enc(quad(300, 200), 'imagejpeg');
-$f = tmpImg(dirtyJpeg($small, 6));
-ok('verschmutztes JPEG ist lesbar (Testaufbau)', (bool)@imagecreatefromstring((string)file_get_contents($f)));
+$d = dirtyJpeg($FX['jpg'], 6);
+ok('Testaufbau: alle Geheimnisse stecken im Bild',
+    preg_match_all('/SECRET-[A-Z]+/', $d) === 5 && _pesi_jpeg_orientation($d) === 6);
+$f = tmpImg($d);
 ok('JPEG unter der Grenze wird bereinigt', _pesi_prepare_image($f, 'image/jpeg', 2560));
 $out = (string)file_get_contents($f);
 ok('kein SECRET mehr in der Datei', strpos($out, 'SECRET') === false,
     implode(',', array_unique(preg_match_all('/SECRET-[A-Z]+/', $out, $mm) ? $mm[0] : [])));
 ok('Farbprofil (ICC) bleibt', strpos($out, 'FAKE-ICC') !== false);
-$ex = @exif_read_data($f);
-ok('keine GPS-Daten mehr', is_array($ex) && !isset($ex['GPSLatitudeRef']) && !isset($ex['GPSVersion']), json_encode(array_keys($ex ?: [])));
-ok('Orientierung 6 bleibt erhalten', is_array($ex) && ($ex['Orientation'] ?? 0) === 6, json_encode($ex['Orientation'] ?? null));
-$im = @imagecreatefromstring($out);
-ok('bereinigtes JPEG ist lesbar, gleiche Größe', $im && imagesx($im) === 300 && imagesy($im) === 200);
-ok('Pixel unverändert (nicht neu kodiert)', $im && corners($im) === 'RGBY');
+if ($hasExif) {
+    $ex = @exif_read_data($f);
+    ok('keine GPS-Daten mehr', is_array($ex) && !isset($ex['GPSLatitudeRef']) && !isset($ex['GPSVersion']), json_encode(array_keys($ex ?: [])));
+}
+ok('Orientierung 6 bleibt erhalten', orientOf($f) === 6, (string)orientOf($f));
+ok('Bilddaten Byte für Byte unverändert (nicht neu kodiert)',
+    substr($out, -strlen(substr($FX['jpg'], strpos($FX['jpg'], "\xFF\xDA")))) === substr($FX['jpg'], strpos($FX['jpg'], "\xFF\xDA")));
+ok('gleiche Größe', getimagesize($f)[0] === 300 && getimagesize($f)[1] === 200);
+if ($hasGd) {
+    $im = @imagecreatefromstring($out);
+    ok('bereinigtes JPEG ist lesbar, Pixel unverändert', $im && corners($im) === 'RGBY');
+}
 
-$f = tmpImg(dirtyJpeg($small, 1));
+$f = tmpImg(dirtyJpeg($FX['jpg'], 1));
 _pesi_prepare_image($f, 'image/jpeg', 2560);
-$out = (string)file_get_contents($f);
-ok('Orientierung 1: gar kein EXIF mehr', strpos($out, 'Exif') === false);
+ok('Orientierung 1: gar kein EXIF mehr', strpos((string)file_get_contents($f), 'Exif') === false);
 
 // Progressives JPEG: mehrere Scans mit Tabellen dazwischen
-$pim = quad(300, 200); imageinterlace($pim, true);
-$f = tmpImg(dirtyJpeg(enc($pim, 'imagejpeg'), 3));
+$f = tmpImg(dirtyJpeg($FX['prog'], 3));
 ok('progressives JPEG wird bereinigt', _pesi_prepare_image($f, 'image/jpeg', 2560));
 $out = (string)file_get_contents($f);
-ok('progressiv: kein SECRET, lesbar',
-    strpos($out, 'SECRET') === false && ($im = @imagecreatefromstring($out)) && corners($im) === 'RGBY');
+ok('progressiv: kein SECRET, Bildende vorhanden', strpos($out, 'SECRET') === false && substr($out, -2) === "\xFF\xD9");
+if ($hasGd) ok('progressiv: lesbar', ($im = @imagecreatefromstring($out)) && corners($im) === 'RGBY');
 
-// Verkleinern + Drehung einbrennen, alle acht EXIF-Orientierungen
-$expect = [1 => 'RGBY', 2 => 'GRYB', 3 => 'YBGR', 4 => 'BYRG',
-           5 => 'RBGY', 6 => 'BRYG', 7 => 'YGBR', 8 => 'GYRB'];
-$big = enc(quad(600, 400), 'imagejpeg');
-foreach ($expect as $o => $want) {
-    $f = tmpImg(dirtyJpeg($big, $o));
-    $okp = _pesi_prepare_image($f, 'image/jpeg', 300);
-    $out = (string)file_get_contents($f);
-    $im  = @imagecreatefromstring($out);
-    $dims = $im ? imagesx($im) . 'x' . imagesy($im) : '-';
-    $wantDims = $o >= 5 ? '200x300' : '300x200';
-    ok("Orientierung $o: verkleinert, richtig gedreht, ohne EXIF",
-        $okp && $im && $dims === $wantDims && corners($im) === $want
-            && strpos($out, 'Exif') === false && strpos($out, 'SECRET') === false,
-        "$dims, Ecken " . ($im ? corners($im) : '-') . ", erwartet $wantDims $want");
+if ($hasGd) {
+    // Verkleinern + Drehung einbrennen, alle acht EXIF-Orientierungen
+    $expect = [1 => 'RGBY', 2 => 'GRYB', 3 => 'YBGR', 4 => 'BYRG',
+               5 => 'RBGY', 6 => 'BRYG', 7 => 'YGBR', 8 => 'GYRB'];
+    foreach ($expect as $o => $want) {
+        $f = tmpImg(dirtyJpeg($FX['big'], $o));
+        $okp = _pesi_prepare_image($f, 'image/jpeg', 300);
+        $out = (string)file_get_contents($f);
+        $im  = @imagecreatefromstring($out);
+        $dims = $im ? imagesx($im) . 'x' . imagesy($im) : '-';
+        $wantDims = $o >= 5 ? '200x300' : '300x200';
+        ok("Orientierung $o: verkleinert, richtig gedreht, ohne EXIF",
+            $okp && $im && $dims === $wantDims && corners($im) === $want
+                && strpos($out, 'Exif') === false && strpos($out, 'SECRET') === false,
+            "$dims, Ecken " . ($im ? corners($im) : '-') . ", erwartet $wantDims $want");
+    }
+    ok('GD-Kommentar (CREATOR: gd-jpeg) entfernt', strpos($out, 'CREATOR') === false);
 }
-$out = (string)file_get_contents($f);
-ok('GD-Kommentar (CREATOR: gd-jpeg) entfernt', strpos($out, 'CREATOR') === false);
-
 ok('PESI_IMAGE_MAX_EDGE 0 verkleinert nie',
-    _pesi_prepare_image($f = tmpImg($big), 'image/jpeg', 0)
-        && getimagesize($f)[0] === 600);
+    _pesi_prepare_image($f = tmpImg($FX['big']), 'image/jpeg', 0) && getimagesize($f)[0] === 600);
+ok('ohne Verkleinern verschwindet auch der gd-Kommentar', strpos((string)file_get_contents($f), 'CREATOR') === false);
 
 // PNG: Textblöcke und eXIf raus, Transparenz bleibt
 function pngChunk(string $type, string $data): string {
     return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
 }
-$tp = imagecreatetruecolor(600, 400);
-imagealphablending($tp, false); imagesavealpha($tp, true);
-imagefill($tp, 0, 0, imagecolorallocatealpha($tp, 0, 0, 0, 127));
-imagefilledrectangle($tp, 0, 0, 299, 199, imagecolorallocatealpha($tp, 255, 0, 0, 0));
-$png = enc($tp, 'imagepng');
-$iend = strrpos($png, 'IEND') - 4;
-$dirtyPng = substr($png, 0, $iend) . pngChunk('tEXt', "Comment\0SECRET-PNG")
+$iend = strrpos($FX['png'], 'IEND') - 4;
+$dirtyPng = substr($FX['png'], 0, $iend) . pngChunk('tEXt', "Comment\0SECRET-PNG")
           . pngChunk('eXIf', 'MM' . 'SECRET-EXIF') . pngChunk('tIME', "\x07\xEA\x01\x01\0\0\0")
-          . substr($png, $iend) . 'SECRET-TRAILER';
+          . substr($FX['png'], $iend) . 'SECRET-TRAILER';
 $f = tmpImg($dirtyPng, 'png');
 ok('PNG wird bereinigt', _pesi_prepare_image($f, 'image/png', 2560));
 $out = (string)file_get_contents($f);
 ok('PNG: kein SECRET, kein tIME', strpos($out, 'SECRET') === false && strpos($out, 'tIME') === false);
-ok('PNG: lesbar', (bool)@imagecreatefromstring($out));
-$f = tmpImg($dirtyPng, 'png');
-_pesi_prepare_image($f, 'image/png', 300);
-$im = @imagecreatefromstring((string)file_get_contents($f));
-ok('PNG verkleinert', $im && imagesx($im) === 300 && imagesy($im) === 200);
-ok('PNG: Transparenz bleibt beim Verkleinern',
-    $im && ((imagecolorat($im, 250, 150) >> 24) & 127) === 127 && col($im, .2, .2) === 'R');
-
-// WebP mit VP8X-Kopf und EXIF-Chunk
-if (function_exists('imagewebp')) {
-    $wp  = enc(quad(300, 200), 'imagewebp');
-    $vp8 = substr($wp, 12);                                  // der VP8-Chunk
-    $x   = 'VP8X' . pack('V', 10) . chr(0x08) . "\0\0\0" . substr(pack('V', 299), 0, 3) . substr(pack('V', 199), 0, 3);
-    $exc = 'EXIF' . pack('V', 11) . 'SECRET-WEBP' . "\0";
-    $body = $x . $vp8 . $exc;
-    $f = tmpImg('RIFF' . pack('V', 4 + strlen($body)) . 'WEBP' . $body, 'webp');
-    ok('WebP wird bereinigt', _pesi_prepare_image($f, 'image/webp', 2560));
-    $out = (string)file_get_contents($f);
-    ok('WebP: kein SECRET, EXIF-Flag gelöscht',
-        strpos($out, 'SECRET') === false && (ord($out[20]) & 0x08) === 0);
-    ok('WebP: RIFF-Länge stimmt', unpack('V', $out, 4)[1] === strlen($out) - 8);
-    ok('WebP: lesbar', (bool)@imagecreatefromstring($out));
+ok('PNG: Bilddaten unverändert, endet mit IEND', strpos($out, substr($FX['png'], 8, $iend - 8)) === 8 && substr($out, -8, 4) === 'IEND');
+if ($hasGd) {
+    ok('PNG: lesbar', (bool)@imagecreatefromstring($out));
+    $f = tmpImg($dirtyPng, 'png');
+    _pesi_prepare_image($f, 'image/png', 300);
+    $im = @imagecreatefromstring((string)file_get_contents($f));
+    ok('PNG verkleinert', $im && imagesx($im) === 300 && imagesy($im) === 200);
+    ok('PNG: Transparenz bleibt beim Verkleinern',
+        $im && ((imagecolorat($im, 250, 150) >> 24) & 127) === 127 && col($im, .2, .2) === 'R');
 }
 
+// WebP mit VP8X-Kopf und EXIF-Chunk
+$vp8 = substr($FX['webp'], 12);                                  // der VP8-Chunk
+$x   = 'VP8X' . pack('V', 10) . chr(0x08) . "\0\0\0" . substr(pack('V', 299), 0, 3) . substr(pack('V', 199), 0, 3);
+$exc = 'EXIF' . pack('V', 11) . 'SECRET-WEBP' . "\0";
+$body = $x . $vp8 . $exc;
+$f = tmpImg('RIFF' . pack('V', 4 + strlen($body)) . 'WEBP' . $body, 'webp');
+ok('WebP wird bereinigt', _pesi_prepare_image($f, 'image/webp', 2560));
+$out = (string)file_get_contents($f);
+ok('WebP: kein SECRET, EXIF-Flag gelöscht',
+    strpos($out, 'SECRET') === false && (ord($out[20]) & 0x08) === 0);
+ok('WebP: RIFF-Länge stimmt', unpack('V', $out, 4)[1] === strlen($out) - 8);
+if ($hasGd && function_exists('imagecreatefromwebp')) ok('WebP: lesbar', (bool)@imagecreatefromstring($out));
+
 // Ablehnen statt ungeprüft veröffentlichen
-$f = tmpImg(substr(dirtyJpeg($small, 6), 0, 40));
+$f = tmpImg(substr(dirtyJpeg($FX['jpg'], 6), 0, 40));
 ok('abgeschnittenes JPEG wird abgelehnt', _pesi_prepare_image($f, 'image/jpeg', 2560) === false);
-$f = tmpImg(substr($small, 0, (int)(strlen($small) * .6)));
+$f = tmpImg(substr($FX['jpg'], 0, (int)(strlen($FX['jpg']) * .6)));
 ok('JPEG ohne Bildende wird abgelehnt', _pesi_prepare_image($f, 'image/jpeg', 2560) === false);
-$f = tmpImg(substr(enc(quad(600, 400), 'imagejpeg'), 0, 2000));
-ok('abgeschnittenes großes JPEG wird abgelehnt, nicht von GD aufgefüllt',
+$f = tmpImg(substr($FX['big'], 0, 2000));
+ok('abgeschnittenes großes JPEG wird abgelehnt, nicht von gd aufgefüllt',
     _pesi_prepare_image($f, 'image/jpeg', 300) === false);
 $f = tmpImg('keinbild', 'png');
 ok('kaputtes PNG wird abgelehnt', _pesi_prepare_image($f, 'image/png', 2560) === false);
 
 // GIF: bleibt Byte für Byte
-$gif = enc(quad(40, 40), 'imagegif');
-$f = tmpImg($gif, 'gif');
-ok('GIF bleibt unverändert', _pesi_prepare_image($f, 'image/gif', 10) && file_get_contents($f) === $gif);
+$f = tmpImg($FX['gif'], 'gif');
+ok('GIF bleibt unverändert', _pesi_prepare_image($f, 'image/gif', 10) && file_get_contents($f) === $FX['gif']);
 
-// Zu wenig Speicher: unverkleinert, aber bereinigt, kein Fatal Error
-$oldLimit = ini_get('memory_limit');
-ini_set('memory_limit', (string)(memory_get_usage() + 8 * 1048576));
-$f = tmpImg(dirtyJpeg(enc(quad(3000, 3000), 'imagejpeg'), 6));
-$okp = _pesi_prepare_image($f, 'image/jpeg', 300);
-ini_set('memory_limit', $oldLimit);
-$out = (string)file_get_contents($f);
-ok('knapper Speicher: bleibt groß, aber ohne Metadaten',
-    $okp && getimagesize($f)[0] === 3000 && strpos($out, 'SECRET') === false);
+if ($hasGd) {
+    // Zu wenig Speicher: unverkleinert, aber bereinigt, kein Fatal Error
+    $oldLimit = ini_get('memory_limit');
+    ini_set('memory_limit', (string)(memory_get_usage() + 8 * 1048576));
+    $f = tmpImg(dirtyJpeg(enc(quad(3000, 3000), 'imagejpeg'), 6));
+    $okp = _pesi_prepare_image($f, 'image/jpeg', 300);
+    ini_set('memory_limit', $oldLimit);
+    $out = (string)file_get_contents($f);
+    ok('knapper Speicher: bleibt groß, aber ohne Metadaten',
+        $okp && getimagesize($f)[0] === 3000 && strpos($out, 'SECRET') === false);
+}
 
 // ── pesi() hat genau vier Argumente ──────────────────────────
 grp('Signatur — kein fünftes Argument');
