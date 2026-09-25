@@ -7,8 +7,8 @@ You are integrating **pesi**, a minimal inline CMS, into a finished PHP website.
 > `README.md` and the source.
 >
 > You do **not** need to copy this file into the customer project. Read it while
-> integrating, then leave it behind — only `pesi-core.php`, `pesi-content.php`
-> and `pesi.php` belong
+> integrating, then leave it behind — only `pesi-core.php`, `pesi-content.php`,
+> `pesi-lib.php` and `pesi.php` belong
 > in the customer site (see the file structure below). If you do keep a copy
 > there, never rename it to `AGENTS.md` or `CLAUDE.md`: most projects already
 > have one of their own, and it would collide with or overwrite it.
@@ -33,7 +33,8 @@ The client can never create pages, menu entries or layout — that stays your jo
 
 ```
 site/
-├── pesi-core.php   # Config + helper function (included by every editable page)
+├── pesi-core.php   # Settings (included by every editable page, loads pesi-lib.php)
+├── pesi-lib.php    # pesi() helper — replaced on updates, never edit it
 ├── pesi-content.php # Shared practice details used across multiple pages
 ├── pesi.php        # Dashboard (domain.at/pesi)
 ├── .htaccess       # Protects pesi-core.php and backup files (add to existing)
@@ -41,8 +42,9 @@ site/
 └── [page].php      # Editable pages
 ```
 
-**Serve only those files.** Copy `pesi.php`, `pesi-core.php` and
-`pesi-content.php` into the web root. Include `LICENSE` and `THIRD-PARTY.md`
+**Serve only those files.** Copy `pesi.php`, `pesi-lib.php`, `pesi-core.php`
+and `pesi-content.php` into the web root. Configure only `pesi-core.php`; never
+edit `pesi-lib.php` or `pesi.php`, an update replaces both. Include `LICENSE` and `THIRD-PARTY.md`
 in every customer delivery, for example alongside the installation package
 outside the public web root. The installation guides need not be uploaded.
 
@@ -207,6 +209,7 @@ Execute these steps in order.
 
 Check that these files are present:
 - `pesi-core.php` (root)
+- `pesi-lib.php` (root)
 - `pesi-content.php` (root)
 - `pesi.php` (root)
 
@@ -214,7 +217,7 @@ If any are missing: **stop and report.** Do not generate these files — they co
 
 ### Step 2 — Configure pesi-core.php
 
-Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrite the whole file — edit the specific lines:
+Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrite the whole file — edit the specific lines. Keep its last line, `require_once __DIR__ . '/pesi-lib.php';`: without it no page can render a field:
 
 Before placing duplicate practice details into individual pages, adapt
 `pesi-content.php`. Keep one key per shared value (practice name, address,
@@ -256,6 +259,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 
 List all `.php` files in the root directory. Exclude:
 - `pesi-core.php`
+- `pesi-lib.php`
 - `pesi-content.php` (already registered as Stammdaten)
 - `pesi.php`
 - files inside any subdirectory
