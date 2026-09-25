@@ -246,6 +246,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_DIR` | `'uploads'` | the site already has a media folder you want to reuse. Relative to the root, no leading slash, no `..` |
 | `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size`. If it is higher, pesi shows the client the smaller effective limit and reports `T14` in the diagnostics panel — check that panel after the first login |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
+| `PESI_IMAGE_MAX_EDGE` | 2560 | the design needs sharper full-screen images. Larger uploads are scaled down to this longer edge; needs `gd`, otherwise the diagnostics panel reports `T18`. Metadata (GPS) is removed regardless |
 | `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |

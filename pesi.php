@@ -1276,6 +1276,275 @@ function _pesi_image_mime(string $path): string {
     return '';
 }
 
+// ── Bild-Bereinigung ─────────────────────────────────────────
+// Handyfotos tragen in EXIF, XMP und IPTC oft den Aufnahmeort als GPS-
+// Koordinaten, dazu Gerät und Zeitpunkt. Ungeprüft hochgeladen stünde das
+// öffentlich im Web. Darum durchläuft jedes Bild vor der Veröffentlichung:
+//   1. Verkleinern auf PESI_IMAGE_MAX_EDGE, wenn GD da ist (sonst T18),
+//   2. verlustfreies Entfernen der Metadaten, in reinem PHP und immer.
+// GIF trägt keine Kameradaten. AVIF bleibt unverändert (README, Limitations).
+
+/**
+ * EXIF-Orientierung (1–8) aus dem Payload eines APP1-Segments ab "Exif\0\0".
+ * 1 = nicht gedreht oder nicht lesbar.
+ */
+function _pesi_exif_orientation(string $exif): int {
+    $tiff = substr($exif, 6);
+    $bo   = substr($tiff, 0, 2);
+    if (strlen($tiff) < 8 || ($bo !== 'II' && $bo !== 'MM')) return 1;
+    $u16 = fn(int $o): ?int => $o >= 0 && $o + 2 <= strlen($tiff) ? unpack($bo === 'II' ? 'v' : 'n', $tiff, $o)[1] : null;
+    $u32 = fn(int $o): ?int => $o >= 0 && $o + 4 <= strlen($tiff) ? unpack($bo === 'II' ? 'V' : 'N', $tiff, $o)[1] : null;
+    $ifd = $u32(4);
+    $n   = $ifd === null ? null : $u16($ifd);
+    for ($i = 0; $n !== null && $i < min($n, 256); $i++) {
+        $e = $ifd + 2 + $i * 12;
+        if ($u16($e) === 0x0112) {
+            $v = $u16($e + 8);
+            return $v !== null && $v >= 1 && $v <= 8 ? $v : 1;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Zerlegt den Kopf eines JPEG bis einschließlich des ersten Scan-Headers (SOS).
+ * Rückgabe: [Segmente als [Marker, Rohbytes, Payload], Offset der Scandaten]
+ * oder null, wenn die Datei kein lesbares JPEG ist.
+ */
+function _pesi_jpeg_head(string $d): ?array {
+    $len = strlen($d);
+    if ($len < 4 || strncmp($d, "\xFF\xD8", 2) !== 0) return null;
+    $segs = [];
+    $pos  = 2;
+    while (true) {
+        if ($pos >= $len || $d[$pos] !== "\xFF") return null;
+        while ($pos < $len && $d[$pos] === "\xFF") $pos++;   // Füllbytes
+        if ($pos >= $len) return null;
+        $m = ord($d[$pos++]);
+        if (($m >= 0xD0 && $m <= 0xD7) || $m === 0x01) { $segs[] = [$m, "\xFF" . chr($m), '']; continue; }
+        if ($m === 0xD8 || $m === 0xD9 || $pos + 2 > $len) return null;
+        $n = unpack('n', $d, $pos)[1];
+        if ($n < 2 || $pos + $n > $len) return null;
+        $segs[] = [$m, "\xFF" . chr($m) . substr($d, $pos, $n), substr($d, $pos + 2, $n - 2)];
+        $pos += $n;
+        if ($m === 0xDA) return [$segs, $pos];
+    }
+}
+
+function _pesi_jpeg_orientation(string $d): int {
+    $head = _pesi_jpeg_head($d);
+    foreach ($head[0] ?? [] as [$m, , $payload]) {
+        if ($m === 0xE1 && strncmp($payload, "Exif\0\0", 6) === 0) return _pesi_exif_orientation($payload);
+    }
+    return 1;
+}
+
+/**
+ * Entfernt Metadaten aus einem JPEG, ohne es neu zu kodieren. Es bleiben JFIF
+ * (APP0), das Farbprofil (APP2 ICC_PROFILE), Adobes Farbtransformation (APP14)
+ * und alle Bildsegmente. EXIF, XMP, IPTC, Kommentare, MPF-Zusatzbilder und
+ * alles hinter dem Bildende fallen weg. Die Drehung überlebt als minimales
+ * EXIF mit nur diesem einen Eintrag, sonst stünden Hochkantfotos quer.
+ * null = kein lesbares JPEG.
+ */
+function _pesi_jpeg_strip(string $d): ?string {
+    $head = _pesi_jpeg_head($d);
+    if ($head === null) return null;
+    [$segs, $scan] = $head;
+
+    // Scandaten bis zum Bildende. Ein 0xFF darin folgt immer 0x00 (Stuffing),
+    // ein Restart-Marker oder ein Füllbyte; alles andere ist ein Segment, bei
+    // progressiven JPEGs etwa weitere DHT/SOS zwischen den Scans.
+    $len = strlen($d);
+    $p   = $scan;
+    while (true) {
+        $p = strpos($d, "\xFF", $p);
+        if ($p === false || $p + 1 >= $len) return null;
+        $m = ord($d[$p + 1]);
+        if ($m === 0xFF) { $p++; continue; }
+        if ($m === 0x00 || ($m >= 0xD0 && $m <= 0xD7)) { $p += 2; continue; }
+        if ($m === 0xD9) break;
+        if ($p + 4 > $len) return null;
+        $n = unpack('n', $d, $p + 2)[1];
+        if ($n < 2 || $p + 2 + $n > $len) return null;
+        $p += 2 + $n;
+    }
+    $body = substr($d, $scan, $p + 2 - $scan);
+
+    $orient = 1;
+    $keep   = [];
+    foreach ($segs as [$m, $raw, $payload]) {
+        if ($m === 0xE1 && strncmp($payload, "Exif\0\0", 6) === 0) {
+            $orient = _pesi_exif_orientation($payload);
+            continue;
+        }
+        $isApp = $m >= 0xE0 && $m <= 0xEF;
+        if ($m === 0xFE) continue;
+        if ($isApp && $m !== 0xE0 && $m !== 0xEE
+            && !($m === 0xE2 && strncmp($payload, "ICC_PROFILE\0", 12) === 0)) continue;
+        $keep[] = $raw;
+    }
+
+    $exif = '';
+    if ($orient !== 1) {
+        $tiff = "MM\x00\x2A\x00\x00\x00\x08" . pack('n', 1)
+              . pack('nnNnn', 0x0112, 3, 1, $orient, 0) . pack('N', 0);
+        $exif = "\xFF\xE1" . pack('n', 8 + strlen($tiff)) . "Exif\0\0" . $tiff;
+    }
+    // JFIF verlangt APP0 direkt hinter SOI, das EXIF folgt dahinter.
+    $out = "\xFF\xD8";
+    if ($keep && strncmp($keep[0], "\xFF\xE0", 2) === 0) $out .= array_shift($keep);
+    return $out . $exif . implode('', $keep) . $body;
+}
+
+/**
+ * Entfernt aus einem PNG alle Chunks, die das Bild nicht zum Anzeigen braucht:
+ * Texte, eXIf, Zeitstempel. Farbraum, Transparenz und APNG-Animation bleiben.
+ * Unbekannte kritische Chunks bleiben ebenfalls, ohne sie wäre das Bild kaputt.
+ * null = kein lesbares PNG.
+ */
+function _pesi_png_strip(string $d): ?string {
+    if (strncmp($d, "\x89PNG\r\n\x1A\n", 8) !== 0) return null;
+    $keep = ['IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'gAMA', 'cHRM', 'sRGB', 'iCCP',
+             'sBIT', 'pHYs', 'bKGD', 'hIST', 'cICP', 'acTL', 'fcTL', 'fdAT'];
+    $out = substr($d, 0, 8);
+    $len = strlen($d);
+    $pos = 8;
+    while ($pos + 12 <= $len) {
+        $n    = unpack('N', $d, $pos)[1];
+        $type = substr($d, $pos + 4, 4);
+        if ($n > $len - $pos - 12) return null;
+        // Großes 5. Bit im ersten Buchstaben = kritischer Chunk (PNG-Spezifikation).
+        if (in_array($type, $keep, true) || (ord($type[0]) & 0x20) === 0) {
+            $out .= substr($d, $pos, 12 + $n);
+        }
+        $pos += 12 + $n;
+        if ($type === 'IEND') return $out;
+    }
+    return null;
+}
+
+/**
+ * Entfernt EXIF und XMP aus einem WebP und löscht die zugehörigen Flags im
+ * VP8X-Kopf. null = kein lesbares WebP.
+ */
+function _pesi_webp_strip(string $d): ?string {
+    if (strlen($d) < 20 || strncmp($d, 'RIFF', 4) !== 0 || substr($d, 8, 4) !== 'WEBP') return null;
+    $end  = min(strlen($d), 8 + unpack('V', $d, 4)[1]);
+    $body = '';
+    $pos  = 12;
+    while ($pos + 8 <= $end) {
+        $type = substr($d, $pos, 4);
+        $n    = unpack('V', $d, $pos + 4)[1];
+        if ($n > $end - $pos - 8) return null;
+        $chunk = substr($d, $pos, 8 + $n) . ($n & 1 ? "\0" : '');
+        $pos  += 8 + $n + ($n & 1);
+        if ($type === 'EXIF' || $type === 'XMP ') continue;
+        if ($type === 'VP8X' && $n >= 1) $chunk[8] = chr(ord($chunk[8]) & ~0x0C);
+        $body .= $chunk;
+    }
+    return $body === '' ? null : 'RIFF' . pack('V', 4 + strlen($body)) . 'WEBP' . $body;
+}
+
+/**
+ * Dreht ein GD-Bild so, wie die EXIF-Orientierung es zum Anzeigen verlangt.
+ * null = Drehen fehlgeschlagen.
+ */
+function _pesi_image_orient($img, int $o) {
+    $angle = [3 => 180, 5 => 270, 6 => 270, 7 => 90, 8 => 90][$o] ?? 0;
+    if ($angle) {
+        $img = imagerotate($img, $angle, 0);
+        if (!$img) return null;
+    }
+    if (in_array($o, [2, 5, 7], true)) imageflip($img, IMG_FLIP_HORIZONTAL);
+    if ($o === 4) imageflip($img, IMG_FLIP_VERTICAL);
+    return $img;
+}
+
+/**
+ * Verkleinert ein Bild mit GD, wenn seine längere Kante $maxEdge übersteigt.
+ * null = nichts zu tun oder nicht möglich (kein GD, Format ohne GD-Support,
+ * Animation, zu wenig Speicher). Das Original bleibt dann, die Metadaten
+ * entfernt der Aufrufer in jedem Fall.
+ */
+function _pesi_image_scale(string $d, string $mime, int $maxEdge): ?string {
+    if ($maxEdge <= 0 || !function_exists('imagecreatefromstring')) return null;
+    $enc = ['image/jpeg' => 'imagejpeg', 'image/png' => 'imagepng', 'image/webp' => 'imagewebp'][$mime] ?? '';
+    if ($enc === '' || !function_exists($enc)) return null;
+    // Animierte WebP liest GD nur als Einzelbild.
+    if ($mime === 'image/webp' && strlen($d) > 20 && substr($d, 12, 4) === 'VP8X' && (ord($d[20]) & 0x02)) return null;
+    $info = @getimagesizefromstring($d);
+    if (!is_array($info) || $info[0] < 1 || $info[1] < 1) return null;
+    [$w, $h] = $info;
+    if (max($w, $h) <= $maxEdge) return null;
+
+    $r  = $maxEdge / max($w, $h);
+    $nw = max(1, (int)round($w * $r));
+    $nh = max(1, (int)round($h * $r));
+
+    // GD hält 4 Byte pro Pixel, Quelle und Ziel gleichzeitig. Gedreht wird
+    // erst das verkleinerte Bild, nachdem die Quelle freigegeben ist: Ein
+    // gedrehtes 12-MP-Handyfoto braucht so rund 80 MB statt 140 und passt in
+    // ein übliches memory_limit von 128 MB. Reicht es nicht, lieber
+    // unverkleinert veröffentlichen als mit Fatal Error abbrechen. (Ein GD aus
+    // der Systembibliothek zählt nicht gegen memory_limit, dann greift das nie.)
+    $limit = _pesi_ini_bytes((string)ini_get('memory_limit'));
+    $need  = (int)(($w * $h + $nw * $nh) * 4 * 1.2) + 2 * strlen($d);
+    if ($limit > 0 && memory_get_usage() + $need > $limit) return null;
+
+    $src = @imagecreatefromstring($d);
+    if (!$src) return null;
+    $dst = imagecreatetruecolor($nw, $nh);
+    if (!$dst) return null;
+    if ($mime !== 'image/jpeg') {
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+    }
+    if (!imagecopyresampled($dst, $src, 0, 0, 0, 0, $nw, $nh, $w, $h)) return null;
+    unset($src);
+    if ($mime === 'image/jpeg') {
+        $dst = _pesi_image_orient($dst, _pesi_jpeg_orientation($d));
+        if (!$dst) return null;
+    }
+    ob_start();
+    $ok  = $mime === 'image/jpeg' ? imagejpeg($dst, null, 85)
+         : ($mime === 'image/png' ? imagepng($dst, null, 6) : imagewebp($dst, null, 85));
+    $out = (string)ob_get_clean();
+    return $ok && $out !== '' ? $out : null;
+}
+
+/**
+ * Bereitet ein hochgeladenes Bild für die Veröffentlichung vor: bei Bedarf
+ * verkleinern, dann Metadaten entfernen. Arbeitet auf der frisch
+ * hochgeladenen Datei, die noch keine Seite referenziert.
+ * false = nicht verarbeitbar, der Aufrufer verwirft den Upload. Ein Bild, das
+ * sich nicht bereinigen lässt, geht nicht online.
+ * $maxEdge überschreibt die Konstante — nur für die Suite.
+ */
+function _pesi_prepare_image(string $path, string $mime, ?int $maxEdge = null): bool {
+    $maxEdge ??= defined('PESI_IMAGE_MAX_EDGE') ? (int)PESI_IMAGE_MAX_EDGE : 2560;
+    $d = @file_get_contents($path);
+    if ($d === false || $d === '') return false;
+    $strip = fn(string $s): ?string => match ($mime) {
+        'image/jpeg' => _pesi_jpeg_strip($s),
+        'image/png'  => _pesi_png_strip($s),
+        'image/webp' => _pesi_webp_strip($s),
+        default      => $s,
+    };
+    // Erst die Struktur des Originals prüfen: GD würde ein abgeschnittenes
+    // JPEG beim Verkleinern stillschweigend mit Grau auffüllen. Die Drehung
+    // steht danach noch im minimalen EXIF, das Verkleinern liest sie dort.
+    $out = $strip($d);
+    if ($out === null) return false;
+    $scaled = _pesi_image_scale($out, $mime, $maxEdge);
+    // GD schreibt einen eigenen Kommentar ("CREATOR: gd-jpeg") in die Datei.
+    if ($scaled !== null) $out = $strip($scaled);
+    if ($out === null) return false;
+    if ($out === $d) return true;
+    return @file_put_contents($path, $out) === strlen($out);
+}
+
 // $dir überschreibt die Konstante — nur damit die Suite die Ablehnungspfade
 // durchspielen kann. Produktivcode ruft immer ohne Argument auf.
 function _pesi_upload_dir(?string $dir = null): string {
@@ -1427,6 +1696,11 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
             continue;
         }
         @chmod($dest, 0644);
+        if (!_pesi_prepare_image($dest, $mime)) {
+            @unlink($dest);
+            $errors[] = sprintf($t['up_err_process'], $fld['label'] ?: $id);
+            continue;
+        }
 
         $old['pesi_field_' . $id] = $fld['value'];
         $post['pesi_field_' . $id] = '/' . $dir . '/' . $fname;
@@ -1588,6 +1862,7 @@ function _pesi_strings(): array { return [
         'warn_dup_ids'      => 'In %s kommen diese Feld-IDs mehrfach vor: %s. Solange das so ist, lässt sich die Seite nicht speichern. Jede ID darf pro Seite nur einmal stehen. (Code S7)',
         'warn_no_tokenizer' => 'Die PHP-Erweiterung tokenizer fehlt. Ohne sie findet pesi keine Felder, das Dashboard bleibt leer. (Code T16)',
         'warn_no_dom'       => 'Die PHP-Erweiterung dom fehlt. Formatierte Texte (richtext) werden nur angezeigt und nicht zum Bearbeiten angeboten, damit ihre Formatierung erhalten bleibt. (Code T17)',
+        'warn_no_gd'        => 'Die PHP-Erweiterung gd fehlt. Hochgeladene Bilder gehen in voller Größe online, statt auf %d px verkleinert zu werden. Metadaten wie der GPS-Standort werden trotzdem entfernt. gd aktivieren oder PESI_IMAGE_MAX_EDGE bewusst auf 0 setzen. (Code T18)',
         'err_dup_ids'       => 'Diese Seite kann gerade nicht gespeichert werden, weil ein Feld darin doppelt vorkommt. Ihre Seite ist unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S7)',
         'rt_no_dom'         => 'Dieser formatierte Text lässt sich auf diesem Server gerade nicht bearbeiten. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T17)',
         'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
@@ -1595,6 +1870,7 @@ function _pesi_strings(): array { return [
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
         'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
         'up_err_type'       => 'Das Bild für „%s“ hat ein Format, das nicht unterstützt wird. Möglich sind JPG, PNG, WebP, AVIF und GIF.',
+        'up_err_process'    => 'Das Bild für „%s“ ließ sich nicht verarbeiten. Bitte speichern Sie es noch einmal als JPG oder PNG und laden Sie es erneut hoch.',
         'up_err_dir'        => 'Bilder lassen sich gerade nicht speichern. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T5, Ordner „%s“)',
         'up_err_dir_invalid'=> 'Der Ordner für Bilder ist nicht richtig eingerichtet. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T6)',
         'up_err_post_size'  => 'Das Bild ist zu groß für diesen Server (höchstens %s MB), deshalb wurde nichts gespeichert — auch Ihre Textänderungen nicht. Bitte wählen Sie ein kleineres Bild und speichern Sie noch einmal.',
@@ -1692,6 +1968,7 @@ function _pesi_strings(): array { return [
         'warn_dup_ids'      => 'In %s these field IDs occur more than once: %s. Until that is fixed the page cannot be saved. Each ID may appear only once per page. (Code S7)',
         'warn_no_tokenizer' => 'The PHP extension tokenizer is missing. Without it pesi finds no fields and the dashboard stays empty. (Code T16)',
         'warn_no_dom'       => 'The PHP extension dom is missing. Formatted texts (richtext) are shown read-only so their formatting is not lost. (Code T17)',
+        'warn_no_gd'        => 'The PHP extension gd is missing. Uploaded images go online at full size instead of being scaled down to %d px. Metadata such as the GPS location is still removed. Enable gd or set PESI_IMAGE_MAX_EDGE to 0 knowingly. (Code T18)',
         'err_dup_ids'       => 'This page cannot be saved right now because one of its fields occurs twice. Your page is unchanged. Please contact whoever looks after your website. (Code S7)',
         'rt_no_dom'         => 'This formatted text cannot be edited on this server right now. Please contact whoever looks after your website. (Code T17)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
@@ -1699,6 +1976,7 @@ function _pesi_strings(): array { return [
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
         'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
         'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
+        'up_err_process'    => 'The image for "%s" could not be processed. Please save it again as JPG or PNG and upload it once more.',
         'up_err_dir'        => 'Images cannot be saved right now. Please contact whoever looks after your website. (Code T5, folder "%s")',
         'up_err_dir_invalid'=> 'The folder for images is not set up correctly. Please contact whoever looks after your website. (Code T6)',
         'up_err_post_size'  => 'The image is too large for this server (%s MB at most), so nothing was saved — not even your text changes. Please choose a smaller image and save again.',
@@ -2236,6 +2514,10 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       if ($anyImage && _pesi_upload_limit() < $cfgMax) {
           $diag[] = sprintf($t['warn_upload_limit'], _pesi_mb($cfgMax), _pesi_mb(_pesi_upload_limit()),
               (string)ini_get('upload_max_filesize'), (string)ini_get('post_max_size'));
+      }
+      $maxEdge = defined('PESI_IMAGE_MAX_EDGE') ? (int)PESI_IMAGE_MAX_EDGE : 2560;
+      if ($anyImage && $maxEdge > 0 && !function_exists('imagecreatefromstring')) {
+          $diag[] = sprintf($t['warn_no_gd'], $maxEdge);
       }
       if (!function_exists('token_get_all')) {
           $diag[] = $t['warn_no_tokenizer'];
