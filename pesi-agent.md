@@ -7,8 +7,8 @@ You are integrating **pesi**, a minimal inline CMS, into a finished PHP website.
 > `README.md` and the source.
 >
 > You do **not** need to copy this file into the customer project. Read it while
-> integrating, then leave it behind — only `pesi-core.php`, `pesi-content.php`
-> and `pesi.php` belong
+> integrating, then leave it behind — only `pesi-core.php`, `pesi-content.php`,
+> `pesi-lib.php` and `pesi.php` belong
 > in the customer site (see the file structure below). If you do keep a copy
 > there, never rename it to `AGENTS.md` or `CLAUDE.md`: most projects already
 > have one of their own, and it would collide with or overwrite it.
@@ -33,7 +33,8 @@ The client can never create pages, menu entries or layout — that stays your jo
 
 ```
 site/
-├── pesi-core.php   # Config + helper function (included by every editable page)
+├── pesi-core.php   # Settings (included by every editable page, loads pesi-lib.php)
+├── pesi-lib.php    # pesi() helper — replaced on updates, never edit it
 ├── pesi-content.php # Shared practice details used across multiple pages
 ├── pesi.php        # Dashboard (domain.at/pesi)
 ├── .htaccess       # Protects pesi-core.php and backup files (add to existing)
@@ -41,8 +42,9 @@ site/
 └── [page].php      # Editable pages
 ```
 
-**Serve only those files.** Copy `pesi.php`, `pesi-core.php` and
-`pesi-content.php` into the web root. Include `LICENSE` and `THIRD-PARTY.md`
+**Serve only those files.** Copy `pesi.php`, `pesi-lib.php`, `pesi-core.php`
+and `pesi-content.php` into the web root. Configure only `pesi-core.php`; never
+edit `pesi-lib.php` or `pesi.php`, an update replaces both. Include `LICENSE` and `THIRD-PARTY.md`
 in every customer delivery, for example alongside the installation package
 outside the public web root. The installation guides need not be uploaded.
 
@@ -104,7 +106,7 @@ must be one of the seven below; an unknown type such as `urll` is reported as
 
 ```php
 <img src="<?= pesi('team_anna_foto', '/uploads/anna-2026.jpg', 'image', 'Foto Anna Muster') ?>"
-     alt="Anna Muster">
+     alt="<?= pesi('team_anna_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
 ```
 
 `url`, `email` and `tel` are the only field types that belong in link-related
@@ -118,7 +120,23 @@ scheme safe.
 <a href="tel:<?= pesi('telefon', '+43 123 456789', 'tel', 'Telefonnummer') ?>">Anrufen</a>
 ```
 
-Wrap **only the path** in `pesi()` — never the `<img>` tag, `alt`, `class` or `width`/`height`. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and both technical backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
+**Content images get a description field.** For every image that carries
+meaning — portraits, team photos, project or product images — add a `text`
+field in the `alt` attribute whose ID is the image ID plus `_alt`, with
+`Bildbeschreibung` as its label and the existing alt text (or a short German
+description) as default:
+
+```php
+<img src="<?= pesi('team_anna_foto', '/uploads/anna-2026.jpg', 'image', 'Foto Anna Muster') ?>"
+     alt="<?= pesi('team_anna_foto_alt', 'Anna Muster in ihrer Praxis', 'text', 'Bildbeschreibung') ?>">
+```
+
+The dashboard pairs the two by name and shows the description inside the
+image's card. Decorative images (backgrounds, ornaments) keep `alt=""` and get
+no description field. Inside a `pesi:item`, the `_alt` field follows the
+image's ID (`team_1_foto` → `team_1_foto_alt`).
+
+Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
 
 ### Heredoc syntax for richtext
 
@@ -207,6 +225,7 @@ Execute these steps in order.
 
 Check that these files are present:
 - `pesi-core.php` (root)
+- `pesi-lib.php` (root)
 - `pesi-content.php` (root)
 - `pesi.php` (root)
 
@@ -214,7 +233,7 @@ If any are missing: **stop and report.** Do not generate these files — they co
 
 ### Step 2 — Configure pesi-core.php
 
-Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrite the whole file — edit the specific lines:
+Open `pesi-core.php` and update the relevant `define()` calls. Do **not** rewrite the whole file — edit the specific lines. Keep its last line, `require_once __DIR__ . '/pesi-lib.php';`: without it no page can render a field:
 
 Before placing duplicate practice details into individual pages, adapt
 `pesi-content.php`. Keep one key per shared value (practice name, address,
@@ -246,7 +265,10 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_UPLOAD_DIR` | `'uploads'` | the site already has a media folder you want to reuse. Relative to the root, no leading slash, no `..` |
 | `PESI_UPLOAD_MAX_BYTES` | 5 MB | the client uploads large photos. Must stay ≤ the host's `upload_max_filesize`/`post_max_size`. If it is higher, pesi shows the client the smaller effective limit and reports `T14` in the diagnostics panel — check that panel after the first login |
 | `PESI_UPLOAD_TYPES` | `jpg,jpeg,png,webp,avif,gif` | rarely. **Never add `svg`** — it is excluded deliberately, an SVG can carry script |
-| `PESI_BACKUP_ENABLED` | `true` | never in production. These are the two technical recovery copies |
+| `PESI_IMAGE_MAX_EDGE` | 2560 | the design needs sharper full-screen images. Larger uploads are scaled down to this longer edge; needs `gd`, otherwise the diagnostics panel reports `T18`. Metadata (GPS) is removed regardless |
+| `PESI_BACKUP_ENABLED` | `true` | never in production. It keeps the earlier states the client can restore |
+| `PESI_PASSWORD_CHANGE` | `true` | the integrator explicitly wants to keep sole control of the password. The client's own password lives in `.pesi-password`; deleting it resets to `pesi-core.php` |
+| `PESI_BACKUP_COUNT` | 5 | the client edits often and wants to go back further. 1–20 states per page |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
 | `PESI_SESSION_MAX` | 12 hours | only if the client explicitly needs a shorter absolute session lifetime |
@@ -255,6 +277,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 
 List all `.php` files in the root directory. Exclude:
 - `pesi-core.php`
+- `pesi-lib.php`
 - `pesi-content.php` (already registered as Stammdaten)
 - `pesi.php`
 - files inside any subdirectory
@@ -297,7 +320,7 @@ One field per pure-text page. The client edits the entire body in one Quill edit
 
 **DO NOT REPLACE — leave static:**
 - Navigation links and menu structure
-- HTML attributes: `class`, `id`, `href`, `alt`, `style` (and `src` — **except** when intentionally making a photo swappable via type `image`, see below)
+- HTML attributes: `class`, `id`, `href`, `style` (and `src` — **except** when intentionally making a photo swappable via type `image`, see below); `alt` only as the `_alt` description field of a content image
 - PHP logic, loops, conditions, variables
 - CSS and JavaScript (inline or external)
 - `<meta>` tags (title, description) — unless explicitly requested
@@ -369,7 +392,7 @@ Wrap **one** entry. pesi does the rest:
 <section class="team">
 <!-- pesi:item team:1 -->
   <article class="member">
-    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="<?= pesi('team_1_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
     <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
     <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
   </article>
@@ -494,7 +517,7 @@ it. Without it the two `RewriteRule` lines are inert and `/pesi` returns 404.
 
 The `\.pesi-` pattern covers every internal pesi file: the rotated backups,
 the stable write locks and short-lived candidate files
-(`page.php.pesi-backup.1`/`.2`, `.pesi-lock`, `.pesi-tmp-*`) **and** the
+(`page.php.pesi-backup.1` … `.5`, `.pesi-lock`, `.pesi-tmp-*`) **and** the
 login-throttle register (`.pesi-throttle`). Backups and candidate files contain
 page source, so a
 leak would expose that page's full PHP source — blocking them is
@@ -588,7 +611,7 @@ is the single most common reason a fresh install "saves nothing". Verify that
 the PHP user can write:
 
 - every file listed in `$PESI_PAGES`
-- the project root (pesi creates `page.php.pesi-backup.1/.2` next to each page,
+- the project root (pesi creates `page.php.pesi-backup.1` … `.5` next to each page,
   plus a `.pesi-throttle` register)
 - the upload folder (`PESI_UPLOAD_DIR`), if any `image` field exists
 
@@ -638,6 +661,8 @@ robots.txt: updated
 .htaccess:  updated
 
 Dashboard password: <the plaintext password — stored hashed in pesi-core.php>
+                    (the client can change it under "Passwort ändern"; delete
+                    .pesi-password via FTP to reset it to this one)
 
 Next steps:
 - Test dashboard: domain.at/pesi
@@ -719,7 +744,7 @@ not turn each copy into its own fields. Wrap **one** copy in a block:
 <section class="team">
 <!-- pesi:item team:1 -->
   <article class="member">
-    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="<?= pesi('team_1_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
     <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
     <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
   </article>
