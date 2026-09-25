@@ -106,7 +106,7 @@ must be one of the seven below; an unknown type such as `urll` is reported as
 
 ```php
 <img src="<?= pesi('team_anna_foto', '/uploads/anna-2026.jpg', 'image', 'Foto Anna Muster') ?>"
-     alt="Anna Muster">
+     alt="<?= pesi('team_anna_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
 ```
 
 `url`, `email` and `tel` are the only field types that belong in link-related
@@ -120,7 +120,23 @@ scheme safe.
 <a href="tel:<?= pesi('telefon', '+43 123 456789', 'tel', 'Telefonnummer') ?>">Anrufen</a>
 ```
 
-Wrap **only the path** in `pesi()` — never the `<img>` tag, `alt`, `class` or `width`/`height`. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and both technical backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
+**Content images get a description field.** For every image that carries
+meaning — portraits, team photos, project or product images — add a `text`
+field in the `alt` attribute whose ID is the image ID plus `_alt`, with
+`Bildbeschreibung` as its label and the existing alt text (or a short German
+description) as default:
+
+```php
+<img src="<?= pesi('team_anna_foto', '/uploads/anna-2026.jpg', 'image', 'Foto Anna Muster') ?>"
+     alt="<?= pesi('team_anna_foto_alt', 'Anna Muster in ihrer Praxis', 'text', 'Bildbeschreibung') ?>">
+```
+
+The dashboard pairs the two by name and shows the description inside the
+image's card. Decorative images (backgrounds, ornaments) keep `alt=""` and get
+no description field. Inside a `pesi:item`, the `_alt` field follows the
+image's ID (`team_1_foto` → `team_1_foto_alt`).
+
+Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
 
 ### Heredoc syntax for richtext
 
@@ -303,7 +319,7 @@ One field per pure-text page. The client edits the entire body in one Quill edit
 
 **DO NOT REPLACE — leave static:**
 - Navigation links and menu structure
-- HTML attributes: `class`, `id`, `href`, `alt`, `style` (and `src` — **except** when intentionally making a photo swappable via type `image`, see below)
+- HTML attributes: `class`, `id`, `href`, `style` (and `src` — **except** when intentionally making a photo swappable via type `image`, see below); `alt` only as the `_alt` description field of a content image
 - PHP logic, loops, conditions, variables
 - CSS and JavaScript (inline or external)
 - `<meta>` tags (title, description) — unless explicitly requested
@@ -375,7 +391,7 @@ Wrap **one** entry. pesi does the rest:
 <section class="team">
 <!-- pesi:item team:1 -->
   <article class="member">
-    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="<?= pesi('team_1_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
     <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
     <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
   </article>
@@ -725,7 +741,7 @@ not turn each copy into its own fields. Wrap **one** copy in a block:
 <section class="team">
 <!-- pesi:item team:1 -->
   <article class="member">
-    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="">
+    <img src="<?= pesi('team_1_foto', '/uploads/anna.jpg', 'image', 'Foto (Teammitglied)') ?>" alt="<?= pesi('team_1_foto_alt', 'Anna Muster', 'text', 'Bildbeschreibung') ?>">
     <h3><?= pesi('team_1_name', 'Anna Muster', 'text', 'Name') ?></h3>
     <p><?= pesi('team_1_rolle', 'Psychologin', 'text', 'Rolle') ?></p>
   </article>

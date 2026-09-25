@@ -325,10 +325,14 @@ if ($auth) {
                     // Kandidaten aus der Sicherung, die bei dieser Rotation
                     // herausfällt, können anschließend ebenfalls bereinigt werden.
                     $expiredImages = _pesi_expiring_images($fp);
+                    $altCheck = _pesi_alt_unchecked($fields, $up['post']);
                     $r = _pesi_save($fp, $fields, $up['post'], $postedHash);
                     $msg = $r['msg'];
                     $msgType = $r['type'];
                     $invalidIds = $r['invalid'] ?? [];
+                    if ($msgType === 'success' && $altCheck) {
+                        $msg .= ' ' . sprintf($t['img_alt_saved'], implode(', ', $altCheck));
+                    }
                     if ($msgType === 'success') {
                         _pesi_cleanup_old($basePath, array_unique(array_merge($replacedImages, $expiredImages)), $PESI_PAGES);
                         $fields = _pesi_parse($fp);
@@ -476,6 +480,40 @@ function _pesi_scan(string $src): array {
  * Aufrufe, die nicht als Feld erscheinen — Diagnose T13. Fast immer ein
  * doppelt zitierter Wert (dort interpoliert PHP) oder ein unbekannter Typ.
  */
+/**
+ * Bildbeschreibungen: Ein text-Feld mit der ID <bild-id>_alt gehört zum
+ * image-Feld <bild-id>. Keine eigene Syntax, nur eine Namensregel; das Feld
+ * steht im alt-Attribut und wird wie jedes andere gespeichert.
+ * Rückgabe: [Bild-ID => Alt-Feld-ID].
+ */
+function _pesi_alt_pairs(array $fields): array {
+    $out = [];
+    foreach ($fields as $id => $f) {
+        if (($f['type'] ?? '') !== 'text' || substr((string)$id, -4) !== '_alt') continue;
+        $img = substr((string)$id, 0, -4);
+        if (($fields[$img]['type'] ?? '') === 'image') $out[$img] = (string)$id;
+    }
+    return $out;
+}
+
+/**
+ * Bilder, die mit diesem Speichern wechseln, deren Beschreibung aber gleich
+ * bleibt. Die Erfolgsmeldung erinnert daran, sie zu prüfen.
+ * $fields: Stand vor dem Speichern. $post: eingereichte Werte, bei Uploads
+ * schon mit dem neuen Pfad. Rückgabe: Beschriftungen der Bilder.
+ */
+function _pesi_alt_unchecked(array $fields, array $post): array {
+    $out = [];
+    foreach (_pesi_alt_pairs($fields) as $img => $alt) {
+        $newImg = $post['pesi_field_' . $img] ?? null;
+        if (!is_string($newImg) || $newImg === (string)$fields[$img]['value']) continue;
+        $newAlt = $post['pesi_field_' . $alt] ?? null;
+        $newAlt = is_string($newAlt) ? str_replace(["\r\n", "\r"], "\n", $newAlt) : (string)$fields[$alt]['value'];
+        if ($newAlt === (string)$fields[$alt]['value']) $out[] = $fields[$img]['label'] ?: $img;
+    }
+    return $out;
+}
+
 function _pesi_unparsed_fields(string $file): array {
     // Fehlende Seite meldet T4 schon; hier keine zweite PHP-Warnung mit Pfad.
     $src = is_file($file) ? (string)file_get_contents($file) : '';
@@ -1989,6 +2027,10 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Bild hierher ziehen oder klicken zum Auswählen',
         'img_current'       => 'Aktuelles Bild:',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
+        'img_alt_label'     => 'Bildbeschreibung',
+        'img_alt_help'      => 'Beschreibt das Bild für Menschen, die es nicht sehen können, und für Suchmaschinen. Ein kurzer Satz genügt.',
+        'img_alt_check'     => 'Neues Bild gewählt: Passt die Beschreibung noch?',
+        'img_alt_saved'     => 'Neues Bild bei %s: Bitte prüfen Sie, ob die Bildbeschreibung noch passt.',
         'vh_title'          => '↩ Frühere Versionen (%d)',
         'vh_intro'          => 'Bei jedem Speichern hebt pesi den bisherigen Stand auf, die letzten %d pro Seite. Wiederherstellen sichert Ihren jetzigen Stand vorher, Sie können also jederzeit zurück.',
         'vh_state'          => 'Stand von %s',
@@ -2111,6 +2153,10 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
         'img_advanced'      => 'Advanced: path / external URL',
+        'img_alt_label'     => 'Image description',
+        'img_alt_help'      => 'Describes the image for people who cannot see it, and for search engines. One short sentence is enough.',
+        'img_alt_check'     => 'New image selected: does the description still fit?',
+        'img_alt_saved'     => 'New image for %s: please check that the image description still fits.',
         'vh_title'          => '↩ Earlier versions (%d)',
         'vh_intro'          => 'Every save keeps the previous state, the last %d per page. Restoring backs up your current state first, so you can always go back.',
         'vh_state'          => 'State from %s',
@@ -2379,6 +2425,9 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .img-prev{max-width:220px;max-height:160px;width:auto;border-radius:6px;border:1px solid var(--bd);object-fit:cover;background:var(--b-s)}
 .img-path{font-size:12px;opacity:.8;margin-top:6px}
 .img-hint{font-size:12px;color:var(--tx3)}
+.img-alt{display:flex;flex-direction:column;gap:4px;margin-top:6px;padding-top:10px;border-top:1px solid var(--bd)}
+.img-alt-l{font-size:.85rem;font-weight:600;color:var(--tx);cursor:pointer}
+.img-alt-note{font-size:12px;font-weight:600;color:#8a5a00}
 .img-cur{margin:0}
 .img-name{font-size:12px;color:var(--tx3);margin-top:5px}
 .img-name span{color:var(--tx2);font-weight:500}
@@ -2805,8 +2854,12 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   }
               };
               $curBlk = null;
+              // Bildbeschreibungen stehen in der Karte ihres Bilds, nicht als eigene Karte.
+              $altOf  = _pesi_alt_pairs($fields);
+              $altFor = array_flip($altOf);
             ?>
             <?php foreach ($fields as $id => $fld):
+              if (isset($altFor[$id])) continue;
               $label = !empty($fld['label']) ? $fld['label'] : $id;
               $bk = $blockOf[$id] ?? null;
               if ($bk !== $curBlk):
@@ -2877,6 +2930,21 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                       <input type="text" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi img-path" placeholder="/uploads/…">
                       <span class="img-hint"><?=$t['img_hint']?></span>
                     </details>
+                    <?php if (isset($altOf[$id])):
+                      $aid   = $altOf[$id];
+                      $afid  = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $aid);
+                      $aDraft = array_key_exists($aid, $draft);
+                      $aval  = $aDraft ? $draft[$aid] : (string)$fields[$aid]['value'];
+                      $abad  = in_array($aid, $invalidIds, true);
+                      $afx   = ($aDraft ? ' data-saved="' . htmlspecialchars((string)$fields[$aid]['value']) . '"' : '') . ($abad ? ' aria-invalid="true"' : '');
+                    ?>
+                    <div class="img-alt" data-img-alt>
+                      <label class="img-alt-l" for="<?=$afid?>"><?=htmlspecialchars($fields[$aid]['label'] !== '' ? $fields[$aid]['label'] : $t['img_alt_label'])?></label>
+                      <p class="img-hint" id="<?=$afid?>_h"><?=htmlspecialchars($t['img_alt_help'])?></p>
+                      <input type="text" id="<?=$afid?>" name="pesi_field_<?=htmlspecialchars($aid)?>" value="<?=htmlspecialchars($aval)?>"<?=$afx?> class="fi" aria-describedby="<?=$afid?>_h">
+                      <p class="img-alt-note" role="status" data-img-alt-note hidden><?=htmlspecialchars($t['img_alt_check'])?></p>
+                    </div>
+                    <?php endif; ?>
                   </div>
 
                 <?php elseif ($fld['type'] === 'richtext' && !$rtEditable): ?>
@@ -3047,12 +3115,15 @@ function closeMobileNav(){
         pv=w.querySelector('[data-img-prev]'),
         nm=w.querySelector('[data-img-name]');
     if(!inp) return;
+    var altNote=w.querySelector('[data-img-alt-note]');
     function show(file){
       if(!file) return;
       var url=URL.createObjectURL(file);
       if(pv) pv.src=url;
       if(nm) nm.textContent=file.name;
       if(fig) fig.hidden=false;
+      // Neues Bild, alte Beschreibung: darauf hinweisen, nicht erzwingen.
+      if(altNote) altNote.hidden=false;
     }
     inp.addEventListener('change',function(){ if(inp.files&&inp.files[0]) show(inp.files[0]); });
     if(drop){
