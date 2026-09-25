@@ -481,7 +481,7 @@ The dashboard is built for the client — a therapist, a practice, an artist; ra
 - **Save** at the bottom, with a live count of unsaved changes and a warning before leaving the page or running a structural action
 - **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group
 - **Visibility** panel with Show/Hide for every `pesi:toggle` group; fields of a hidden section say so on their card
-- **↩ Last version** restores the state before the last save. The current state is backed up first, so clicking again goes forward
+- **Earlier versions** lists the last `PESI_BACKUP_COUNT` states of the page (5 by default). Each entry says which fields differ from now, shows old and new values side by side, and restores with one click. The current state is backed up first, so a restore can itself be undone
 - **Preview** of the saved page next to the form on screens from 1280 px, sandboxed
 - **Technical view** toggle in the top bar shows field IDs and type badges; remembered per browser
 - **Diagnostics** for whoever looks after the site — default password, missing `php -l`, brand contrast, unparsable fields, upload limits — sit in one collapsed line, never in a red banner
@@ -556,12 +556,11 @@ Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY
 
 | File | Created | Purpose |
 |---|---|---|
-| `page.php.pesi-backup.1` | on every successful save | Last saved state — what "↩ Last version" restores |
-| `page.php.pesi-backup.2` | on the second save | The state before that; reachable only via FTP |
+| `page.php.pesi-backup.1` … `.5` | on every successful save | The earlier states listed under "Earlier versions", newest first. The number follows `PESI_BACKUP_COUNT`; each file keeps the time its state was saved |
 | `page.php.pesi-lock` | on first save | Stable sidecar lock for the write; stays, empty |
 | `page.php.pesi-tmp-*` | during a save | The candidate that is linted and then renamed over the live page; removed on failure |
 | `.pesi-throttle`, `.pesi-throttle-lock` | on the first sign-in attempt | Login throttle register: SHA-256 of the client IP and a counter, entries dropped an hour after they expire |
-| `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file; replaced images are deleted once neither the page nor its two backups reference them |
+| `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file; replaced images are deleted once neither the page nor any of its backups references them |
 
 All of these are covered by the `.pesi-` rule in Step 3 except the upload folder, which must stay public.
 
@@ -577,7 +576,8 @@ define('BRAND_NAME',          'My Project');       // Shown in the sidebar and t
 define('BRAND_COLOR',         '#a3611b');          // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',          '');                 // Path to logo image — empty = pesi logo
 define('LANG',                'de');               // 'de' or 'en'
-define('PESI_BACKUP_ENABLED', true);               // Two rotating recovery copies per page
+define('PESI_BACKUP_ENABLED', true);               // Keep earlier states of every page
+define('PESI_BACKUP_COUNT',   5);                  // How many, 1–20 — listed under "Earlier versions"
 define('PESI_SYNTAX_CHECK',   true);               // php -l on the candidate before publishing
 define('PESI_SESSION_IDLE',   30 * 60);            // Sign out after inactivity
 define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime, independent of the idle limit
@@ -604,7 +604,7 @@ $PESI_PAGES = [
 - pesi stores nothing about website visitors. No cookies, no logging, no analytics on the public site
 - The dashboard sets one session cookie, starting on its login page (it carries the CSRF token for the sign-in form). The public site sets none
 - The login throttle keeps a **SHA-256 hash** of the client IP plus a counter, never the address, and drops entries an hour after they expire
-- Replaced images are deleted once the page and both technical backups no longer reference them — no orphaned portraits on the web space
+- Replaced images are deleted once the page and all of its backups no longer reference them — no orphaned portraits on the web space
 - Uploaded photos lose their camera metadata before they go online: GPS location, device, time of capture, author and comments. The only thing kept is the rotation, so portrait photos stay upright. This happens in plain PHP and does not depend on `gd`
 - No external requests at any time: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`
 
@@ -668,7 +668,7 @@ Your `.htaccess` has an over-aggressive PHP-stripping rule. See Step 3 — repla
 
 ### Saved text is gone, page shows the old default again
 
-Check whether a `.pesi-backup.1` file exists next to the PHP file. Before publishing, pesi runs `php -l` against a temporary candidate; invalid PHP is rejected while the live page stays unchanged. `.pesi-backup.1` and `.2` remain as technical recovery copies.
+Check whether a `.pesi-backup.1` file exists next to the PHP file. Before publishing, pesi runs `php -l` against a temporary candidate; invalid PHP is rejected while the live page stays unchanged. The earlier states are listed under "Earlier versions" in the dashboard and stay on disk as `.pesi-backup.1`, `.2`, … next to the page.
 
 ### A field doesn't show up in the dashboard
 
@@ -690,12 +690,12 @@ The syntax check needs `exec()` and a PHP CLI in the `PATH`. Ask your host to en
 ## Honest limitations
 
 - **No media library** — image upload only swaps page-bound `image` fields; decorative assets stay an FTP job
-- **Replaced images are deleted only after the page and both backups no longer reference them.** pesi checks the files listed in `$PESI_PAGES`, their backups and their raw markup, but cannot see includes, partials or templates that are not registered pages. Register such files too, or keep their assets outside `PESI_UPLOAD_DIR`
+- **Replaced images are deleted only after the page and all of its backups no longer reference them.** pesi checks the files listed in `$PESI_PAGES`, their backups and their raw markup, but cannot see includes, partials or templates that are not registered pages. Register such files too, or keep their assets outside `PESI_UPLOAD_DIR`
 - **Toggles must not be nested** — a `pesi:toggle` inside another one disables switching for that page, and the dashboard says so
 - **Repeatable entries must not be nested** — a `pesi:item` inside another one disables add, duplicate, reorder and delete for that page (`S6`); the fields stay editable. A toggle may contain entries
 - **No multi-user system** — one password for everyone
 - **AVIF and GIF uploads are published as they are.** GIF cannot carry camera metadata; AVIF can, and pesi does not rewrite it. Ask clients to upload phone photos as JPEG. Scaled-down images also lose their colour profile, so wide-gamut photos can look slightly less saturated
-- **No version history.** pesi keeps two rotating recovery copies per page and the dashboard reaches exactly one of them. That covers *"the previous text was better"* and nothing beyond it. If someone notices on Friday that something broke on Monday, pesi cannot help — that is what your host's backups are for. Check that they are enabled before go-live, and tell the client where the boundary runs
+- **A short version history, not an archive.** pesi keeps the last `PESI_BACKUP_COUNT` states per page (5 by default, at most 20), counted in saves, not in days. That covers *"the text from this morning was better"*. A client who saves ten times on Monday has no Friday version of last week left — that is what your host's backups are for. Check that they are enabled before go-live, and tell the client where the boundary runs
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content
 - **Not meant for simultaneous heavy editing** — dashboard writes are lock-protected against each other. An FTP upload or deploy does not use that lock: pesi catches most overlaps and asks the editor to reload, but an upload that lands in the last milliseconds before a save is overwritten. Do not upload a page via FTP while the client may be saving it
 

@@ -239,7 +239,7 @@ if ($auth) {
             $msgType = 'error';
         } elseif (preg_match('/^(dup|add|del|up|down):([a-z0-9_]+)(?::(\d+))?$/', _pesi_param($_POST, 'pesi_block'), $bm)) {
             $fp = $basePath . '/' . $page;
-            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+            $expiredImages = _pesi_expiring_images($fp);
             $r = _pesi_block_op($fp, $bm[2], (int)($bm[3] ?? 0), $bm[1], $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
@@ -260,7 +260,7 @@ if ($auth) {
             $msgType = 'error';
         } elseif (preg_match('/^[a-z0-9_]+$/', _pesi_param($_POST, 'pesi_toggle'))) {
             $fp = $basePath . '/' . $page;
-            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+            $expiredImages = _pesi_expiring_images($fp);
             $r = _pesi_toggle_op($fp, _pesi_param($_POST, 'pesi_toggle'), $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
@@ -271,7 +271,7 @@ if ($auth) {
         }
     }
 
-    // Letzte Sicherung wiederherstellen
+    // Früheren Stand wiederherstellen. Der Button trägt "Generation:Hash".
     elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_restore']) && $page) {
         if (!$csrfOk) {
             $msg = $t['err_session'];
@@ -279,10 +279,13 @@ if ($auth) {
         } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
             $msg = $t['err_stale'];
             $msgType = 'error';
+        } elseif (!preg_match('/^(\d{1,2}):([0-9a-f]{64})$/', _pesi_param($_POST, 'pesi_restore'), $rm)) {
+            $msg = $t['rst_none'];
+            $msgType = 'error';
         } else {
             $fp = $basePath . '/' . $page;
-            $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
-            $r = _pesi_restore($fp, $postedHash);
+            $expiredImages = _pesi_expiring_images($fp);
+            $r = _pesi_restore($fp, (int)$rm[1], $rm[2], $postedHash);
             $msg = $r['msg'];
             $msgType = $r['type'];
             if ($msgType === 'success') {
@@ -321,7 +324,7 @@ if ($auth) {
                     }
                     // Kandidaten aus der Sicherung, die bei dieser Rotation
                     // herausfällt, können anschließend ebenfalls bereinigt werden.
-                    $expiredImages = _pesi_image_values($fp . '.pesi-backup.2');
+                    $expiredImages = _pesi_expiring_images($fp);
                     $r = _pesi_save($fp, $fields, $up['post'], $postedHash);
                     $msg = $r['msg'];
                     $msgType = $r['type'];
@@ -502,12 +505,46 @@ function _pesi_hash_matches(string $file, string $expected): bool {
 
 // ── Saver ────────────────────────────────────────────────────
 
-// Backup-Rotation (.pesi-backup.1 → .2) als Vorgang mit Rücknahme.
-// Jede neue Kopie entsteht zuerst neben dem Ziel und wird per Hash geprüft.
-// Die älteste Generation wird nicht überschrieben, sondern beiseitegelegt,
-// bis _pesi_backup_finish() den ganzen Commit bestätigt. Scheitert ein
-// späterer Schritt — auch der Live-Austausch —, stellt _pesi_backup_rollback()
-// die bisherige Historie wieder her. Die Live-Datei wird hier nie verändert.
+// Sicherungsstände pro Seite: PESI_BACKUP_COUNT, zwischen 1 und 20.
+function _pesi_backup_count(): int {
+    return max(1, min(20, (int)(defined('PESI_BACKUP_COUNT') ? PESI_BACKUP_COUNT : 5)));
+}
+
+// Generation $n einer Seite; 1 ist der jüngste Stand.
+function _pesi_backup_path(string $file, int $n): string {
+    return $file . '.pesi-backup.' . $n;
+}
+
+// Alle vorhandenen Generationen, jüngste zuerst, als [n => Pfad]. Auch die
+// jenseits von PESI_BACKUP_COUNT: Wurde die Anzahl verkleinert, liegen sie
+// noch, bis die nächste Rotation sie entfernt.
+function _pesi_backup_files(string $file): array {
+    $out = [];
+    for ($n = 1; $n <= 20; $n++) {
+        $p = _pesi_backup_path($file, $n);
+        if (is_file($p)) $out[$n] = $p;
+    }
+    return $out;
+}
+
+// Bildpfade aus den Generationen, die bei der nächsten Rotation herausfallen.
+// Nach dem Commit sind sie Kandidaten für die Bild-Bereinigung.
+function _pesi_expiring_images(string $file): array {
+    $out = [];
+    foreach (_pesi_backup_files($file) as $n => $p) {
+        if ($n >= _pesi_backup_count()) $out = array_merge($out, _pesi_image_values($p));
+    }
+    return $out;
+}
+
+// Backup-Rotation (.1 → .2 → … → .N) als Vorgang mit Rücknahme.
+// Der Live-Stand wird zuerst neben das Ziel kopiert und per Hash geprüft.
+// Die übrigen Generationen rücken per rename() eine Stelle weiter; das ist im
+// selben Ordner atomar und lässt sich exakt zurücknehmen. Was herausfällt,
+// wird nur beiseitegelegt, bis _pesi_backup_finish() den ganzen Commit
+// bestätigt. Scheitert ein späterer Schritt, auch der Live-Austausch, stellt
+// _pesi_backup_rollback() die bisherige Historie wieder her. Die Live-Datei
+// wird hier nie verändert.
 //
 // $expectedHash: Hash, den die neue Sicherung 1 haben muss. Ein fremder
 // Schreibvorgang zwischen Snapshot und Kopie fällt so auf, statt still
@@ -515,87 +552,77 @@ function _pesi_hash_matches(string $file, string $expected): bool {
 // Rückgabe: Zustand für finish/rollback, oder false (nichts verändert).
 function _pesi_backup_begin(string $file, ?string $expectedHash = null) {
     $st = ['on' => (bool)PESI_BACKUP_ENABLED, 'file' => $file,
-           'b1' => $file . '.pesi-backup.1', 'b2' => $file . '.pesi-backup.2',
-           'hadB1' => false, 'aside' => null, 'step' => 0];
+           'aside' => [], 'moved' => [], 'b1' => false];
     if (!$st['on']) return $st;
-    $b1 = $st['b1'];
-    $b2 = $st['b2'];
+    $keep = _pesi_backup_count();
+    $b1   = _pesi_backup_path($file, 1);
 
-    $prepare = static function (string $source, string $target, ?string $want = null) {
-        try {
-            $tmp = $target . '.pesi-tmp-backup-' . bin2hex(random_bytes(8));
-        } catch (Throwable $e) {
-            return false;
-        }
-        if (!@copy($source, $tmp)) {
-            @unlink($tmp);
-            return false;
-        }
-        clearstatcache(true, $source);
-        clearstatcache(true, $tmp);
-        $sourceHash = $want ?? @hash_file('sha256', $source);
-        $tmpHash = @hash_file('sha256', $tmp);
-        if (!is_string($sourceHash) || !is_string($tmpHash) || !hash_equals($sourceHash, $tmpHash)) {
-            @unlink($tmp);
-            return false;
-        }
-        return $tmp;
+    try {
+        $tmp = $b1 . '.pesi-tmp-backup-' . bin2hex(random_bytes(8));
+    } catch (Throwable $e) {
+        return false;
+    }
+    if (!@copy($file, $tmp)) {
+        @unlink($tmp);
+        return false;
+    }
+    clearstatcache(true, $file);
+    clearstatcache(true, $tmp);
+    $sourceHash = $expectedHash ?? @hash_file('sha256', $file);
+    $tmpHash    = @hash_file('sha256', $tmp);
+    if (!is_string($sourceHash) || !is_string($tmpHash) || !hash_equals($sourceHash, $tmpHash)) {
+        @unlink($tmp);
+        return false;
+    }
+    // copy() datiert neu. Die Sicherung soll zeigen, seit wann dieser Stand
+    // galt, sonst stünde in der Versionsliste der Zeitpunkt, an dem er endete.
+    $mtime = @filemtime($file);
+    if ($mtime !== false) @touch($tmp, $mtime);
+
+    $fail = static function () use (&$st, $tmp): bool {
+        @unlink($tmp);
+        _pesi_backup_rollback($st);
+        return false;
     };
-
-    $nextB1 = $prepare($file, $b1, $expectedHash);
-    if ($nextB1 === false) return false;
-    $nextB2 = false;
-    $st['hadB1'] = is_file($b1);
-    if ($st['hadB1']) {
-        $nextB2 = $prepare($b1, $b2);
-        if ($nextB2 === false) { @unlink($nextB1); return false; }
-    }
-    $drop = static function () use ($nextB1, $nextB2): void {
-        @unlink($nextB1);
-        if (is_string($nextB2)) @unlink($nextB2);
-    };
-
-    // Schritt 1: älteste Generation beiseitelegen, nicht löschen
-    if (is_file($b2)) {
+    // Schritt 1: was über die Anzahl hinaus fällt, beiseitelegen
+    foreach (_pesi_backup_files($file) as $n => $p) {
+        if ($n < $keep) continue;
         try {
-            $aside = $b2 . '.pesi-tmp-old-' . bin2hex(random_bytes(8));
+            $aside = $p . '.pesi-tmp-old-' . bin2hex(random_bytes(8));
         } catch (Throwable $e) {
-            $drop();
-            return false;
+            return $fail();
         }
-        if (!@rename($b2, $aside)) { $drop(); return false; }
-        $st['aside'] = $aside;
+        if (!@rename($p, $aside)) return $fail();
+        $st['aside'][$p] = $aside;
     }
-    $st['step'] = 1;
-    // Schritt 2: bisherige Sicherung 1 wird Sicherung 2
-    if (is_string($nextB2)) {
-        if (!@rename($nextB2, $b2)) { $drop(); _pesi_backup_rollback($st); return false; }
-        $st['step'] = 2;
+    // Schritt 2: jede Generation rückt eine Stelle weiter, die älteste zuerst
+    for ($n = $keep - 1; $n >= 1; $n--) {
+        $from = _pesi_backup_path($file, $n);
+        if (!is_file($from)) continue;
+        $to = _pesi_backup_path($file, $n + 1);
+        if (!@rename($from, $to)) return $fail();
+        $st['moved'][] = [$from, $to];
     }
-    // Schritt 3: aktueller Live-Stand wird Sicherung 1
-    if (!@rename($nextB1, $b1)) { $drop(); _pesi_backup_rollback($st); return false; }
-    $st['step'] = 3;
+    // Schritt 3: der aktuelle Live-Stand wird Sicherung 1
+    if (!@rename($tmp, $b1)) return $fail();
+    $st['b1'] = true;
     return $st;
 }
 
-// Nimmt die Rotation zurück: Sicherung 2 (= alte Sicherung 1) wandert nach
-// Sicherung 1, die beiseitegelegte Generation zurück nach Sicherung 2.
-// Gelingt ein Schritt nicht, bleibt die alte Generation als
-// .pesi-backup.2.pesi-tmp-old-… liegen und ist von Hand wiederherstellbar.
+// Nimmt die Rotation in umgekehrter Reihenfolge zurück. Gelingt ein Schritt
+// nicht, bleibt eine herausgefallene Generation als …pesi-tmp-old-… liegen
+// und ist von Hand wiederherstellbar.
 function _pesi_backup_rollback(array $st): void {
     if (!$st['on']) return;
-    if ($st['step'] >= 3) {
-        if ($st['hadB1']) @rename($st['b2'], $st['b1']);
-        else @unlink($st['b1']);
-    } elseif ($st['step'] >= 2) {
-        @unlink($st['b2']);
-    }
-    if ($st['aside'] !== null) @rename($st['aside'], $st['b2']);
+    if ($st['b1']) @unlink(_pesi_backup_path($st['file'], 1));
+    foreach (array_reverse($st['moved']) as [$from, $to]) @rename($to, $from);
+    foreach ($st['aside'] as $orig => $aside) @rename($aside, $orig);
 }
 
 // Bestätigt die Rotation nach erfolgreichem Live-Austausch.
 function _pesi_backup_finish(array $st): void {
-    if ($st['on'] && $st['aside'] !== null) @unlink($st['aside']);
+    if (!$st['on']) return;
+    foreach ($st['aside'] as $aside) @unlink($aside);
 }
 
 // Rotation ohne anschließenden Live-Austausch (Tests, Werkzeuge).
@@ -966,15 +993,19 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action, 
 }
 
 // ── Wiederherstellen ─────────────────────────────────────────
-// Setzt die Datei auf .pesi-backup.1 zurück. Der aktuelle Stand
-// wandert vorher in die Backup-Rotation → erneutes Klicken kehrt
-// die Wiederherstellung wieder um.
-function _pesi_restore(string $file, ?string $expectedHash = null): array {
+// Setzt die Datei auf Generation $gen zurück. Der Vorgang läuft durch
+// _pesi_commit(), der aktuelle Stand wandert also vorher in die Rotation und
+// lässt sich seinerseits wiederherstellen.
+// $genHash ist der Hash, den die Versionsliste für diese Generation angezeigt
+// hat. Hat sich die Liste inzwischen verschoben (anderer Tab, zweite Person),
+// wird nicht ein anderer Stand als der gezeigte zurückgeholt.
+function _pesi_restore(string $file, int $gen, string $genHash, ?string $expectedHash = null): array {
     global $t;
-    $b1 = $file . '.pesi-backup.1';
-    if (!is_file($b1)) return ['msg' => $t['rst_none'], 'type' => 'info'];
-    $restore = file_get_contents($b1);
-    if ($restore === false || $restore === '') return ['msg' => $t['rst_none'], 'type' => 'info'];
+    $bp = _pesi_backup_path($file, $gen);
+    if ($gen < 1 || $gen > _pesi_backup_count() || !is_file($bp)) return ['msg' => $t['rst_none'], 'type' => 'error'];
+    $restore = @file_get_contents($bp);
+    if ($restore === false || $restore === '') return ['msg' => $t['rst_none'], 'type' => 'error'];
+    if (!hash_equals($genHash, hash('sha256', $restore))) return ['msg' => $t['err_stale'], 'type' => 'error'];
     $current = (string)file_get_contents($file);
     $currentHash = hash('sha256', $current);
     if ($expectedHash !== null && !hash_equals($expectedHash, $currentHash)) {
@@ -983,6 +1014,36 @@ function _pesi_restore(string $file, ?string $expectedHash = null): array {
     if ($current === $restore) return ['msg' => $t['rst_same'], 'type' => 'info'];
     if ($c = _pesi_commit($file, $restore, $currentHash)) return $c;
     return ['msg' => $t['rst_done'], 'type' => 'success'];
+}
+
+/**
+ * Was Wiederherstellen ändern würde: Felder, deren Wert in $then anders ist
+ * als in $now, dazu Felder, die es nur in einem der beiden Stände gibt.
+ * Rückgabe: Liste von [label, type, then, now]; null = Feld nicht vorhanden.
+ */
+function _pesi_version_diff(array $now, array $then): array {
+    $out = [];
+    foreach ($now + $then as $id => $f) {
+        $a = $then[$id]['value'] ?? null;
+        $b = $now[$id]['value'] ?? null;
+        if ($a === $b) continue;
+        $out[] = [$f['label'] !== '' ? $f['label'] : _pesi_human($id), $f['type'], $a, $b];
+    }
+    return $out;
+}
+
+// Feldwert als kurzer Klartext für die Versionsliste. Ohne mbstring: Die
+// Kürzung per /u-Regex schneidet nie mitten in ein UTF-8-Zeichen.
+function _pesi_version_text(?string $v, string $type): string {
+    global $t;
+    if ($v === null) return $t['vh_absent'];
+    if ($type === 'image') return basename($v);
+    if ($type === 'richtext') {
+        $v = html_entity_decode(strip_tags(preg_replace('#<(br|/p|/li|/h[23])\b[^>]*>#i', ' ', $v)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+    $v = trim((string)preg_replace('/\s+/u', ' ', $v));
+    if ($v === '') return $t['vh_empty'];
+    return (string)preg_replace('/^(.{80}).+$/us', '$1…', $v);
 }
 
 /*
@@ -1122,9 +1183,9 @@ function _pesi_esc(string $v): string {
  * statt „02.08.2026 14:23“ — die Kundin muss beurteilen können, welchen Stand
  * sie zurückholt.
  */
-function _pesi_when(int $ts): string {
+function _pesi_when(int $ts, bool $seconds = false): string {
     global $t;
-    $time = date('H:i', $ts);
+    $time = date($seconds ? 'H:i:s' : 'H:i', $ts);
     $day  = date('Y-m-d', $ts);
     if ($day === date('Y-m-d'))                       return sprintf($t['when_today'], $time);
     if ($day === date('Y-m-d', strtotime('-1 day')))  return sprintf($t['when_yesterday'], $time);
@@ -1798,7 +1859,7 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
     $raw   = '';
     foreach (array_keys($pages) as $pg) {
         $pf = $basePath . '/' . $pg;
-        $versions = array_filter([$pf, $pf . '.pesi-backup.1', $pf . '.pesi-backup.2'], 'file_exists');
+        $versions = array_merge(is_file($pf) ? [$pf] : [], array_values(_pesi_backup_files($pf)));
         if (!$versions) continue;
         $l = @fopen($pf . '.pesi-lock', 'c+');
         if (!$l || !flock($l, LOCK_SH)) {
@@ -1868,7 +1929,7 @@ function _pesi_strings(): array { return [
         'to_website'        => '↗ Zur Website',
         'logout'            => 'Abmelden',
         'no_fields'         => 'Auf dieser Seite gibt es nichts zum Bearbeiten.',
-        'save_hint'         => 'Ihre Änderungen werden erst mit „Speichern“ übernommen. „↩ Letzte Version“ stellt den Stand davor wieder her.',
+        'save_hint'         => 'Ihre Änderungen werden erst mit „Speichern“ übernommen. Frühere Stände finden Sie unter „Frühere Versionen“.',
         'save_btn'          => 'Speichern',
         'welcome_title'     => 'Willkommen',
         'welcome_hint'      => 'Wählen Sie links eine Seite aus, um deren Inhalte zu bearbeiten.',
@@ -1925,13 +1986,26 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Bild hierher ziehen oder klicken zum Auswählen',
         'img_current'       => 'Aktuelles Bild:',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
-        'rst_btn'           => '↩ Letzte Version',
+        'vh_title'          => '↩ Frühere Versionen (%d)',
+        'vh_intro'          => 'Bei jedem Speichern hebt pesi den bisherigen Stand auf, die letzten %d pro Seite. Wiederherstellen sichert Ihren jetzigen Stand vorher, Sie können also jederzeit zurück.',
+        'vh_state'          => 'Stand von %s',
+        'vh_diff'           => 'Anders als jetzt: %s',
+        'vh_more'           => '%s und %d weitere',
+        'vh_same'           => 'Entspricht dem aktuellen Stand',
+        'vh_struct'         => 'Texte gleich, anders sind Einträge, Sichtbarkeit oder der Seitenaufbau',
+        'vh_show'           => 'Unterschiede ansehen',
+        'vh_field'          => 'Feld',
+        'vh_then'           => 'Damals',
+        'vh_now'            => 'Jetzt',
+        'vh_absent'         => 'nicht vorhanden',
+        'vh_empty'          => 'leer',
+        'vh_restore'        => 'Wiederherstellen',
         'rst_confirm'       => 'Diese Seite auf den Stand von %s zurücksetzen? Ihr jetziger Stand wird dabei gesichert, Sie können also wieder zurück.',
         'when_today'        => 'heute %s Uhr',
         'when_yesterday'    => 'gestern %s Uhr',
-        'rst_done'          => 'Die letzte Version wurde wiederhergestellt.',
-        'rst_none'          => 'Es gibt noch keine frühere Version.',
-        'rst_same'          => 'Der aktuelle Stand ist bereits die letzte Version.',
+        'rst_done'          => 'Die frühere Version ist wiederhergestellt. Ihr vorheriger Stand steht jetzt als neueste unter „Frühere Versionen“.',
+        'rst_none'          => 'Diese Version gibt es nicht mehr. Bitte laden Sie die Seite neu.',
+        'rst_same'          => 'Diese Version entspricht bereits dem aktuellen Stand.',
         'tgl_section'       => 'Sichtbarkeit',
         'tgl_visible'       => 'sichtbar',
         'tgl_hidden'        => 'versteckt',
@@ -1974,7 +2048,7 @@ function _pesi_strings(): array { return [
         'to_website'        => '↗ Visit Website',
         'logout'            => 'Sign out',
         'no_fields'         => 'There is nothing to edit on this page.',
-        'save_hint'         => 'Your changes only take effect once you click "Save". "↩ Last version" restores the state before that.',
+        'save_hint'         => 'Your changes only take effect once you click "Save". Earlier states are under "Earlier versions".',
         'save_btn'          => 'Save',
         'welcome_title'     => 'Welcome',
         'welcome_hint'      => 'Select a page on the left to edit its content.',
@@ -2031,13 +2105,26 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
         'img_advanced'      => 'Advanced: path / external URL',
-        'rst_btn'           => '↩ Last version',
+        'vh_title'          => '↩ Earlier versions (%d)',
+        'vh_intro'          => 'Every save keeps the previous state, the last %d per page. Restoring backs up your current state first, so you can always go back.',
+        'vh_state'          => 'State from %s',
+        'vh_diff'           => 'Differs from now: %s',
+        'vh_more'           => '%s and %d more',
+        'vh_same'           => 'Same as the current state',
+        'vh_struct'         => 'Same texts; entries, visibility or the page layout differ',
+        'vh_show'           => 'Show differences',
+        'vh_field'          => 'Field',
+        'vh_then'           => 'Then',
+        'vh_now'            => 'Now',
+        'vh_absent'         => 'not there',
+        'vh_empty'          => 'empty',
+        'vh_restore'        => 'Restore',
         'rst_confirm'       => 'Reset this page to the state from %s? Your current state is backed up first, so you can go back again.',
         'when_today'        => 'today at %s',
         'when_yesterday'    => 'yesterday at %s',
-        'rst_done'          => 'The last version has been restored.',
-        'rst_none'          => 'There is no earlier version yet.',
-        'rst_same'          => 'The current state is already the last version.',
+        'rst_done'          => 'The earlier version has been restored. Your previous state is now the newest under "Earlier versions".',
+        'rst_none'          => 'This version no longer exists. Please reload the page.',
+        'rst_same'          => 'This version is already the current state.',
         'tgl_section'       => 'Visibility',
         'tgl_visible'       => 'visible',
         'tgl_hidden'        => 'hidden',
@@ -2344,6 +2431,28 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .top-m{font-size:.74rem;color:var(--tx3);margin-left:auto}
 .rst-b{font:inherit;font-size:.82rem;padding:.55rem 1rem;background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;margin-right:.6rem}
 .rst-b:hover{border-color:var(--b);color:var(--b)}
+/* Versionsliste */
+.vh{border:1px solid var(--bd);border-radius:8px;margin:18px 0;background:var(--b-s);font-size:13px}
+.vh>summary{cursor:pointer;font-weight:600;padding:10px 14px;list-style:none;user-select:none}
+.vh>summary::-webkit-details-marker{display:none}
+.vh>summary::before{content:'▸ ';color:var(--tx2)}
+.vh[open]>summary::before{content:'▾ '}
+.vh-in{padding:0 14px 10px;color:var(--tx2);font-size:12px;line-height:1.5}
+.vh-l{list-style:none;margin:0;padding:0}
+.vh-i{border-top:1px solid var(--bd);padding:10px 14px}
+.vh-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.vh-t{font-weight:600}
+.vh-s{color:var(--tx2);flex:1 1 12rem}
+.vh-h .rst-b{margin:0;padding:.4rem .8rem}
+.vh-d{margin-top:8px}
+.vh-d>summary{cursor:pointer;color:var(--tx2);font-size:12px}
+.vh-d>summary:hover{color:var(--b)}
+.vh-tb{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;table-layout:fixed}
+.vh-tb th,.vh-tb td{text-align:left;vertical-align:top;padding:6px 8px;border-top:1px solid var(--bd);overflow-wrap:anywhere}
+.vh-tb thead th{border-top:0;color:var(--tx2);font-weight:500}
+.vh-tb tbody th{font-weight:500;width:28%}
+.vh-img{display:block;max-width:64px;max-height:48px;border-radius:4px;margin-bottom:3px}
+.vh-no{color:var(--tx2);font-style:italic}
 .tgl-sec{border:1px solid var(--bd);border-radius:8px;margin:0 0 18px;background:var(--b-s)}
 .tgl-sec-h{font-weight:600;font-size:13px;padding:10px 14px;border-bottom:1px solid var(--bd)}
 .tgl{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bd)}
@@ -2582,6 +2691,20 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
         $mtime   = is_file($pageAbs) ? filemtime($pageAbs) : 0;
         $fileHash = is_file($pageAbs) ? hash_file('sha256', $pageAbs) : '';
         $isGlobals = defined('PESI_GLOBALS_FILE') && $page === PESI_GLOBALS_FILE;
+        // Versionsliste: jede Generation mit dem, was Wiederherstellen ändern würde.
+        $pesiVersions = [];
+        if ($fileHash !== '') {
+            $nowFields = _pesi_parse($pageAbs);
+            foreach (_pesi_backup_files($pageAbs) as $n => $bp) {
+                if ($n > _pesi_backup_count()) continue;   // fällt bei der nächsten Rotation weg
+                $bsrc = @file_get_contents($bp);
+                if ($bsrc === false || $bsrc === '') continue;
+                $bh = hash('sha256', $bsrc);
+                $pesiVersions[] = ['n' => $n, 'hash' => $bh, 'time' => (int)@filemtime($bp),
+                    'same' => hash_equals($fileHash, $bh),
+                    'diff' => _pesi_version_diff($nowFields, _pesi_parse($bp))];
+            }
+        }
         $liveUrl = '/' . ltrim($page, '/');
       ?>
       <div class="top">
@@ -2762,6 +2885,54 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           <?php endif; ?>
         </div>
 
+        <?php if ($pesiVersions):
+          $vhCell = static function (?string $v, string $type) use ($t): string {
+              $txt = htmlspecialchars(_pesi_version_text($v, $type));
+              if ($v === null) return '<span class="vh-no">' . $txt . '</span>';
+              $src = $type === 'image' ? _pesi_safe_asset_url($v) : '';
+              return ($src !== '' ? '<img class="vh-img" src="' . htmlspecialchars($src) . '" alt="">' : '') . $txt;
+          }; ?>
+        <details class="vh">
+          <summary><?=htmlspecialchars(sprintf($t['vh_title'], count($pesiVersions)))?></summary>
+          <p class="vh-in"><?=htmlspecialchars(sprintf($t['vh_intro'], _pesi_backup_count()))?></p>
+          <?php
+            // Zwei Stände aus derselben Minute (schnell korrigierter Tippfehler)
+            // sollen sich unterscheiden lassen: dann mit Sekunden.
+            $minutes = array_count_values(array_map(fn($v) => date('YmdHi', $v['time']), $pesiVersions));
+          ?>
+          <ol class="vh-l">
+          <?php foreach ($pesiVersions as $v):
+            $labels = array_column($v['diff'], 0);
+            $list = count($labels) > 3
+                ? sprintf($t['vh_more'], implode(', ', array_slice($labels, 0, 3)), count($labels) - 3)
+                : implode(', ', $labels);
+            $sum  = $v['same'] ? $t['vh_same'] : ($labels ? sprintf($t['vh_diff'], $list) : $t['vh_struct']);
+            $when = _pesi_when($v['time'], $minutes[date('YmdHi', $v['time'])] > 1); ?>
+            <li class="vh-i">
+              <div class="vh-h">
+                <span class="vh-t"><?=htmlspecialchars(sprintf($t['vh_state'], $when))?></span>
+                <span class="vh-s"><?=htmlspecialchars($sum)?></span>
+                <?php if (!$v['same']): ?><button type="submit" class="rst-b" formnovalidate name="pesi_restore" value="<?=(int)$v['n'] . ':' . $v['hash']?>" data-confirm="<?=htmlspecialchars(sprintf($t['rst_confirm'], $when))?>"><?=htmlspecialchars($t['vh_restore'])?></button><?php endif; ?>
+              </div>
+              <?php if ($labels && !$v['same']): ?>
+              <details class="vh-d">
+                <summary><?=htmlspecialchars($t['vh_show'])?></summary>
+                <table class="vh-tb">
+                  <thead><tr><th scope="col"><span class="sr"><?=htmlspecialchars($t['vh_field'])?></span></th><th scope="col"><?=htmlspecialchars($t['vh_then'])?></th><th scope="col"><?=htmlspecialchars($t['vh_now'])?></th></tr></thead>
+                  <tbody>
+                  <?php foreach ($v['diff'] as [$lbl, $typ, $a, $b]): ?>
+                    <tr><th scope="row"><?=htmlspecialchars($lbl)?></th><td><?=$vhCell($a, $typ)?></td><td><?=$vhCell($b, $typ)?></td></tr>
+                  <?php endforeach; ?>
+                  </tbody>
+                </table>
+              </details>
+              <?php endif; ?>
+            </li>
+          <?php endforeach; ?>
+          </ol>
+        </details>
+        <?php endif; ?>
+
         <?php if (!empty($fields) || !empty($toggles)): ?>
         <div class="sv">
           <span class="sv-info">
@@ -2769,9 +2940,6 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
             <span class="sv-h"><?=htmlspecialchars($t['save_hint'])?></span>
           </span>
           <span class="sv-act">
-          <?php if (is_file($pageAbs . '.pesi-backup.1')): ?>
-          <button type="submit" class="rst-b" formnovalidate name="pesi_restore" value="1" data-confirm="<?=htmlspecialchars(sprintf($t['rst_confirm'], _pesi_when((int)filemtime($pageAbs . '.pesi-backup.1'))))?>"><?=htmlspecialchars($t['rst_btn'])?></button>
-          <?php endif; ?>
           <?php if (!empty($fields)): ?><button type="submit" class="sv-b"><?=$t['save_btn']?></button><?php endif; ?>
           </span>
         </div>
