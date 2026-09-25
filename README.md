@@ -478,6 +478,7 @@ PESI, 'richtext', 'Legal notice content') ?>
 The dashboard is built for the client — a therapist, a practice, an artist; rarely technical; opens it every few weeks. You use it twice, during setup.
 
 - **Pages** in the sidebar, one card per field, labels only — no IDs, no types
+- **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 Wörter · vorher 120`), so the client sees when a new text grows far beyond what the layout was built for
 - **Save** at the bottom, with a live count of unsaved changes and a warning before leaving the page or running a structural action
 - **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group
 - **Visibility** panel with Show/Hide for every `pesi:toggle` group; fields of a hidden section say so on their card

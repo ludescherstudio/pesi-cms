@@ -1913,6 +1913,9 @@ function _pesi_strings(): array { return [
         'err_stale'         => 'Diese Seite wurde zwischenzeitlich an anderer Stelle geändert. Bitte laden Sie sie neu und speichern Sie danach noch einmal.',
         'err_marker'        => 'Nicht gespeichert: %s enthält Text, den pesi nicht verarbeiten kann. Ihre Seite ist unverändert. Bitte entfernen Sie zuletzt eingefügte Sonderzeichen oder melden Sie sich bei Ihrer Website-Betreuung. (Code S2)',
         'err_invalid_fields'=> 'Nicht gespeichert: Bitte prüfen Sie die Eingabe bei %s. Ihre übrigen Änderungen wurden ebenfalls noch nicht übernommen.',
+        'fc_word'           => '%d Wort',
+        'fc_words'          => '%d Wörter',
+        'fc_words_before'   => '%s · vorher %d',
         'draft_kept'        => 'Ihre Eingaben stehen unten weiterhin im Formular. Gespeichert ist davon noch nichts.',
         'err_ambiguous'     => 'Diese Aktion war nicht eindeutig, deshalb wurde nichts geändert. Bitte laden Sie die Seite neu und versuchen Sie es noch einmal.',
         'url_ph'            => 'https://… oder /kontakt',
@@ -2032,6 +2035,9 @@ function _pesi_strings(): array { return [
         'err_stale'         => 'This page was changed elsewhere in the meantime. Please reload it and save again.',
         'err_marker'        => 'Not saved: %s contains text pesi cannot process. Your page is unchanged. Please remove any special characters you pasted recently, or contact whoever looks after your website. (Code S2)',
         'err_invalid_fields'=> 'Not saved: Please check the value for %s. Your other changes have not been applied either.',
+        'fc_word'           => '%d word',
+        'fc_words'          => '%d words',
+        'fc_words_before'   => '%s · before %d',
         'draft_kept'        => 'Your entries are still in the form below. None of them has been saved yet.',
         'err_ambiguous'     => 'This action was ambiguous, so nothing was changed. Please reload the page and try again.',
         'url_ph'            => 'https://… or /contact',
@@ -2341,6 +2347,7 @@ body.tech .fc-label{margin-bottom:.15rem}
 /* Zugehörigkeit zu einem Sichtbarkeits-Bereich. Bewusst ohne opacity: das Feld
    gehört weiterhin bearbeitet, abgesenkter Kontrast wäre das falsche Signal.
    Punktfarben wie im Panel oben, damit beides zusammengehört. */
+.fc-cnt{font-size:.74rem;color:var(--tx2);text-align:right;margin-top:.35rem;font-variant-numeric:tabular-nums}
 .fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--tx2);margin:-.1rem 0 .6rem}
 .fc-tgl-dot{width:8px;height:8px;border-radius:50%;background:#1f9d55;flex:0 0 auto}
 .fc-off{border-left:3px solid #9aa0a6}
@@ -2879,6 +2886,9 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   <div id="q_<?=htmlspecialchars($id)?>"><?=_pesi_sanitize_html($val)?></div>
                   <textarea name="pesi_field_<?=htmlspecialchars($id)?>" id="h_<?=htmlspecialchars($id)?>" style="display:none"<?=$fx?>><?=htmlspecialchars($val)?></textarea>
                 <?php endif; ?>
+                <?php if ($fld['type'] === 'textarea' || ($fld['type'] === 'richtext' && $rtEditable)): ?>
+                  <p class="fc-cnt" aria-live="polite" data-for="<?=$fld['type'] === 'richtext' ? 'q:' . htmlspecialchars($id) : $fid?>"></p>
+                <?php endif; ?>
               </div>
             <?php endforeach; ?>
             <?php if ($curBlk !== null) $closeBlk($curBlk); ?>
@@ -3155,6 +3165,37 @@ document.getElementById('pf').addEventListener('submit',function(){
 });
 </script>
 <?php endif; ?>
+<script>
+// Wortzähler unter mehrzeiligen Feldern. Er zeigt neben der aktuellen Zahl
+// die des gespeicherten Stands: Das Layout wurde für diesen Text gebaut, der
+// Vergleich sagt der Kundin, ob ihr neuer Text deutlich länger wird.
+(function(){
+  var W1=<?=json_encode($t['fc_word'], JSON_UNESCAPED_UNICODE)?>, WN=<?=json_encode($t['fc_words'], JSON_UNESCAPED_UNICODE)?>, WB=<?=json_encode($t['fc_words_before'], JSON_UNESCAPED_UNICODE)?>;
+  // Wörter: Folgen aus Buchstaben oder Ziffern, auch mit Bindestrich, Apostroph
+  // oder weichem Trennzeichen (&shy; in langen Wörtern) dazwischen.
+  function words(s){ return (s.match(/[\p{L}\p{N}]+(?:['’\-\u00AD][\p{L}\p{N}]+)*/gu)||[]).length; }
+  function plain(html){
+    var d=document.createElement('div');
+    d.innerHTML=html.replace(/<\/(p|li|h[1-6]|blockquote)>|<br[^>]*>/gi,' ');
+    return d.textContent;
+  }
+  document.querySelectorAll('.fc-cnt').forEach(function(c){
+    var f=c.dataset.for, q=f.slice(0,2)==='q:'&&typeof qs!=='undefined'?qs[f.slice(2)]:null;
+    var el=q?document.getElementById('h_'+f.slice(2)):document.getElementById(f);
+    if(!el||(f.slice(0,2)==='q:'&&!q)) return;
+    // Nach abgelehntem Speichern steht der Entwurf im Feld, der gespeicherte Stand in data-saved.
+    var saved=el.hasAttribute('data-saved')?el.getAttribute('data-saved'):el.value;
+    var base=words(q?plain(saved):saved);
+    function upd(){
+      var n=words(q?q.getText():el.value);
+      var txt=(n===1?W1:WN).replace('%d',n);
+      c.textContent=n===base?txt:WB.replace('%s',txt).replace('%d',base);
+    }
+    if(q) q.on('text-change',upd); else el.addEventListener('input',upd);
+    upd();
+  });
+})();
+</script>
 
 <?php endif; ?>
 </body>
