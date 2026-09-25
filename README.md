@@ -489,6 +489,7 @@ PESI, 'richtext', 'Legal notice content') ?>
 The dashboard is built for the client — a therapist, a practice, an artist; rarely technical; opens it every few weeks. You use it twice, during setup.
 
 - **Pages** in the sidebar, one card per field, labels only — no IDs, no types
+- **Image cards** take a new upload by click or drag and drop, or *Choose an image you already uploaded* — the 60 newest files in the upload folder as thumbnails, one click to use one. No renaming or deleting; that stays out of the client's way
 - **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 Wörter · vorher 120`), so the client sees when a new text grows far beyond what the layout was built for
 - **Save** at the bottom, with a live count of unsaved changes and a warning before leaving the page or running a structural action
 - **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group
@@ -709,7 +710,7 @@ The syntax check needs `exec()` and a PHP CLI in the `PATH`. Ask your host to en
 
 ## Honest limitations
 
-- **No media library** — image upload only swaps page-bound `image` fields; decorative assets stay an FTP job
+- **No media library** — an image card can pick an image already in the upload folder, but there is no renaming, deleting, cropping or folder management; decorative assets stay an FTP job
 - **Replaced images are deleted only after the page and all of its backups no longer reference them.** pesi checks the files listed in `$PESI_PAGES`, their backups and their raw markup, but cannot see includes, partials or templates that are not registered pages. Register such files too, or keep their assets outside `PESI_UPLOAD_DIR`
 - **Toggles must not be nested** — a `pesi:toggle` inside another one disables switching for that page, and the dashboard says so
 - **Repeatable entries must not be nested** — a `pesi:item` inside another one disables add, duplicate, reorder and delete for that page (`S6`); the fields stay editable. A toggle may contain entries

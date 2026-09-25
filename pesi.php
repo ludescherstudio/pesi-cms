@@ -1954,6 +1954,35 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
     return ['post' => $post, 'errors' => [], 'old' => $old, 'new' => $new];
 }
 
+/**
+ * Bilder im Upload-Ordner zum Wiederverwenden, neueste zuerst, höchstens
+ * $limit. Nur Dateien direkt im Ordner mit erlaubter Endung und einem Pfad,
+ * den auch das image-Feld annimmt. Keine Mediathek: Auswahl, sonst nichts.
+ * Rückgabe: Liste von ['path' => '/uploads/…', 'name' => '…'].
+ */
+function _pesi_upload_list(string $basePath, int $limit = 60): array {
+    $dir = _pesi_upload_dir();
+    if ($dir === '') return [];
+    $abs = realpath($basePath . '/' . $dir);
+    if ($abs === false || !is_dir($abs)) return [];
+    $exts = array_intersect(
+        array_merge(...array_values(_pesi_upload_map())),
+        array_map('trim', explode(',', strtolower((string)PESI_UPLOAD_TYPES)))
+    );
+    $found = [];
+    foreach (scandir($abs) ?: [] as $f) {
+        if ($f === '' || $f[0] === '.') continue;
+        if (!in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $exts, true)) continue;
+        $p = $abs . '/' . $f;
+        if (is_link($p) || !is_file($p)) continue;
+        $path = '/' . $dir . '/' . $f;
+        if (_pesi_safe_asset_url($path) !== $path) continue;
+        $found[] = ['path' => $path, 'name' => $f, 'mtime' => (int)@filemtime($p)];
+    }
+    usort($found, fn($a, $b) => $b['mtime'] <=> $a['mtime'] ?: strcmp($a['name'], $b['name']));
+    return array_map(fn($x) => ['path' => $x['path'], 'name' => $x['name']], array_slice($found, 0, $limit));
+}
+
 function _pesi_discard_uploads(string $basePath, array $paths): void {
     $dir = _pesi_upload_dir();
     if ($dir === '') return;
@@ -2162,6 +2191,8 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Bild hierher ziehen oder klicken zum Auswählen',
         'img_current'       => 'Aktuelles Bild:',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
+        'img_lib'           => 'Bereits hochgeladenes Bild wählen',
+        'img_lib_pick'      => 'Dieses Bild verwenden: %s',
         'img_alt_label'     => 'Bildbeschreibung',
         'img_alt_help'      => 'Beschreibt das Bild für Menschen, die es nicht sehen können, und für Suchmaschinen. Ein kurzer Satz genügt.',
         'img_alt_check'     => 'Neues Bild gewählt: Passt die Beschreibung noch?',
@@ -2304,6 +2335,8 @@ function _pesi_strings(): array { return [
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
         'img_advanced'      => 'Advanced: path / external URL',
+        'img_lib'           => 'Choose an image you already uploaded',
+        'img_lib_pick'      => 'Use this image: %s',
         'img_alt_label'     => 'Image description',
         'img_alt_help'      => 'Describes the image for people who cannot see it, and for search engines. One short sentence is enough.',
         'img_alt_check'     => 'New image selected: does the description still fit?',
@@ -2582,6 +2615,13 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .img-prev{max-width:220px;max-height:160px;width:auto;border-radius:6px;border:1px solid var(--bd);object-fit:cover;background:var(--b-s)}
 .img-path{font-size:12px;opacity:.8;margin-top:6px}
 .img-hint{font-size:12px;color:var(--tx3)}
+.img-lib>summary{cursor:pointer;font-size:12px;color:var(--tx2);user-select:none}
+.img-lib>summary:hover{color:var(--b)}
+.img-lib-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px;margin-top:8px;max-height:260px;overflow:auto;padding:2px}
+.img-lib-b{padding:0;border:2px solid transparent;border-radius:6px;background:var(--bg3);cursor:pointer;aspect-ratio:1;overflow:hidden}
+.img-lib-b img{width:100%;height:100%;object-fit:cover;display:block}
+.img-lib-b:hover,.img-lib-b:focus-visible{border-color:var(--b)}
+.img-lib-b[aria-current]{border-color:var(--b);box-shadow:0 0 0 2px var(--b-g)}
 .img-alt{display:flex;flex-direction:column;gap:4px;margin-top:6px;padding-top:10px;border-top:1px solid var(--bd)}
 .img-alt-l{font-size:.85rem;font-weight:600;color:var(--tx);cursor:pointer}
 .img-alt-note{font-size:12px;font-weight:600;color:#8a5a00}
@@ -3014,6 +3054,8 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
               $curBlk = null;
               // Bildbeschreibungen stehen in der Karte ihres Bilds, nicht als eigene Karte.
               $altOf  = _pesi_alt_pairs($fields);
+              // Wiederverwendbare Bilder: einmal pro Seite, nur wenn es Bildfelder gibt.
+              $uploadList = array_filter($fields, fn($f) => $f['type'] === 'image') ? _pesi_upload_list($basePath) : [];
               $altFor = array_flip($altOf);
             ?>
             <?php foreach ($fields as $id => $fld):
@@ -3083,6 +3125,12 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                       <input type="file" id="<?=$fid?>" name="pesi_upload_<?=htmlspecialchars($id)?>" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" data-img-input class="sr">
                       <span><?=htmlspecialchars($t['img_drop'])?></span>
                     </label>
+                    <?php if ($uploadList): ?>
+                    <details class="img-lib" data-img-lib>
+                      <summary><?=htmlspecialchars($t['img_lib'])?></summary>
+                      <div class="img-lib-g" role="list"></div>
+                    </details>
+                    <?php endif; ?>
                     <details class="img-adv"<?=$isDraft || $bad ? ' open' : ''?>>
                       <summary><?=htmlspecialchars($t['img_advanced'])?></summary>
                       <input type="text" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi img-path" placeholder="/uploads/…">
@@ -3289,6 +3337,8 @@ function closeMobileNav(){
 })();
 
 // ── Bild-Felder: Vorschau + Drag&Drop ──
+window.PESI_UPLOADS=<?=json_encode(array_values($uploadList ?? []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
+var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
 (function(){
   document.querySelectorAll('[data-img]').forEach(function(w){
     var inp=w.querySelector('[data-img-input]'),
@@ -3298,6 +3348,36 @@ function closeMobileNav(){
         nm=w.querySelector('[data-img-name]');
     if(!inp) return;
     var altNote=w.querySelector('[data-img-alt-note]');
+    var path=w.querySelector('.img-path');
+    // Bereits hochgeladenes Bild wählen: setzt nur den Pfad. Die Kacheln
+    // entstehen erst beim ersten Aufklappen, damit eine Seite mit vielen
+    // Bildfeldern nicht jedes Vorschaubild mehrfach lädt.
+    var lib=w.querySelector('[data-img-lib]');
+    if(lib&&path) lib.addEventListener('toggle',function(){
+      var g=lib.querySelector('.img-lib-g');
+      if(!lib.open||g.childElementCount) return;
+      (window.PESI_UPLOADS||[]).forEach(function(u){
+        var b=document.createElement('button');
+        b.type='button'; b.className='img-lib-b'; b.setAttribute('role','listitem');
+        b.setAttribute('aria-label',PESI_PICK.replace('%s',u.name)); b.title=u.name;
+        var im=document.createElement('img'); im.src=u.path; im.alt=''; im.loading='lazy';
+        b.appendChild(im);
+        if(u.path===path.value) b.setAttribute('aria-current','true');
+        b.addEventListener('click',function(){
+          inp.value='';
+          path.value=u.path;
+          path.dispatchEvent(new Event('input',{bubbles:true}));
+          if(pv) pv.src=u.path;
+          if(nm) nm.textContent=u.name;
+          if(fig) fig.hidden=false;
+          if(altNote) altNote.hidden=false;
+          g.querySelectorAll('[aria-current]').forEach(function(x){x.removeAttribute('aria-current');});
+          b.setAttribute('aria-current','true');
+          lib.open=false;
+        });
+        g.appendChild(b);
+      });
+    });
     function show(file){
       if(!file) return;
       var url=URL.createObjectURL(file);
