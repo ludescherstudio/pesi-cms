@@ -1154,6 +1154,27 @@ ok('PESI_PHP_CLI wird verwendet', $out === json_encode([PHP_BINARY, true]), $out
 $out = $withCli('pesi-definitiv-kein-binary');
 ok('falsches PESI_PHP_CLI → null (T7), nicht false (S1)', $out === json_encode(['pesi-definitiv-kein-binary', null]), $out);
 
+// Erster Live-Host: PHP_BINDIR enthielt das richtige CLI, aber open_basedir
+// ließ is_file() scheitern, und pesi fiel auf ein älteres `php` im PATH zurück.
+$bindirCli = PHP_BINDIR . DIRECTORY_SEPARATOR . 'php' . (DIRECTORY_SEPARATOR === '\\' ? '.exe' : '');
+if (is_file($bindirCli)) {
+    $dir = $scratch . '/basedir';
+    @mkdir($dir);
+    copy($scratch . '/engine.php', $dir . '/engine.php');
+    copy($scratch . '/pesi-lib.php', $dir . '/pesi-lib.php');
+    copy($scratch . '/core.php', $dir . '/core.php');
+    file_put_contents($dir . '/run.php', "<?php\nini_set('open_basedir', __DIR__);\nrequire __DIR__ . '/engine.php';\n"
+        . "echo json_encode([@is_file(" . var_export($bindirCli, true) . "), _pesi_php_cli()]);\n");
+    $out = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($dir . '/run.php') . ' 2>&1');
+    foreach (glob($dir . '/*') as $f) @unlink($f);
+    @rmdir($dir);
+    $res = json_decode($out, true);
+    ok('open_basedir verbirgt PHP_BINDIR (Fixture)', ($res[0] ?? null) === false, $out);
+    ok('CLI aus PHP_BINDIR wird trotzdem gefunden', in_array($res[1] ?? '', [PHP_BINDIR . DIRECTORY_SEPARATOR . 'php' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION, $bindirCli], true), $out);
+} else {
+    ok('PHP_BINDIR ohne CLI — open_basedir-Fall hier nicht prüfbar', true);
+}
+
 foreach (['de', 'en'] as $l) {
     ok("$l/err_no_lint nennt keinen Syntaxfehler",
         stripos(_pesi_strings()[$l]['err_no_lint'], 'syntax') === false);

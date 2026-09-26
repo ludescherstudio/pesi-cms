@@ -268,7 +268,10 @@ Two from the first live install (2026-09-26):
   before 7.3 it cannot parse `PESI, 'richtext', …`, so every save on a page
   with richtext came back as S1 and blamed the client. `_pesi_commit()` lints
   the unchanged page after a failed candidate and answers T7 if that fails too.
-  `_pesi_php_cli()` prefers `PESI_PHP_CLI`, then `PHP_BINDIR`, then `php`. The
+  `_pesi_php_cli()` prefers `PESI_PHP_CLI`, then the first candidate whose
+  `-v` reports the website's major.minor, then `php`. Probe by running, never
+  with `is_file()`: on that host `open_basedir` hid `PHP_BINDIR`, `is_file()`
+  said no, and pesi fell back to PHP 7.2 although the 8.5 CLI sat there. The
   linter output goes to the error log (`_pesi_lint_log()`), because the
   candidate is deleted and the client message deliberately has no detail. The
   diagnostics probe lints the open page, not `pesi-core.php`, which has no
