@@ -784,8 +784,13 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
     // speichert pesi nur mit PESI_SYNTAX_CHECK = false. Ein abgelehnter Versuch
     // rotiert keinen der beiden Sicherungsstände.
     if (PESI_SYNTAX_CHECK) {
-        $lint = _pesi_lint($tmp);
+        $lint = _pesi_lint($tmp, $lintOut);
+        // Lehnt der Linter auch die unveränderte Seite ab, die der Webserver
+        // gerade ausführt, sagt sein Urteil nichts über die Änderung — meist
+        // ist das CLI-PHP ein anderes als das der Website. Dann T7, nicht S1.
+        if ($lint === false && _pesi_lint($file) !== true) $lint = null;
         if ($lint !== true) {
+            _pesi_lint_log($file, $tmp, $lint, $lintOut);
             $finish($lock, $tmp);
             return ['msg' => $t[$lint === false ? 'err_php_rollback' : 'err_no_lint'], 'type' => 'error'];
         }
@@ -830,17 +835,71 @@ function _pesi_commit(string $file, string $mod, ?string $expectedHash = null): 
  * Nur eine echte Lint-Diagnose zählt als Fehler — ein Exitcode != 0 kann auch
  * ein fehlendes CLI-Binary sein (127, unter Windows 1).
  */
-function _pesi_lint(string $file): ?bool {
-    if (!function_exists('exec')) return null;
-    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
-    if (in_array('exec', $disabled, true)) return null;
+function _pesi_lint(string $file, ?string &$output = null): ?bool {
+    $output = '';
+    if (!_pesi_can_exec()) return null;
 
     $out = [];
     $ex  = 0;
-    @exec('php -l ' . escapeshellarg($file) . ' 2>&1', $out, $ex);
+    @exec(escapeshellarg(_pesi_php_cli()) . ' -l ' . escapeshellarg($file) . ' 2>&1', $out, $ex);
+    $output = trim(implode("\n", $out));
     if ($ex === 0) return true;
-    if (preg_match('/(parse|fatal) error|errors parsing/i', implode("\n", $out))) return false;
+    if (preg_match('/(parse|fatal) error|errors parsing/i', $output)) return false;
     return null;
+}
+
+function _pesi_can_exec(): bool {
+    if (!function_exists('exec')) return false;
+    $disabled = array_map('trim', explode(',', (string)ini_get('disable_functions')));
+    return !in_array('exec', $disabled, true);
+}
+
+/**
+ * PHP-CLI für den Syntax-Check. `php` im PATH ist auf Shared Hosting oft eine
+ * andere, ältere Version als die der Website. Vorrang hat PESI_PHP_CLI, dann
+ * ein CLI-Binary neben dem PHP der Website (PHP_BINDIR), zuletzt `php`.
+ */
+function _pesi_php_cli(): string {
+    static $bin = null;
+    if ($bin !== null) return $bin;
+    if (is_string(PESI_PHP_CLI) && trim(PESI_PHP_CLI) !== '') return $bin = trim(PESI_PHP_CLI);
+    $exe = DIRECTORY_SEPARATOR === '\\' ? '.exe' : '';
+    foreach (['php' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION, 'php'] as $name) {
+        $p = PHP_BINDIR . DIRECTORY_SEPARATOR . $name . $exe;
+        if (@is_file($p) && @is_executable($p)) return $bin = $p;
+    }
+    return $bin = 'php';
+}
+
+// Version des Linter-Binarys, z. B. „7.2.34 (cli)“; '' wenn unbekannt.
+function _pesi_php_cli_version(): string {
+    if (!_pesi_can_exec()) return '';
+    $out = [];
+    @exec(escapeshellarg(_pesi_php_cli()) . ' -v 2>&1', $out);
+    return preg_match('/^PHP\s+(\S+(?:\s+\([^)]*\))?)/m', implode("\n", $out), $m) ? $m[1] : '';
+}
+
+// Erste aussagekräftige Zeile der Linter-Ausgabe, mit Dateinamen statt Pfad.
+// php-cgi schreibt zuerst Header-Zeilen, deshalb nicht einfach Zeile 1.
+function _pesi_lint_summary(string $output, string $path, string $name): string {
+    $output = str_replace($path, $name, $output);
+    foreach (explode("\n", $output) as $line) {
+        if (preg_match('/error/i', $line)) return trim($line);
+    }
+    return trim(strtok($output, "\n") ?: '');
+}
+
+/**
+ * Warum ein Speichern an der Syntaxprüfung gescheitert ist, gehört ins
+ * PHP-Fehlerprotokoll: der Kandidat wird gleich gelöscht, und die Meldung an
+ * die Kundin nennt bewusst keine Details.
+ */
+function _pesi_lint_log(string $file, string $tmp, ?bool $lint, string $output): void {
+    $name = basename($file);
+    error_log(sprintf('pesi %s: %s not saved. Syntax check %s (%s), website PHP %s: %s',
+        $lint === false ? 'S1' : 'T7', $name, _pesi_php_cli(),
+        _pesi_php_cli_version() ?: 'version unknown', PHP_VERSION,
+        _pesi_can_exec() ? (_pesi_lint_summary($output, $tmp, $name) ?: 'no output') : 'exec() is not available'));
 }
 
 /**
@@ -2145,6 +2204,7 @@ function _pesi_strings(): array { return [
         'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
         'warn_default_pw'   => 'Es ist kein eigenes Passwort gesetzt (leer oder noch das Auslieferungs-Passwort). In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Solange das so ist, lehnt pesi jedes Speichern ab. exec() und PHP-CLI verfügbar machen oder PESI_SYNTAX_CHECK bewusst auf false setzen. (Code T7)',
+        'warn_lint_mismatch' => 'Der Syntax-Check lehnt die unveränderte Seite %s ab. Meist ist das PHP der Kommandozeile ein anderes als das der Website (Syntax-Check: %s, Website: PHP %s); seltener ist die Seite selbst fehlerhaft, dann zeigt auch die Website einen Fehler. Solange das so ist, lehnt pesi jedes Speichern ab. PESI_PHP_CLI in pesi-core.php auf ein PHP-CLI in der Version der Website setzen (Pfad beim Hosting erfragen) oder PESI_SYNTAX_CHECK bewusst auf false setzen. Meldung des Linters: %s (Code T7)',
         'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Meist steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache —, oder der Feldtyp ist unbekannt (erlaubt: text, textarea, richtext, image, url, email, tel). (Code T13)',
         'warn_dup_ids'      => 'In %s kommen diese Feld-IDs mehrfach vor: %s. Solange das so ist, lässt sich die Seite nicht speichern. Jede ID darf pro Seite nur einmal stehen. (Code S7)',
         'warn_no_tokenizer' => 'Die PHP-Erweiterung tokenizer fehlt. Ohne sie findet pesi keine Felder, das Dashboard bleibt leer. (Code T16)',
@@ -2289,6 +2349,7 @@ function _pesi_strings(): array { return [
         'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
         'warn_default_pw'   => 'No password of your own is set (empty, or still the shipped default). Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Until that is fixed, pesi refuses every save. Make exec() and the PHP CLI available, or set PESI_SYNTAX_CHECK to false knowingly. (Code T7)',
+        'warn_lint_mismatch' => 'The syntax check rejects the unchanged page %s. Usually the command-line PHP differs from the website\'s PHP (syntax check: %s, website: PHP %s); less often the page itself is broken, and then the website shows an error too. Until that is fixed, pesi refuses every save. Set PESI_PHP_CLI in pesi-core.php to a PHP CLI of the website\'s version (ask the host for the path), or set PESI_SYNTAX_CHECK to false knowingly. Linter message: %s (Code T7)',
         'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Usually the value is in double quotes instead of single ones — pesi() expects single quotes — or the field type is unknown (allowed: text, textarea, richtext, image, url, email, tel). (Code T13)',
         'warn_dup_ids'      => 'In %s these field IDs occur more than once: %s. Until that is fixed the page cannot be saved. Each ID may appear only once per page. (Code S7)',
         'warn_no_tokenizer' => 'The PHP extension tokenizer is missing. Without it pesi finds no fields and the dashboard stays empty. (Code T16)',
@@ -2885,14 +2946,24 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
   <div class="M">
     <?php
       // ── Diagnose: Einrichtungsprobleme, Adressat ist die Betreuung ──
-      // Der Linter wird gegen eine garantiert gültige Datei geprobt; auf
-      // exec() allein zu schauen übersähe ein fehlendes CLI im PATH.
+      // Der Linter wird gegen eine Datei geprobt, die der Webserver ausführt:
+      // die offene Seite, sonst pesi-core.php. Auf exec() allein zu schauen
+      // übersähe ein fehlendes CLI; pesi-core.php allein übersähe ein altes
+      // CLI-PHP, das an den Richtext-Heredocs der Seiten scheitert.
       $diag = [];
       if ($defaultPassword) {
           $diag[] = $t['warn_default_pw'];
       }
-      if (PESI_SYNTAX_CHECK && _pesi_lint($corePath) === null) {
-          $diag[] = $t['warn_no_exec'];
+      if (PESI_SYNTAX_CHECK) {
+          $probe = ($page && is_file($basePath . '/' . $page)) ? $basePath . '/' . $page : $corePath;
+          $probeLint = _pesi_lint($probe, $probeOut);
+          if ($probeLint === null) {
+              $diag[] = $t['warn_no_exec'];
+          } elseif ($probeLint === false) {
+              $diag[] = sprintf($t['warn_lint_mismatch'], basename($probe),
+                  trim(_pesi_php_cli() . ' ' . _pesi_php_cli_version()), PHP_VERSION,
+                  _pesi_lint_summary($probeOut, $probe, basename($probe)));
+          }
       }
       $cfgMax = defined('PESI_UPLOAD_MAX_BYTES') ? (int)PESI_UPLOAD_MAX_BYTES : 5 * 1024 * 1024;
       if ($anyImage && _pesi_upload_limit() < $cfgMax) {

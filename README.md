@@ -413,7 +413,7 @@ PESI, 'richtext', 'Label') ?>
 
 ### Repeatable blocks — `pesi:item`
 
-For any list the client should be able to grow or shrink: team members, services, testimonials, FAQ entries. Wrap **one** entry in two HTML comments; every field ID inside starts with `GROUP_N_`:
+For any list the client should be able to grow or shrink: team members, services, testimonials, FAQ entries. Wrap each entry in two HTML comments; every field ID inside starts with `GROUP_N_`. When you convert an existing list, keep every entry — `team:1`, `team:2`, `team:3`, each with its own prefix. A list that is still empty starts with one entry:
 
 ```php
 <section class="team">
@@ -457,6 +457,30 @@ Group names are shown with underscores turned into spaces and the first letter c
 ```
 
 Edit the field list in `pesi-content.php` to match the site, then reuse the same key everywhere.
+
+### Text in PHP arrays and loops
+
+pesi sees only literal `pesi()` calls. Text kept in a PHP array and printed by a loop — a typical FAQ, price list or testimonial slider — does not show up in the dashboard at all. Such values are content, even though they live in PHP. A list the client should grow or shrink moves out of the array into the markup, one `pesi:item` entry per existing element; `pesi-agent.md` has a complete FAQ example. Two things change on the way:
+
+- `pesi()` already escapes `text` and `textarea`. Remove the loop's own `htmlspecialchars()` around it, or `&` reaches the page as `&amp;amp;`.
+- Where the same values also feed structured data (FAQPage JSON-LD), `<meta>` or `<title>`, pass them through `pesi_text()` (below).
+
+### Plain text for JSON-LD and meta — `pesi_text()`
+
+`pesi()` returns HTML: escaped text, or for richtext a `<div class="pesi-richtext">` wrapper plus, on the first richtext of the page, a `<style>` block. `pesi_text()` turns such a value back into plain text — style, wrapper and tags removed, block boundaries as spaces, entities decoded:
+
+```php
+<?php $faq_ld[] = [$q, $a]; /* $q, $a: return values of pesi() */ ?>
+…
+<script type="application/ld+json">
+<?= json_encode(['@context' => 'https://schema.org', '@type' => 'FAQPage',
+    'mainEntity' => array_map(fn ($f) => ['@type' => 'Question', 'name' => pesi_text($f[0]),
+        'acceptedAnswer' => ['@type' => 'Answer', 'text' => pesi_text($f[1])]], $faq_ld)],
+    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>
+</script>
+```
+
+The result is raw text. Keep `JSON_HEX_TAG` in a `<script>` — without it a client's `</script>` would end the block — and escape it again with `htmlspecialchars()` inside an HTML attribute.
 
 ### What to replace — and what not
 
@@ -507,7 +531,7 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 
 | Code | What happened | What to do |
 |---|---|---|
-| `S1` | A candidate version did not parse as valid PHP and was rejected before publishing | Check the field content; the live page itself is intact |
+| `S1` | A candidate version did not parse as valid PHP and was rejected before publishing, while the unchanged page still passed the same check | Check the field content; the live page itself is intact. The linter's message with the line number is in the PHP error log (`pesi S1: …`) |
 | `S2` | A field value contained a pesi structure marker (`pesi:item`, `pesi:toggle`, `if (false):`) and was rejected before writing | Remove that text from the field, or escape it in the template |
 | `S3` | A repeatable entry referenced by the dashboard was not found in the source | Usually a stale browser tab — reload. If it persists, the `pesi:item` markers were edited by hand |
 | `S4` | A visibility section was not found in the source | Same as `S3`, for `pesi:toggle` markers |
@@ -520,7 +544,7 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `T4` | A page listed in `$PESI_PAGES` does not exist | Fix the path in `pesi-core.php` or restore the file |
 | `T5` | The upload folder is not writable | `chmod` the folder named in the message |
 | `T6` | `PESI_UPLOAD_DIR` is invalid (empty, absolute, or contains `..`) | Set a plain relative folder name |
-| `T7` | `php -l` cannot run, so pesi cannot verify PHP syntax. While `PESI_SYNTAX_CHECK` is on, every save is refused with this code; nothing unchecked is published | Enable `exec()` or make the PHP CLI reachable; otherwise set `PESI_SYNTAX_CHECK` to false knowingly |
+| `T7` | pesi cannot verify PHP syntax: `php -l` cannot run, or it rejects the unchanged page the website runs — usually because the command-line PHP is an older version than the website's. While `PESI_SYNTAX_CHECK` is on, every save is refused with this code; nothing unchecked is published | Enable `exec()`; for a version mismatch set `PESI_PHP_CLI` to a CLI binary of the website's version; otherwise set `PESI_SYNTAX_CHECK` to false knowingly. The diagnostics panel names both versions and the linter's message, the PHP error log has a `pesi T7: …` line per refused save |
 | `T8` | No password of your own is set — `PESI_PASSWORD` is empty, missing or still the shipped default. Sign-in stays locked | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
@@ -596,6 +620,7 @@ define('LANG',                'de');               // 'de' or 'en'
 define('PESI_BACKUP_ENABLED', true);               // Keep earlier states of every page
 define('PESI_BACKUP_COUNT',   5);                  // How many, 1–20 — listed under "Earlier versions"
 define('PESI_SYNTAX_CHECK',   true);               // php -l on the candidate before publishing
+define('PESI_PHP_CLI',        '');                 // PHP CLI for that check; empty = automatic (see Troubleshooting)
 define('PESI_SESSION_IDLE',   30 * 60);            // Sign out after inactivity
 define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime, independent of the idle limit
 define('PESI_GLOBALS_FILE',   'pesi-content.php'); // The shared-details file
@@ -704,7 +729,11 @@ Your site's CSS reset removes default list and link styles. pesi wraps richtext 
 
 ### The diagnostics line says `php -l` cannot run
 
-The syntax check needs `exec()` and a PHP CLI in the `PATH`. Ask your host to enable both, or set `PESI_SYNTAX_CHECK` to `false` knowingly — the atomic write and the backups still protect the live page, but invalid PHP would then reach it.
+The syntax check needs `exec()` and a PHP CLI. pesi uses `PESI_PHP_CLI` when it is set, otherwise a binary in the folder of the PHP that runs the website (`PHP_BINDIR`, as `php8.x` or `php`), and finally `php` in the `PATH`. Ask your host to enable both, or set `PESI_SYNTAX_CHECK` to `false` knowingly — the atomic write and the backups still protect the live page, but invalid PHP would then reach it.
+
+### Every save fails with `S1` or `T7`, although the content is fine
+
+On shared hosting `php` on the command line is often an older version than the website's PHP. PHP before 7.3 cannot parse the richtext form `PESI, 'richtext', …`, so every page with a richtext field fails its check. pesi checks the unchanged page as well before it blames the change: if that fails too, the save is refused with `T7`, and the diagnostics panel shows the page, both PHP versions and the linter's message. Ask your host for the path of a CLI binary matching the website's version (often something like `/usr/local/php82/bin/php` or `/opt/plesk/php/8.2/bin/php`) and set it as `PESI_PHP_CLI` in `pesi-core.php`. The diagnostics panel confirms the fix: the `T7` line disappears.
 
 ---
 

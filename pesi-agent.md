@@ -270,6 +270,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 | `PESI_PASSWORD_CHANGE` | `true` | the integrator explicitly wants to keep sole control of the password. The client's own password lives in `.pesi-password`; deleting it resets to `pesi-core.php` |
 | `PESI_BACKUP_COUNT` | 5 | the client edits often and wants to go back further. 1–20 states per page |
 | `PESI_SYNTAX_CHECK` | `true` | never in production. Without it the temporary candidate is not syntax-checked before publishing. It needs `exec()` and a PHP CLI; if they are missing, every save is refused with `T7` — check the diagnostics panel after the first login |
+| `PESI_PHP_CLI` | `''` (automatic) | the diagnostics panel reports `T7` with two different PHP versions: the host's `php` on the command line is older than the website's. Set the path of a CLI binary matching the website's version (ask the host; e.g. `/usr/local/php82/bin/php`). Never switch `PESI_SYNTAX_CHECK` off to get around it |
 | `PESI_SESSION_IDLE` | 30 minutes | only if the client explicitly needs a different inactivity timeout |
 | `PESI_SESSION_MAX` | 12 hours | only if the client explicitly needs a shorter absolute session lifetime |
 
@@ -303,6 +304,24 @@ Open each PHP file. Identify all visible text that a client would typically want
 - Footer text content
 - Swappable photos — team/person portraits, gallery images, hero/section background images (wrap the path with type `image`)
 
+**Text that lives in PHP, not in the markup.** Pages often keep their content in
+PHP data and print it with a loop: a `$faq_groups` array, a price list, a
+testimonial slider, cards built in a `foreach`. pesi sees none of it — only
+literal `pesi()` calls become fields — so the dashboard shows the intro and the
+outro and nothing of the FAQ in between. Search every page for:
+
+- arrays with text values (`'title' => '…'`, `['q' => '…', 'a' => '…']`)
+- `foreach`/`for` loops that print markup
+- `echo`, `print`, `printf` with literal text
+- `json_encode` and `<script type="application/ld+json">` (FAQPage, LocalBusiness) — structured data built from the same array
+- `include`/`require` of partials that contain text
+
+The array *values* are content; the loop that prints them is logic. Convert the
+content and keep the rendered markup identical — see
+[Example — content in a PHP array](#example--content-in-a-php-array-faq-with-json-ld).
+Found text in a partial outside the root? Report it in Step 11 instead of
+skipping it silently.
+
 **Special rule — pure-text pages (Impressum, Datenschutz and similar):**
 
 These pages consist entirely of flowing text with no interactive elements. Do not wrap every heading and paragraph individually. Instead, use a single `richtext` field that covers the entire content below the `<h1>`. The `<h1>` itself stays static in the HTML.
@@ -321,7 +340,7 @@ One field per pure-text page. The client edits the entire body in one Quill edit
 **DO NOT REPLACE — leave static:**
 - Navigation links and menu structure
 - HTML attributes: `class`, `id`, `href`, `style` (and `src` — **except** when intentionally making a photo swappable via type `image`, see below); `alt` only as the `_alt` description field of a content image
-- PHP logic, loops, conditions, variables
+- PHP logic: conditions, loop mechanics, computed values. **Not** the literal text a loop prints or an array holds — that is content (see above)
 - CSS and JavaScript (inline or external)
 - `<meta>` tags (title, description) — unless explicitly requested
 - Decorative/structural images (logos, icons, CSS background images) — only wrap content photos a client would realistically swap
@@ -386,7 +405,7 @@ Both markers are plain HTML comments and are invisible in the rendered page.
 Use for any list the client should be able to grow or shrink: team members,
 services, testimonials, gallery entries, opening-hour rows, FAQ entries.
 
-Wrap **one** entry. pesi does the rest:
+Wrap each entry. pesi does the rest:
 
 ```php
 <section class="team">
@@ -409,8 +428,12 @@ Three rules — break any one of them and the feature fails silently:
    this prefix (`team_1_` → `team_2_`). A field without the prefix gets cloned
    with an *identical* ID, and the parser then keeps only the first copy — the
    duplicated entry appears half-empty and uneditable.
-3. **Write exactly one entry into the source, not three.** Entry `:1` is the
-   template that "+ Eintrag hinzufügen" clones. The client creates the rest.
+3. **Convert every existing entry, numbered `:1`, `:2`, `:3` …** Each gets
+   its own prefix (`team_1_`, `team_2_`, `team_3_`) and keeps its current text
+   as the default. Never drop entries on the assumption that the client will
+   type them in again — their text exists nowhere else. Only a list that is
+   empty today starts with a single entry. Entry `:1` is the template that
+   "+ Eintrag hinzufügen" clones.
 
 The dashboard then renders each entry as its own card with ↑ ↓ · Duplizieren ·
 Löschen, plus one "+ Eintrag hinzufügen" button under the group. pesi refuses to
@@ -629,7 +652,7 @@ Then run through this checklist. Report any failures:
 - All `richtext` fields use heredoc syntax
 - All heredoc openers are `<<<'PESI'` **with quotes**, closing `PESI` at column 0
 - No `richtext` field contains layout tags (`div`, `span`, `img`, `table`, `h1`, `section`) — they are stripped on render
-- Repeatable lists (team, services, testimonials, FAQ) are wrapped in `pesi:item` blocks, with exactly one entry in the source
+- Repeatable lists (team, services, testimonials, FAQ) are wrapped in `pesi:item` blocks, one entry per item the site showed before — none dropped
 - Every field ID inside a block carries the `GROUP_N_` prefix
 - Seasonal/temporary sections are wrapped in `pesi:toggle` and shipped **visible**
 - `BRAND_NAME` is set in `pesi-core.php`
@@ -643,7 +666,24 @@ Then run through this checklist. Report any failures:
 - All `image` fields wrap only the path, with a valid existing image path as `$default`
 - Richtext is sanitized by pesi; do not use it as a place for custom scripts or embeds
 - `robots.txt` contains `Disallow: /pesi` and `Disallow: /cms`
-- No client-editable text was missed
+- No `pesi()` value is escaped a second time (`htmlspecialchars(pesi(…))`), and none goes into JSON-LD, `<meta>`, `<title>` or a `<script>` without `pesi_text()`
+- Every `json_encode` inside a `<script>` uses `JSON_HEX_TAG`
+
+**Then compare what each page shows with what the dashboard offers.** Checking
+the `pesi()` calls you wrote cannot find the text you never marked up — that is
+exactly how a whole FAQ goes missing. For every registered page:
+
+1. Render it as a visitor sees it (the local server or the live URL) and list
+   its visible text: headings, paragraphs, list items, `<summary>`, table
+   cells, button labels, image descriptions.
+2. For each piece, name the field it comes from. A piece without a field must be
+   on the *DO NOT REPLACE* list; otherwise it was missed — fix it.
+3. Count repeated items on the rendered page (questions, team members, prices)
+   and compare with the `pesi:item` entries in the source. The numbers must match.
+4. If the page carries structured data, change one question and one answer in
+   the source defaults as a test, render again and check that both the visible
+   text and the JSON-LD changed — with no `pesi-richtext`, no CSS, no HTML tags
+   and no `&amp;`/`&quot;` in the JSON values. Put the defaults back afterwards.
 
 ### Step 11 — Report
 
@@ -667,6 +707,7 @@ Dashboard password: <the plaintext password — stored hashed in pesi-core.php>
 Next steps:
 - Test dashboard: domain.at/pesi
 - Write permissions verified: yes / no / could not check
+- Visible text without a field (deliberately static): …
 - Known issues found in the existing site: …
 ```
 
@@ -752,10 +793,125 @@ not turn each copy into its own fields. Wrap **one** copy in a block:
 </section>
 ```
 
-The original site may show three team members — you still write **one** entry.
-The client adds the other two in the dashboard and can reorder or delete them
-later without calling you. The holiday notice ships **visible**; the client hides
-it in August and shows it again next year, with the text preserved in between.
+Shown here with one entry. If the original site shows three team members, write
+all three — `team:1`, `team:2`, `team:3`, each with its current text. From then
+on the client adds, reorders and deletes entries without calling you. The
+holiday notice ships **visible**; the client hides it in August and shows it
+again next year, with the text preserved in between.
 
 This is the difference between a site the client can actually maintain and one
 where they call you for every change.
+
+### Example — content in a PHP array (FAQ with JSON-LD)
+
+A common FAQ page keeps its questions in an array and prints them twice: as
+visible `<details>` and as FAQPage structured data for search engines.
+
+**Before:**
+
+```php
+<?php
+$faq_groups = [
+    'Ablauf' => [
+        ['q' => 'Wie läuft das Erstgespräch ab?', 'a' => 'Wir lernen uns in Ruhe kennen und klären Ihr Anliegen.'],
+        ['q' => 'Wie lange dauert eine Sitzung?', 'a' => 'Eine Sitzung dauert 50 Minuten.'],
+    ],
+    'Kosten' => [
+        ['q' => 'Was kostet eine Sitzung?', 'a' => 'Eine Sitzung kostet 90 Euro. Ein Teil wird von der Kasse rückerstattet.'],
+    ],
+];
+?>
+<section class="faq">
+<?php foreach ($faq_groups as $title => $items): ?>
+  <h2><?= htmlspecialchars($title) ?></h2>
+  <?php foreach ($items as $item): ?>
+  <details class="faq-item">
+    <summary><?= htmlspecialchars($item['q']) ?></summary>
+    <div class="faq-answer"><p><?= htmlspecialchars($item['a']) ?></p></div>
+  </details>
+  <?php endforeach; ?>
+<?php endforeach; ?>
+</section>
+<script type="application/ld+json">
+<?= json_encode([/* … built from $faq_groups … */]) ?>
+</script>
+```
+
+**After:**
+
+```php
+<?php $faq_ld = []; ?>
+<section class="faq">
+  <h2><?= pesi('faq_ablauf_titel', 'Ablauf', 'text', 'FAQ: Überschrift der Kategorie „Ablauf“') ?></h2>
+<!-- pesi:item faq_ablauf:1 -->
+  <details class="faq-item">
+    <summary><?= $q = pesi('faq_ablauf_1_frage', 'Wie läuft das Erstgespräch ab?', 'text', 'Frage') ?></summary>
+    <div class="faq-answer"><?= $a = pesi('faq_ablauf_1_antwort', <<<'PESI'
+<p>Wir lernen uns in Ruhe kennen und klären Ihr Anliegen.</p>
+PESI, 'richtext', 'Antwort') ?></div>
+  </details>
+  <?php $faq_ld[] = [$q, $a]; ?>
+<!-- /pesi:item -->
+<!-- pesi:item faq_ablauf:2 -->
+  <details class="faq-item">
+    <summary><?= $q = pesi('faq_ablauf_2_frage', 'Wie lange dauert eine Sitzung?', 'text', 'Frage') ?></summary>
+    <div class="faq-answer"><?= $a = pesi('faq_ablauf_2_antwort', <<<'PESI'
+<p>Eine Sitzung dauert 50 Minuten.</p>
+PESI, 'richtext', 'Antwort') ?></div>
+  </details>
+  <?php $faq_ld[] = [$q, $a]; ?>
+<!-- /pesi:item -->
+
+  <h2><?= pesi('faq_kosten_titel', 'Kosten', 'text', 'FAQ: Überschrift der Kategorie „Kosten“') ?></h2>
+<!-- pesi:item faq_kosten:1 -->
+  <details class="faq-item">
+    <summary><?= $q = pesi('faq_kosten_1_frage', 'Was kostet eine Sitzung?', 'text', 'Frage') ?></summary>
+    <div class="faq-answer"><?= $a = pesi('faq_kosten_1_antwort', <<<'PESI'
+<p>Eine Sitzung kostet 90 Euro. Ein Teil wird von der Kasse rückerstattet.</p>
+PESI, 'richtext', 'Antwort') ?></div>
+  </details>
+  <?php $faq_ld[] = [$q, $a]; ?>
+<!-- /pesi:item -->
+</section>
+
+<script type="application/ld+json">
+<?= json_encode([
+    '@context'   => 'https://schema.org',
+    '@type'      => 'FAQPage',
+    'mainEntity' => array_map(fn ($f) => [
+        '@type'          => 'Question',
+        'name'           => pesi_text($f[0]),
+        'acceptedAnswer' => ['@type' => 'Answer', 'text' => pesi_text($f[1])],
+    ], $faq_ld),
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>
+</script>
+```
+
+Key decisions:
+- **Every existing question is converted**, in its original order, with its
+  text unchanged. Three questions before, three `pesi:item` entries after.
+- **One group per category** (`faq_ablauf`, `faq_kosten`), because entries must
+  not be nested (`S6`). The category headings are plain fields outside the
+  entries: the client renames them but cannot add categories — a new category
+  is structure, and structure is developer work. To let the client hide a whole
+  category, wrap its heading and its entries in one `pesi:toggle`.
+- **Answers are `richtext`** so the client can add a paragraph, a list or a
+  link. The `<p>` the loop printed around each answer moves into the value.
+- **The loop's `htmlspecialchars()` is gone.** `pesi()` escapes `text` itself;
+  escaping again shows `&amp;` on the page.
+- **Visible FAQ and JSON-LD read the same fields.** Each entry appends its
+  question and answer to `$faq_ld`, so a duplicated, deleted or reordered entry
+  changes both, and entries in a hidden toggle drop out of both. `$faq_ld = []`
+  sits outside every entry.
+- **`pesi_text()` for structured data.** A `pesi()` value is HTML: escaped
+  text, or a richtext wrapper plus a one-time `<style>` block. `pesi_text()`
+  returns plain text; `JSON_HEX_TAG` keeps a `</script>` typed by the client
+  from ending the script.
+- **The JSON-LD comes after the FAQ**, because it reads what the entries
+  collected. If it sat in `<head>` before, move it — search engines read JSON-LD
+  in the body just as well.
+- A fixed list the client never grows (three opening-hour rows, say) may keep
+  its array, with `pesi()` calls as the values:
+  `['tag' => pesi('zeiten_1_tag', 'Montag', 'text', 'Tag'), …]`. Remove the
+  loop's own escaping there too. Entry buttons need markup, so a list the client
+  should be able to grow always moves into `pesi:item` entries as above.
