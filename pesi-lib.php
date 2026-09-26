@@ -19,6 +19,7 @@ foreach ([
     'PESI_BACKUP_COUNT'     => 5,
     'PESI_PASSWORD_CHANGE'  => true,
     'PESI_SYNTAX_CHECK'     => true,
+    'PESI_PHP_CLI'          => '',
     'PESI_SESSION_IDLE'     => 30 * 60,
     'PESI_SESSION_MAX'      => 12 * 60 * 60,
     'PESI_GLOBALS_FILE'     => 'pesi-content.php',
@@ -276,6 +277,22 @@ if (!function_exists('pesi_global')) {
         return isset($PESI_GLOBALS[$id]) && is_string($PESI_GLOBALS[$id])
             ? $PESI_GLOBALS[$id]
             : '';
+    }
+}
+
+if (!function_exists('pesi_text')) {
+    /**
+     * Klartext aus einem pesi()-Wert, für Stellen ohne HTML: JSON-LD, meta,
+     * title. Entfernt den einmal eingefügten Richtext-Stil, den Wrapper und
+     * alle Tags und hebt die HTML-Maskierung auf. Das Ergebnis ist roh: in JSON
+     * mit json_encode(…, JSON_HEX_TAG), in HTML wieder mit htmlspecialchars().
+     */
+    function pesi_text(string $html): string {
+        $s = (string)preg_replace('#<style\b[^>]*>.*?</style>#is', '', $html);
+        // Blockgrenzen werden zu Leerzeichen, sonst klebt „…Satz.</p><p>Nächster“.
+        $s = (string)preg_replace('#<(?:br|/?(?:p|div|li|ul|ol|h[1-6]|blockquote))\b[^>]*>#i', ' ', $s);
+        $s = html_entity_decode(strip_tags($s), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        return trim((string)preg_replace('/[\s\x{00A0}]+/u', ' ', $s));
     }
 }
 
