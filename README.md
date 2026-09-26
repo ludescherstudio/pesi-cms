@@ -729,7 +729,7 @@ Your site's CSS reset removes default list and link styles. pesi wraps richtext 
 
 ### The diagnostics line says `php -l` cannot run
 
-The syntax check needs `exec()` and a PHP CLI. pesi uses `PESI_PHP_CLI` when it is set, otherwise a binary in the folder of the PHP that runs the website (`PHP_BINDIR`, as `php8.x` or `php`), and finally `php` in the `PATH`. Ask your host to enable both, or set `PESI_SYNTAX_CHECK` to `false` knowingly — the atomic write and the backups still protect the live page, but invalid PHP would then reach it.
+The syntax check needs `exec()` and a PHP CLI. pesi uses `PESI_PHP_CLI` when it is set. Otherwise it runs the likely candidates — `php8.x` and `php` in the folder of the PHP that runs the website (`PHP_BINDIR`), then `php8.x` and `php8x` in the `PATH` — and takes the first one that reports the website's version, even when `open_basedir` hides that folder. Only if none does, it falls back to `php` in the `PATH`. Ask your host to enable both, or set `PESI_SYNTAX_CHECK` to `false` knowingly — the atomic write and the backups still protect the live page, but invalid PHP would then reach it.
 
 ### Every save fails with `S1` or `T7`, although the content is fine
 

@@ -857,25 +857,36 @@ function _pesi_can_exec(): bool {
 /**
  * PHP-CLI für den Syntax-Check. `php` im PATH ist auf Shared Hosting oft eine
  * andere, ältere Version als die der Website. Vorrang hat PESI_PHP_CLI, dann
- * ein CLI-Binary neben dem PHP der Website (PHP_BINDIR), zuletzt `php`.
+ * das erste Binary in der Version der Website: neben ihrem PHP (PHP_BINDIR),
+ * dann als php8.x/php8x im PATH. Zuletzt `php`.
+ * Geprüft wird durch Aufruf, nicht mit is_file(): open_basedir verbirgt
+ * PHP_BINDIR meist, ausführen lässt es sich trotzdem.
  */
 function _pesi_php_cli(): string {
     static $bin = null;
     if ($bin !== null) return $bin;
     if (is_string(PESI_PHP_CLI) && trim(PESI_PHP_CLI) !== '') return $bin = trim(PESI_PHP_CLI);
+    if (!_pesi_can_exec()) return $bin = 'php';
+    $mm  = PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
     $exe = DIRECTORY_SEPARATOR === '\\' ? '.exe' : '';
-    foreach (['php' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION, 'php'] as $name) {
-        $p = PHP_BINDIR . DIRECTORY_SEPARATOR . $name . $exe;
-        if (@is_file($p) && @is_executable($p)) return $bin = $p;
+    $candidates = [
+        PHP_BINDIR . DIRECTORY_SEPARATOR . 'php' . $mm . $exe,
+        PHP_BINDIR . DIRECTORY_SEPARATOR . 'php' . $exe,
+        'php' . $mm,
+        'php' . PHP_MAJOR_VERSION . PHP_MINOR_VERSION,
+    ];
+    foreach ($candidates as $c) {
+        if (strpos(_pesi_php_cli_version($c), $mm . '.') === 0) return $bin = $c;
     }
     return $bin = 'php';
 }
 
-// Version des Linter-Binarys, z. B. „7.2.34 (cli)“; '' wenn unbekannt.
-function _pesi_php_cli_version(): string {
+// Version eines PHP-Binarys (Standard: des Linters), z. B. „7.2.34 (cli)“;
+// '' wenn es nicht läuft.
+function _pesi_php_cli_version(?string $bin = null): string {
     if (!_pesi_can_exec()) return '';
     $out = [];
-    @exec(escapeshellarg(_pesi_php_cli()) . ' -v 2>&1', $out);
+    @exec(escapeshellarg($bin ?? _pesi_php_cli()) . ' -v 2>&1', $out);
     return preg_match('/^PHP\s+(\S+(?:\s+\([^)]*\))?)/m', implode("\n", $out), $m) ? $m[1] : '';
 }
 
