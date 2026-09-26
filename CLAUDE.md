@@ -261,6 +261,24 @@ tests, which is why the suite now also renders real dashboard responses:
 JS registries keyed by field ID use `Object.create(null)`: `__proto__` is a
 valid field ID.
 
+Two from the first live install (2026-09-26):
+
+- **A lint failure proves nothing while the linter also rejects the live
+  page.** `php` in the host's PATH is often older than the website's PHP;
+  before 7.3 it cannot parse `PESI, 'richtext', …`, so every save on a page
+  with richtext came back as S1 and blamed the client. `_pesi_commit()` lints
+  the unchanged page after a failed candidate and answers T7 if that fails too.
+  `_pesi_php_cli()` prefers `PESI_PHP_CLI`, then `PHP_BINDIR`, then `php`. The
+  linter output goes to the error log (`_pesi_lint_log()`), because the
+  candidate is deleted and the client message deliberately has no detail. The
+  diagnostics probe lints the open page, not `pesi-core.php`, which has no
+  heredoc and passes on any version.
+- **Content in PHP arrays is invisible to pesi, and `pesi()` output is HTML.**
+  An FAQ printed from an array showed only its intro in the dashboard. Feeding
+  `pesi()` values into JSON-LD put the richtext `<style>`, the wrapper and
+  `&amp;` into the structured data. `pesi_text()` in `pesi-lib.php` is the one
+  way back to plain text; `pesi-agent.md` has the FAQ conversion.
+
 One from the 2026-09-22 parser review. It changes how the whole engine finds
 fields:
 

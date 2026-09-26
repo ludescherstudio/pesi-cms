@@ -224,6 +224,35 @@ ok('Syntaxfehler wird vor Live-Austausch abgelehnt', $r !== null && $r['type'] =
 ok('Live-Datei bleibt gültig', _pesi_lint($p) === true);
 ok('Live-Inhalt bleibt unverändert', strpos(file_get_contents($p), 'GUT') !== false);
 
+// Der Kandidat wird nach der Ablehnung gelöscht. Ohne Protokoll ist die
+// eigentliche Linter-Meldung mit Zeilennummer nirgends mehr zu finden.
+grp('Linter — Meldung ins Fehlerprotokoll, falsches CLI-PHP ist kein S1');
+$lintLog = $scratch . '/lint.log';
+$prevLog = ini_set('error_log', $lintLog);
+@unlink($lintLog);
+$p = page("<?php\n\$x = pesi('f', 'GUT', 'text', 'L');\n");
+$r = _pesi_commit($p, "<?php\n\$x = 1;\n\$y = ;;; kaputt\n");
+$log = (string)@file_get_contents($lintLog);
+ok('echter Syntaxfehler bleibt S1', ($r['msg'] ?? '') === $GLOBALS['t']['err_php_rollback'], json_encode($r));
+ok('Protokoll nennt S1, Seite und Zeile', strpos($log, 'pesi S1: page.php') !== false && preg_match('/line 3/', $log) === 1, $log);
+ok('Protokoll nennt beide PHP-Versionen', strpos($log, 'website PHP ' . PHP_VERSION) !== false, $log);
+ok('Protokoll zeigt keinen Pfad des Kandidaten', strpos($log, '.pesi-tmp-') === false, $log);
+ok('Kandidat ist weg', !glob(dirname($p) . '/*.pesi-tmp-*'));
+@unlink($lintLog);
+// Lehnt der Linter schon die Seite ab, die die Website ausführt (hier simuliert
+// mit einer kaputten Live-Datei), beweist seine Ablehnung des Kandidaten nichts.
+$p = page("<?php\n\$x = ;;; so liegt die Seite schon\n");
+$r = _pesi_commit($p, "<?php\n\$x = ;;; und so der Kandidat\n");
+ok('Linter lehnt auch die Live-Seite ab → T7 statt S1', ($r['msg'] ?? '') === $GLOBALS['t']['err_no_lint'], json_encode($r));
+ok('Protokoll nennt T7', strpos((string)@file_get_contents($lintLog), 'pesi T7: page.php') !== false);
+ini_set('error_log', $prevLog === false ? '' : $prevLog);
+@unlink($lintLog);
+ok('Linter-Ausgabe wird zurückgegeben', _pesi_lint($bad, $o) === false && stripos($o, 'error') !== false, (string)$o);
+ok('Linter-Binary läuft und nennt seine Version', _pesi_php_cli_version() !== '', _pesi_php_cli());
+ok('Zusammenfassung überspringt php-cgi-Header',
+    _pesi_lint_summary("X-Powered-By: PHP/7.2.34\nContent-type: text/html\n\nParse error: syntax error in /srv/x/faq.php on line 9", '/srv/x/faq.php', 'faq.php')
+    === 'Parse error: syntax error in faq.php on line 9');
+
 // ── 2026-07-31 #2: PI und Kommentare im Sanitizer ────────────
 grp('Sanitizer — Processing-Instructions und Kommentare');
 foreach ([
@@ -336,6 +365,67 @@ ok('lint versteckt', _pesi_lint($p) === true);
 _pesi_toggle_op($p, 'urlaub');
 ok('wieder sichtbar', _pesi_toggle_parse($p) === ['urlaub' => true]);
 ok('gerendert wieder sichtbar', strpos(render($p), 'URLAUBSHINWEIS') !== false);
+
+// ── Klartext für JSON-LD und meta: pesi_text() ───────────────
+// Das Muster aus pesi-agent.md (FAQ mit Kategorien, Einträgen und FAQPage-
+// JSON-LD) als echte Seite: sichtbares FAQ und strukturierte Daten folgen
+// denselben Feldern, ohne Richtext-Stil, Wrapper oder doppelte Maskierung.
+grp('pesi_text — FAQ mit JSON-LD');
+ok('Textfeld: Maskierung aufgehoben', pesi_text(pesi('x', 'Kosten < 100 € & „mehr“ \'ja\'', 'text')) === 'Kosten < 100 € & „mehr“ \'ja\'');
+ok('Richtext: Stil, Wrapper, Tags weg, Absätze getrennt',
+    pesi_text(pesi('x', "<p>Erster <strong>Satz</strong>.</p><p>Zweiter&nbsp;Satz.</p>", 'richtext')) === 'Erster Satz. Zweiter Satz.');
+ok('auch der zweite Richtext (ohne Stil) wird sauber', pesi_text(pesi('y', '<ul><li>A</li><li>B</li></ul>', 'richtext')) === 'A B');
+ok('wörtlich getipptes &amp; bleibt &amp;', pesi_text(pesi('x', 'a &amp; b', 'text')) === 'a &amp; b');
+$faqSrc = "<?php require '" . $scratch . "/core.php'; \$faq_ld = []; ?>\n"
+    . "<section class=\"faq\">\n"
+    . "<!-- pesi:toggle faq_kosten -->\n"
+    . "  <h2><?= pesi('faq_kosten_titel', 'Kosten', 'text', 'FAQ-Kategorie') ?></h2>\n"
+    . "<!-- pesi:item faq_kosten:1 -->\n"
+    . "  <details class=\"faq-item\">\n"
+    . "    <summary><?= \$q = pesi('faq_kosten_1_frage', 'Was kostet eine Stunde?', 'text', 'Frage') ?></summary>\n"
+    . "    <div class=\"faq-answer\"><?= \$a = pesi('faq_kosten_1_antwort', <<<'PESI'\n<p>90 Euro.</p>\nPESI, 'richtext', 'Antwort') ?></div>\n"
+    . "  </details>\n"
+    . "  <?php \$faq_ld[] = [\$q, \$a]; ?>\n"
+    . "<!-- /pesi:item -->\n"
+    . "<!-- /pesi:toggle -->\n"
+    . "</section>\n"
+    . "<script type=\"application/ld+json\">\n"
+    . "<?= json_encode([\n"
+    . "    '@context'   => 'https://schema.org',\n"
+    . "    '@type'      => 'FAQPage',\n"
+    . "    'mainEntity' => array_map(fn (\$f) => [\n"
+    . "        '@type'          => 'Question',\n"
+    . "        'name'           => pesi_text(\$f[0]),\n"
+    . "        'acceptedAnswer' => ['@type' => 'Answer', 'text' => pesi_text(\$f[1])],\n"
+    . "    ], \$faq_ld),\n"
+    . "], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG) ?>\n"
+    . "</script>\n";
+$p = page($faqSrc);
+$ld = function (string $html): ?array {
+    return preg_match('#<script type="application/ld\+json">\s*(.*?)\s*</script>#s', $html, $m) ? json_decode($m[1], true) : null;
+};
+ok('Fixture: alle FAQ-Felder im Dashboard', array_keys(_pesi_parse($p)) === ['faq_kosten_titel', 'faq_kosten_1_frage', 'faq_kosten_1_antwort']);
+$r = _pesi_save($p, _pesi_parse($p), [
+    'pesi_field_faq_kosten_1_frage'   => 'Kosten < 100 € & „Kasse“?',
+    'pesi_field_faq_kosten_1_antwort' => '<p>Tom &amp; Jerry: <strong>90&nbsp;Euro</strong>.</p><p>&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;</p>',
+]);
+ok('FAQ-Änderung gespeichert', $r['type'] === 'success', json_encode($r));
+$out = render($p);
+$data = $ld($out);
+ok('JSON-LD ist gültiges JSON', is_array($data), $out);
+$q1 = $data['mainEntity'][0] ?? [];
+ok('Frage im JSON-LD ist Klartext', ($q1['name'] ?? '') === 'Kosten < 100 € & „Kasse“?', json_encode($q1, JSON_UNESCAPED_UNICODE));
+ok('Antwort im JSON-LD ohne Wrapper, Stil, Maskierung',
+    ($q1['acceptedAnswer']['text'] ?? '') === 'Tom & Jerry: 90 Euro. </script><script>alert(1)</script>', json_encode($q1, JSON_UNESCAPED_UNICODE));
+ok('kein </script> im Rohtext des JSON-LD-Blocks', substr_count($out, '</script>') === 1, $out);
+ok('sichtbares FAQ zeigt die Änderung', strpos($out, '<summary>Kosten &lt; 100 € &amp; „Kasse“?</summary>') !== false, $out);
+_pesi_block_op($p, 'faq_kosten', 1, 'dup');
+$data = $ld(render($p));
+ok('duplizierter Eintrag erscheint im JSON-LD', count($data['mainEntity'] ?? []) === 2);
+_pesi_toggle_op($p, 'faq_kosten');
+$out = render($p);
+ok('ausgeblendete Kategorie fehlt sichtbar und im JSON-LD', strpos($out, 'faq-item') === false && ($ld($out)['mainEntity'] ?? null) === [], $out);
+ok('lint am Ende', _pesi_lint($p) === true);
 
 // ── Verschachtelte Einträge: ablehnen statt halb duplizieren ─
 // Der non-greedy Block-Parser beendet den äusseren Eintrag am ersten inneren
@@ -1019,7 +1109,8 @@ $nolint = function (bool $check, string $candidate) use ($scratch): array {
     foreach (['', '.pesi-backup.1', '.pesi-backup.2'] as $s) @unlink($p . $s);
     file_put_contents($p, "<?php\n\$x = pesi('f', 'V1', 'text', 'L');\n");
     file_put_contents($p . '.pesi-backup.1', "<?php\n\$x = pesi('f', 'V0', 'text', 'L');\n");
-    file_put_contents($dir . '/run.php', "<?php\nrequire __DIR__ . '/engine.php';\n\$GLOBALS['t'] = _pesi_strings()['de'];\n"
+    // Die T7-Protokollzeile ginge sonst über stderr mitten in die JSON-Antwort.
+    file_put_contents($dir . '/run.php', "<?php\nini_set('error_log', __DIR__ . '/php.log');\nrequire __DIR__ . '/engine.php';\n\$GLOBALS['t'] = _pesi_strings()['de'];\n"
         . "\$r = _pesi_commit(__DIR__ . '/page.php', " . var_export($candidate, true) . ");\n"
         . "echo json_encode(['r' => \$r, 'exec' => function_exists('exec')]);\n");
     $out = (string)shell_exec(escapeshellarg(PHP_BINARY) . ' -d disable_functions=exec ' . escapeshellarg($dir . '/run.php') . ' 2>&1');
@@ -1039,6 +1130,30 @@ ok('auch ein gültiger Kandidat geht ungeprüft nicht live', $res['live'] === 'V
 $res = $nolint(false, "<?php\n\$x = pesi('f', 'V2', 'text', 'L');\n");
 ok('mit PESI_SYNTAX_CHECK = false wird bewusst ungeprüft gespeichert',
     $res['live'] === 'V2' && $res['b1'] === 'V1' && array_key_exists('r', $res) && $res['r'] === null, json_encode($res));
+// PESI_PHP_CLI: der Ausweg, wenn `php` im PATH ein anderes PHP ist als das
+// der Website. Konstanten lassen sich nur beim Start setzen: eigener Prozess.
+$withCli = function (string $cli) use ($scratch): string {
+    $dir = $scratch . '/phpcli';
+    @mkdir($dir);
+    copy($scratch . '/engine.php', $dir . '/engine.php');
+    copy($scratch . '/pesi-lib.php', $dir . '/pesi-lib.php');
+    $core = preg_replace_callback("/define\('PESI_PHP_CLI',[^\n]*\n/",
+        function () use ($cli) { return 'define(\'PESI_PHP_CLI\', ' . var_export($cli, true) . ");\n"; },
+        (string)file_get_contents($scratch . '/core.php'), -1, $hits);
+    file_put_contents($dir . '/core.php', $core);
+    file_put_contents($dir . '/ok.php', "<?php\n\$x = 1;\n");
+    file_put_contents($dir . '/run.php', "<?php\nrequire __DIR__ . '/engine.php';\n"
+        . "echo json_encode([_pesi_php_cli(), _pesi_lint(__DIR__ . '/ok.php')]);\n");
+    $out = $hits === 1 ? (string)shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($dir . '/run.php') . ' 2>&1') : 'PESI_PHP_CLI fehlt in pesi-core.php';
+    foreach (glob($dir . '/*') as $f) @unlink($f);
+    @rmdir($dir);
+    return $out;
+};
+$out = $withCli(PHP_BINARY);
+ok('PESI_PHP_CLI wird verwendet', $out === json_encode([PHP_BINARY, true]), $out);
+$out = $withCli('pesi-definitiv-kein-binary');
+ok('falsches PESI_PHP_CLI → null (T7), nicht false (S1)', $out === json_encode(['pesi-definitiv-kein-binary', null]), $out);
+
 foreach (['de', 'en'] as $l) {
     ok("$l/err_no_lint nennt keinen Syntaxfehler",
         stripos(_pesi_strings()[$l]['err_no_lint'], 'syntax') === false);

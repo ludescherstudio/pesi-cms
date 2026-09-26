@@ -17,6 +17,7 @@ define('LANG',        'de');               // 'de' oder 'en'
 define('PESI_BACKUP_ENABLED', true);
 define('PESI_BACKUP_COUNT',   5);           // frühere Stände pro Seite, 1–20 (Versionsliste im Dashboard)
 define('PESI_SYNTAX_CHECK', true);
+define('PESI_PHP_CLI',      '');            // PHP-CLI für den Syntax-Check; leer = automatisch. Bei T7 z. B. '/usr/local/php82/bin/php'
 define('PESI_SESSION_IDLE',  30 * 60);      // 30 Minuten ohne Aktivität
 define('PESI_SESSION_MAX',   12 * 60 * 60); // spätestens nach 12 Stunden neu anmelden
 define('PESI_GLOBALS_FILE',  'pesi-content.php');
