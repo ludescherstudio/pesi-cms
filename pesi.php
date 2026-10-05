@@ -2602,6 +2602,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .L{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem;background:radial-gradient(ellipse at 30% 40%,<?=$bc?>0f,transparent 60%),var(--bg)}
 /* Login card on a light background */
 .L-c{width:100%;max-width:340px;animation:up .45s ease-out;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:2rem;box-shadow:0 4px 24px rgba(26,32,44,.06)}
+.L-h{margin:0}
 .L-logo{display:block;height:42px;width:auto;margin-bottom:.15rem}
 .L-c .sub{font-size:.8rem;color:var(--tx2);margin:.25rem 0 2rem}
 /* Own shades instead of var(--er)/var(--tx3): on the white card those only reach
@@ -2664,7 +2665,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 
 .top{padding:1rem 2rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:5}
 .top-t{font-size:1rem;font-weight:600}
-.top-f{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.74rem;color:var(--tx3);background:var(--bg2);padding:.25rem .6rem;border-radius:5px;border:1px solid var(--bd)}
+.top-f{margin-left:.5rem;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.74rem;color:var(--tx3);background:var(--bg2);padding:.25rem .6rem;border-radius:5px;border:1px solid var(--bd)}
 
 .cnt-wrap{flex:1;padding:1.8rem 2rem;max-width:740px}
 
@@ -2678,14 +2679,14 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .W{display:flex;align-items:center;justify-content:center;flex:1;padding:3rem 1.5rem}
 .W-in{text-align:center;max-width:320px;animation:up .4s ease-out}
 .W-in.pw{text-align:left;max-width:380px;width:100%}
-.W-in.pw h2{margin-bottom:.4rem}
+.W-in.pw h1{margin-bottom:.4rem}
 .W-in.pw>p{margin-bottom:1.2rem}
 .pw-f{display:flex;flex-direction:column;gap:.35rem;margin-bottom:1rem}
 .pw-f label{font-size:.85rem;font-weight:600;margin-top:.6rem}
 .pw-f .sv-b{margin-top:1rem;align-self:flex-start}
 .W-ic{width:52px;height:52px;border-radius:13px;background:var(--b-s);border:1px solid <?=$bc?>18;display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem}
 .W-ic svg{width:22px;height:22px;stroke:var(--b);fill:none;stroke-width:1.5;stroke-linecap:round}
-.W h2{font-size:1.08rem;font-weight:600;margin-bottom:.4rem}
+.W h1,.W h2{font-size:1.08rem;font-weight:600;margin-bottom:.4rem}
 .W p{font-size:.86rem;color:var(--tx2);line-height:1.6}
 
 /* ───── FIELD CARDS ───── */
@@ -2707,6 +2708,7 @@ label.fc-label{cursor:pointer}
 /* Field ID and type only in the technical view. */
 .fc-meta{display:none;align-items:center;gap:.5rem;margin-bottom:.7rem}
 body.tech .fc-meta{display:flex}
+body:not(.tech) .top-f,body:not(.tech) .S-nav .cnt{display:none}
 .fc-label{margin-bottom:.7rem}
 body.tech .fc-label{margin-bottom:.15rem}
 .fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.72rem;color:var(--tx3)}
@@ -2770,7 +2772,6 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .top-l{display:inline-flex;align-items:center;gap:.3rem;margin-left:1rem;padding:.4rem .8rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2);font-size:.74rem;font-weight:600;color:var(--b);text-decoration:none}
 .top-l:hover{background:var(--b);color:#fff}
 .sv-info{display:flex;flex-direction:column;gap:.2rem;min-width:0}
-.sv-safe{font-size:.74rem;color:var(--tx3)}
 .sv-dirty{font-size:.78rem;font-weight:600;color:var(--b)}
 .sv-act{display:flex;align-items:center;flex:0 0 auto}
 .sv-b.has-changes{box-shadow:0 0 0 3px <?=$bc?>40;animation:pulse 1.6s ease-in-out infinite}
@@ -2956,11 +2957,13 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
 <!-- ═══════ LOGIN ═══════ -->
 <div class="L">
   <div class="L-c">
+    <h1 class="L-h">
     <?php if ($logo): ?>
     <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="L-logo">
     <?php else: ?>
     <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi CMS" class="L-logo">
     <?php endif; ?>
+    </h1>
     <p class="sub"><?=htmlspecialchars($sn)?></p>
     <?php if ($defaultPassword): ?><div class="err"><?=htmlspecialchars($t[$pwOverride === '' ? 'pw_err_file' : 'setup_default_pw'])?></div><?php endif; ?>
     <?php if ($loginError !== ''): ?><div class="err"><?=htmlspecialchars($loginError)?></div><?php endif; ?>
@@ -3319,8 +3322,6 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
             <?php endforeach; ?>
             <?php if ($curBlk !== null) $closeBlk($curBlk); ?>
           <?php endif; ?>
-        </div>
-
         <?php if ($pesiVersions):
           $vhCell = static function (?string $v, string $type) use ($t): string {
               $txt = htmlspecialchars(_pesi_version_text($v, $type));
@@ -3368,6 +3369,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
           </ol>
         </details>
         <?php endif; ?>
+        </div>
 
         <?php if (!empty($fields) || !empty($toggles)): ?>
         <div class="sv">
@@ -3392,7 +3394,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <?php elseif ($pwView): ?>
       <div class="W">
         <div class="W-in pw">
-          <h2><?=htmlspecialchars($t['pw_title'])?></h2>
+          <h1><?=htmlspecialchars($t['pw_title'])?></h1>
           <p><?=htmlspecialchars($t['pw_intro'])?></p>
           <?php if ($pwMsg): ?><div class="ms <?=$pwMsgType?>" role="status"><span><?=htmlspecialchars($pwMsg)?></span></div><?php endif; ?>
           <?php if ($pwMsgType !== 'success'): ?>
@@ -3416,8 +3418,8 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <?php else: ?>
       <div class="W">
         <div class="W-in">
-          <div class="W-ic"><svg viewBox="0 0 24 24"><path d="M3 12h18M12 3v18"/></svg></div>
-          <h2><?=$t['welcome_title']?></h2>
+          <div class="W-ic"><svg viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></div>
+          <h1><?=$t['welcome_title']?></h1>
           <p><?=$t['welcome_hint']?></p>
         </div>
       </div>
