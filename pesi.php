@@ -1360,7 +1360,21 @@ function _pesi_when(int $ts, bool $seconds = false): string {
     $day  = date('Y-m-d', $ts);
     if ($day === date('Y-m-d'))                       return sprintf($t['when_today'], $time);
     if ($day === date('Y-m-d', strtotime('-1 day')))  return sprintf($t['when_yesterday'], $time);
-    return date('d.m.Y', $ts) . ' ' . $time;
+    return _pesi_date($ts) . ', ' . $time;
+}
+
+// "5 Oct 2026" / "5. Okt. 2026"
+function _pesi_date(int $ts): string {
+    global $lang;
+    $months = $lang === 'de'
+        ? ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sep.', 'Okt.', 'Nov.', 'Dez.']
+        : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return date($lang === 'de' ? 'j.' : 'j', $ts) . ' ' . $months[(int)date('n', $ts) - 1] . ' ' . date('Y', $ts);
+}
+
+// Value for a CSS content property.
+function _pesi_css_str(string $v): string {
+    return '"' . str_replace(['\\', '"', "\n", '<'], ['\\\\', '\\"', ' ', '\\3c '], $v) . '"';
 }
 
 // Group slug as display name: 'team_members' → 'Team members'.
@@ -2192,10 +2206,28 @@ function _pesi_strings(): array { return [
         'login_unavailable' => 'Die Anmeldung ist gerade nicht möglich. Ihre Inhalte sind unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T15)',
         'password_ph'       => 'Passwort',
         'login_btn'         => 'Anmelden',
-        'login_help'        => 'Passwort vergessen? Ihre Website-Betreuung kann es neu setzen.',
+        'login_help'        => 'Passwort vergessen? Ihre Website-Betreuung kann es zurücksetzen.',
         'setup_default_pw'  => 'Die Anmeldung ist gesperrt, bis Ihre Website-Betreuung in pesi-core.php ein eigenes Passwort gesetzt hat. (Code T8)',
         'nav_pages'         => 'Seiten',
         'to_website'        => '↗ Zur Website',
+        'rt_bold'           => 'Fett',
+        'rt_italic'         => 'Kursiv',
+        'rt_underline'      => 'Unterstrichen',
+        'rt_strike'         => 'Durchgestrichen',
+        'rt_heading'        => 'Überschrift',
+        'rt_normal'         => 'Normaler Text',
+        'rt_h2'             => 'Überschrift 2',
+        'rt_h3'             => 'Überschrift 3',
+        'rt_ordered'        => 'Nummerierte Liste',
+        'rt_bullet'         => 'Aufzählung',
+        'rt_quote'          => 'Zitat',
+        'rt_link'           => 'Link',
+        'rt_clean'          => 'Formatierung entfernen',
+        'rt_visit'          => 'Link öffnen:',
+        'rt_enter_link'     => 'Link-Adresse:',
+        'rt_edit'           => 'Bearbeiten',
+        'rt_save'           => 'Übernehmen',
+        'rt_remove'         => 'Entfernen',
         'logout'            => 'Abmelden',
         'pw_link'           => 'Passwort ändern',
         'pw_title'          => 'Passwort ändern',
@@ -2340,7 +2372,25 @@ function _pesi_strings(): array { return [
         'login_help'        => 'Forgot your password? Whoever looks after your website can reset it.',
         'setup_default_pw'  => 'Sign-in is disabled until whoever looks after your website sets a password of their own in pesi-core.php. (Code T8)',
         'nav_pages'         => 'Pages',
-        'to_website'        => '↗ Visit Website',
+        'to_website'        => '↗ Visit website',
+        'rt_bold'           => 'Bold',
+        'rt_italic'         => 'Italic',
+        'rt_underline'      => 'Underline',
+        'rt_strike'         => 'Strikethrough',
+        'rt_heading'        => 'Heading',
+        'rt_normal'         => 'Normal text',
+        'rt_h2'             => 'Heading 2',
+        'rt_h3'             => 'Heading 3',
+        'rt_ordered'        => 'Numbered list',
+        'rt_bullet'         => 'Bulleted list',
+        'rt_quote'          => 'Quote',
+        'rt_link'           => 'Link',
+        'rt_clean'          => 'Clear formatting',
+        'rt_visit'          => 'Open link:',
+        'rt_enter_link'     => 'Link address:',
+        'rt_edit'           => 'Edit',
+        'rt_save'           => 'Apply',
+        'rt_remove'         => 'Remove',
         'logout'            => 'Sign out',
         'pw_link'           => 'Change password',
         'pw_title'          => 'Change password',
@@ -2359,7 +2409,7 @@ function _pesi_strings(): array { return [
         'pw_err_write'      => 'The password could not be saved; the previous one still applies. Please contact whoever looks after your website. (Code T20)',
         'pw_err_file'       => 'Sign-in is locked because the password file .pesi-password is damaged. Whoever looks after your website can delete it; the password from pesi-core.php then applies again. (Code T20)',
         'no_fields'         => 'There is nothing to edit on this page.',
-        'save_hint'         => 'Your changes only take effect once you click "Save". Earlier states are under "Earlier versions".',
+        'save_hint'         => 'Your changes only take effect once you click “Save”. Earlier states are under “Earlier versions”.',
         'save_btn'          => 'Save',
         'welcome_title'     => 'Welcome',
         'welcome_hint'      => 'Select a page on the left to edit its content.',
@@ -2378,11 +2428,11 @@ function _pesi_strings(): array { return [
         'rt_no_dom'         => 'This formatted text cannot be edited on this server right now. Please contact whoever looks after your website. (Code T17)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
         'warn_upload_limit' => 'PESI_UPLOAD_MAX_BYTES allows %s MB, but the hosting only %s MB (upload_max_filesize %s, post_max_size %s). Larger images are rejected — raise the hosting limit or align PESI_UPLOAD_MAX_BYTES so the client sees the real limit. (Code T14)',
-        'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
-        'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
-        'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
-        'up_err_process'    => 'The image for "%s" could not be processed. Please save it again as JPG or PNG and upload it once more.',
-        'up_err_dir'        => 'Images cannot be saved right now. Please contact whoever looks after your website. (Code T5, folder "%s")',
+        'up_err_failed'     => 'The image for “%s” could not be uploaded. Please try again.',
+        'up_err_size'       => 'The image for “%s” is too large (%s MB at most). Please choose a smaller one.',
+        'up_err_type'       => 'The image for “%s” is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
+        'up_err_process'    => 'The image for “%s” could not be processed. Please save it again as JPG or PNG and upload it once more.',
+        'up_err_dir'        => 'Images cannot be saved right now. Please contact whoever looks after your website. (Code T5, folder “%s”)',
         'up_err_dir_invalid'=> 'The folder for images is not set up correctly. Please contact whoever looks after your website. (Code T6)',
         'up_err_post_size'  => 'The image is too large for this server (%s MB at most), so nothing was saved — not even your text changes. Please choose a smaller image and save again.',
         'img_hint'          => 'Choose a new image or enter a path. This replaces the current image.',
@@ -2412,7 +2462,7 @@ function _pesi_strings(): array { return [
         'ob_title'          => 'How it works',
         'ob_step1'          => 'Pick a page on the left',
         'ob_step2'          => 'Edit texts and images directly',
-        'ob_step3'          => 'Click "Save" at the bottom — done',
+        'ob_step3'          => 'Click “Save” at the bottom — done',
         'ob_dismiss'        => 'Got it',
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
@@ -2440,14 +2490,14 @@ function _pesi_strings(): array { return [
         'rst_confirm'       => 'Reset this page to the state from %s? Your current state is backed up first, so you can go back again.',
         'when_today'        => 'today at %s',
         'when_yesterday'    => 'yesterday at %s',
-        'rst_done'          => 'The earlier version has been restored. Your previous state is now the newest under "Earlier versions".',
+        'rst_done'          => 'The earlier version has been restored. Your previous state is now the newest under “Earlier versions”.',
         'rst_none'          => 'This version no longer exists. Please reload the page.',
         'rst_same'          => 'This version is already the current state.',
         'tgl_section'       => 'Visibility',
         'tgl_visible'       => 'visible',
         'tgl_hidden'        => 'hidden',
-        'fc_in_section'     => 'belongs to the "%s" section',
-        'fc_in_hidden'      => 'belongs to the "%s" section — currently not on the website',
+        'fc_in_section'     => 'belongs to the “%s” section',
+        'fc_in_hidden'      => 'belongs to the “%s” section — currently not on the website',
         'tgl_show'          => 'Show',
         'tgl_hide'          => 'Hide',
         'tgl_done'          => 'Visibility changed.',
@@ -2887,6 +2937,17 @@ body.dash .fc .ql-container{background:#fff!important;border-color:#ddd!importan
 body.dash .fc .ql-editor.ql-blank::before{color:#999!important}
 body.dash .fc .ql-snow .ql-tooltip{background:#fff;border-color:#ddd;color:#333;box-shadow:0 4px 12px rgba(0,0,0,.1)}
 body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-color:#ddd;color:#333}
+/* Quill's own interface texts in the dashboard language */
+.ql-snow .ql-picker.ql-header{width:auto;min-width:98px}
+.ql-snow .ql-picker.ql-header .ql-picker-label{padding-right:24px;white-space:nowrap}
+.ql-snow .ql-picker.ql-header .ql-picker-label::before,.ql-snow .ql-picker.ql-header .ql-picker-item::before{content:<?=_pesi_css_str($t['rt_normal'])?>}
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="2"]::before,.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="2"]::before{content:<?=_pesi_css_str($t['rt_h2'])?>}
+.ql-snow .ql-picker.ql-header .ql-picker-label[data-value="3"]::before,.ql-snow .ql-picker.ql-header .ql-picker-item[data-value="3"]::before{content:<?=_pesi_css_str($t['rt_h3'])?>}
+.ql-snow .ql-tooltip::before{content:<?=_pesi_css_str($t['rt_visit'])?>}
+.ql-snow .ql-tooltip[data-mode=link]::before{content:<?=_pesi_css_str($t['rt_enter_link'])?>}
+.ql-snow .ql-tooltip a.ql-action::after{content:<?=_pesi_css_str($t['rt_edit'])?>}
+.ql-snow .ql-tooltip.ql-editing a.ql-action::after{content:<?=_pesi_css_str($t['rt_save'])?>}
+.ql-snow .ql-tooltip a.ql-remove::before{content:<?=_pesi_css_str($t['rt_remove'])?>}
 </style>
 </head>
 <body class="<?= $auth ? 'dash' : 'login' ?>">
@@ -2898,7 +2959,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <?php if ($logo): ?>
     <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="L-logo">
     <?php else: ?>
-    <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi cms" class="L-logo">
+    <img src="<?=$PESI_LOGO_LIGHT?>" alt="pesi CMS" class="L-logo">
     <?php endif; ?>
     <p class="sub"><?=htmlspecialchars($sn)?></p>
     <?php if ($defaultPassword): ?><div class="err"><?=htmlspecialchars($t[$pwOverride === '' ? 'pw_err_file' : 'setup_default_pw'])?></div><?php endif; ?>
@@ -2928,7 +2989,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       <?php if ($logo): ?>
       <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="S-logo">
       <?php else: ?>
-      <img src="<?=$PESI_LOGO?>" alt="pesi cms" class="S-logo">
+      <img src="<?=$PESI_LOGO?>" alt="pesi CMS" class="S-logo">
       <?php endif; ?>
     </div>
     <div class="S-site"><?=htmlspecialchars($sn)?></div>
@@ -3055,7 +3116,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       <div class="top">
         <h1 class="top-t"><?=htmlspecialchars($pageLabel)?></h1>
         <span class="top-f"><?=htmlspecialchars($page)?></span>
-        <?php if ($mtime): ?><span class="top-m"><?=sprintf($t['last_mod'], date('d.m.Y H:i', $mtime))?></span><?php endif; ?>
+        <?php if ($mtime): ?><span class="top-m"><?=sprintf($t['last_mod'], _pesi_date($mtime) . ', ' . date('H:i', $mtime))?></span><?php endif; ?>
         <?php if (!$isGlobals): ?>
         <a class="top-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=$t['view_live']?></a>
         <button type="button" class="top-pv" id="pvToggle" aria-pressed="true" title="<?=htmlspecialchars($t['pv_btn'])?>"><?=htmlspecialchars($t['pv_btn'])?></button>
@@ -3582,6 +3643,17 @@ qs['<?=$id?>']=new Quill('#q_<?=$id?>',{theme:'snow',modules:{toolbar:[['bold','
 qs['<?=$id?>'].on('text-change',function(d,o,src){ if(src==='user'){ qt.add('<?=$id?>'); if(window.pesiRtDirty) window.pesiRtDirty('<?=$id?>'); } });
 <?php endif; ?>
 <?php endforeach; ?>
+// Toolbar buttons get names in the dashboard language instead of Quill's
+// English format keys ("bold", "list: bullet").
+(function(){
+  const names=<?=json_encode(['bold'=>$t['rt_bold'],'italic'=>$t['rt_italic'],'underline'=>$t['rt_underline'],'strike'=>$t['rt_strike'],'list:ordered'=>$t['rt_ordered'],'list:bullet'=>$t['rt_bullet'],'blockquote'=>$t['rt_quote'],'link'=>$t['rt_link'],'clean'=>$t['rt_clean'],'header'=>$t['rt_heading']], JSON_HEX_TAG|JSON_HEX_AMP|JSON_UNESCAPED_UNICODE)?>;
+  document.querySelectorAll('.ql-toolbar button, .ql-toolbar .ql-picker-label').forEach(function(el){
+    const fmt=(el.closest('.ql-picker')||el).className.match(/ql-(bold|italic|underline|strike|list|blockquote|link|clean|header)\b/);
+    if(!fmt) return;
+    const name=names[fmt[1]+(el.value?':'+el.value:'')]||names[fmt[1]];
+    if(name){ el.setAttribute('aria-label',name); el.title=name; }
+  });
+})();
 document.getElementById('pf').addEventListener('submit',function(){
   for(const[id,q]of Object.entries(qs)){
     if(qt.has(id)) document.getElementById('h_'+id).value=q.root.innerHTML;
