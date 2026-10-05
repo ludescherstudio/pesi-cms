@@ -48,7 +48,7 @@ Only the four files you actually need:
 pesi.php             ← Dashboard (served at /pesi and /cms)
 pesi-lib.php         ← The pesi() helper and its safety checks — replaced on every update
 pesi-core.php        ← Your settings (password, branding, page list) — never touched by an update
-pesi-content.php     ← Shared details (address, phone, email, booking link), editable as "Stammdaten"
+pesi-content.php     ← Shared details (address, phone, email, booking link), editable as "Shared details"
 ```
 
 `pesi.php` and `pesi-lib.php` are pesi's code. `pesi-core.php` and `pesi-content.php` are yours. See [Updating](#updating).
@@ -80,7 +80,7 @@ your-webroot/
 ├── pesi-core.php
 ├── pesi-content.php
 ├── index.php
-├── impressum.php
+├── imprint.php
 └── ...
 ```
 
@@ -100,7 +100,7 @@ define('BRAND_COLOR', '#a3611b');             // any hex color — white text si
 define('BRAND_LOGO',  '');                    // e.g. '/assets/logo.svg' — leave empty for the pesi logo
 
 // Language
-define('LANG', 'de'); // 'de' = German, 'en' = English
+define('LANG', 'en'); // 'en' = English (default), 'de' = Deutsch
 ```
 
 **Store a password hash, not the plaintext.** Any value starting with `$` is verified with `password_verify()`, so the password never sits readable in the file. Generate one on your machine and paste the result verbatim — the `$` characters are part of the hash:
@@ -121,15 +121,15 @@ Then register the pages that should appear in the dashboard sidebar:
 
 ```php
 $PESI_PAGES = [
-    PESI_GLOBALS_FILE => 'Stammdaten',   // keep this line — the shared details
-    'index.php'       => 'Startseite',
-    'impressum.php'   => 'Impressum',
-    'datenschutz.php' => 'Datenschutz',
-    'kontakt.php'     => 'Kontakt',
+    PESI_GLOBALS_FILE => 'Shared details', // keep this line — the shared details
+    'index.php'       => 'Home',
+    'imprint.php'     => 'Imprint',
+    'privacy.php'     => 'Privacy policy',
+    'contact.php'     => 'Contact',
 ];
 ```
 
-Only pages listed here appear in the dashboard. The values on the right are the names the client sees — keep them plain. Keep the `PESI_GLOBALS_FILE` entry: without it the shared details in `pesi-content.php` can no longer be edited.
+Only pages listed here appear in the dashboard. The values on the right are the names the client sees — keep them plain, and write them in the dashboard language (`'Startseite'`, `'Impressum'` … with `LANG` set to `'de'`). Keep the `PESI_GLOBALS_FILE` entry: without it the shared details in `pesi-content.php` can no longer be edited.
 
 ### Step 3 — Add the pesi rules to your existing `.htaccess`
 
@@ -292,10 +292,10 @@ Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and
 
 ## Language
 
-pesi CMS ships in German and English. Set your language in `pesi-core.php`:
+pesi CMS ships in English and German. English is the default; for a German dashboard change one line in `pesi-core.php`, and name the pages in `$PESI_PAGES` in German too:
 
 ```php
-define('LANG', 'de'); // 'de' = German, 'en' = English
+define('LANG', 'de'); // 'en' = English (default), 'de' = Deutsch
 ```
 
 **Adding your own language** takes about 5 minutes — open `pesi.php`, find the `_pesi_strings()` function, copy the `'en'` block, give it a new key (e.g. `'fr'`), translate the strings, and set `LANG` to `'fr'` in your config. All dashboard labels and messages will follow.
@@ -310,7 +310,7 @@ $PESI_STRINGS = [
 ];
 ```
 
-Shipped German uses formal address (*Sie*), which suits practices and firms; the example above switches it to informal.
+Shipped German uses formal address (*Sie*), like every product of the family; it suits practices and firms. The example above switches it to informal.
 
 ---
 
@@ -447,7 +447,7 @@ Group names are shown with underscores turned into spaces and the first letter c
 
 ### Shared details — `pesi-content.php`
 
-`pesi-content.php` is an ordinary editable pesi file, registered as **Stammdaten**. Its values load with `pesi-core.php` and can be reused on any page, so address, phone or booking details never drift between header, footer, contact page and imprint:
+`pesi-content.php` is an ordinary editable pesi file, registered as **Shared details**. Its values load with `pesi-core.php` and can be reused on any page, so address, phone or booking details never drift between header, footer, contact page and imprint:
 
 ```php
 <h1><?= pesi_global('practice_name') ?></h1>
@@ -568,9 +568,10 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 - Changing the password in the dashboard needs the current one, goes through the same throttle as sign-in, and signs out every other session. The new password is stored only as a `password_hash()` in `.pesi-password` (mode 0600, covered by the `.pesi-` rule)
 - Failed logins are slowed down twice: per session, and per client IP in a small `.pesi-throttle` register, so discarding cookies does not reset the delay. The backoff starts at 2 seconds and doubles up to 256 seconds. Each attempt is reserved under a lock before the password is checked, so parallel requests do not get through together. If the register cannot be read or written, pesi refuses every sign-in (code `T15`) instead of running without it
 - A login POST without a valid CSRF token is rejected before the password check and does not count as a failed attempt, so a foreign form cannot lock the client out
+- The dashboard uses its own session cookie (`pesi_session`), so other PHP apps on the same domain cannot sign the client out
 - Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
 - Request parameters that arrive as arrays (`name[]=…`) are treated as empty instead of raising PHP warnings
-- CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY` and a `frame-ancestors 'none'` policy
+- CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY`, a `frame-ancestors 'none'` policy and `Cache-Control: no-store`
 - `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save
 - `richtext` is sanitized through a server-side allowlist before it is saved and on every render; PHP tags and HTML comments inside it are removed
 - Field values containing pesi structure markers are rejected before writing (code `S2`)
@@ -583,7 +584,7 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 
 **Important:** always run pesi over HTTPS. The login password is sent via POST — over plain HTTP it would be readable in transit.
 
-**Behind a reverse proxy or CDN**, the web server must pass the real client address in `REMOTE_ADDR` (Apache `mod_remoteip`, Nginx `real_ip`, trusting only your proxy). pesi deliberately ignores `X-Forwarded-For`, since any client can set it. Without that server-side setup, every visitor shares the proxy's address and one failed login slows down everyone.
+**Behind a reverse proxy or CDN**, the web server must pass the real client address in `REMOTE_ADDR` (Apache `mod_remoteip`, Nginx `real_ip`, trusting only your proxy). pesi deliberately ignores `X-Forwarded-For`, since any client can set it. Without that server-side setup, every visitor shares the proxy's address and one failed login slows down everyone. If the proxy terminates HTTPS, list its addresses in `PESI_TRUSTED_PROXY_IPS`: only from those does pesi accept `X-Forwarded-Proto` and give the session cookie the `Secure` flag.
 
 **In production, set `display_errors = Off`** and log errors on the server instead. PHP messages show file paths.
 
@@ -616,7 +617,7 @@ define('PESI_PASSWORD_CHANGE', true);              // Client may change it in th
 define('BRAND_NAME',          'My Project');       // Shown in the sidebar and the browser tab
 define('BRAND_COLOR',         '#a3611b');          // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',          '');                 // Path to logo image — empty = pesi logo
-define('LANG',                'de');               // 'de' or 'en'
+define('LANG',                'en');               // 'en' (default) or 'de'
 define('PESI_BACKUP_ENABLED', true);               // Keep earlier states of every page
 define('PESI_BACKUP_COUNT',   5);                  // How many, 1–20 — listed under "Earlier versions"
 define('PESI_SYNTAX_CHECK',   true);               // php -l on the candidate before publishing
@@ -624,6 +625,7 @@ define('PESI_PHP_CLI',        '');                 // PHP CLI for that check; em
 define('PESI_SESSION_IDLE',   30 * 60);            // Sign out after inactivity
 define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime, independent of the idle limit
 define('PESI_GLOBALS_FILE',   'pesi-content.php'); // The shared-details file
+define('PESI_TRUSTED_PROXY_IPS', []);              // Reverse proxies allowed to send X-Forwarded-Proto
 
 define('PESI_UPLOAD_DIR',       'uploads');                       // Relative to the web root, no leading slash, no ..
 define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);                 // Capped by the host's upload_max_filesize / post_max_size
@@ -631,12 +633,12 @@ define('PESI_UPLOAD_TYPES',     'jpg,jpeg,png,webp,avif,gif');    // SVG is excl
 define('PESI_IMAGE_MAX_EDGE',   2560);                            // Longer edge in px; larger uploads are scaled down (needs gd). 0 = never
 
 $PESI_PAGES = [
-    PESI_GLOBALS_FILE => 'Stammdaten',
-    'index.php'       => 'Startseite',             // file => sidebar label
+    PESI_GLOBALS_FILE => 'Shared details',
+    'index.php'       => 'Home',                   // file => sidebar label
 ];
 
 // Optional: override single dashboard strings — see Language
-// $PESI_STRINGS = ['save_btn' => 'Übernehmen'];
+// $PESI_STRINGS = ['save_btn' => 'Publish'];
 ```
 
 ---
@@ -670,6 +672,15 @@ The PHP file remains the single source of truth, so developer changes and dashbo
 An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload both from the same release. `pesi-core.php` (your settings, your `$PESI_STRINGS`) and `pesi-content.php` (the client's shared details) are never part of an update, and your pages keep their `require_once 'pesi-core.php'`.
 
 Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
+
+### From 0.4 to 0.5
+
+Upload `pesi.php` and `pesi-lib.php` as usual; `pesi-core.php` needs no change. Worth knowing:
+
+- **The client signs in once more.** The dashboard now uses its own session cookie, so it no longer signs the client out of other PHP apps on the same domain (pima Analytics, a shop), and vice versa.
+- **Behind a reverse proxy that terminates HTTPS**, add its addresses to `PESI_TRUSTED_PROXY_IPS`. pesi no longer trusts `X-Forwarded-Proto` from anyone else, so without that line the session cookie loses its `Secure` flag; signing in keeps working.
+- **English is the default language** for new installs. Your `pesi-core.php` already sets `LANG`, so nothing changes for existing sites.
+- The version you run is now shown in the dashboard footer.
 
 ### From 0.3 to 0.4 (once)
 
