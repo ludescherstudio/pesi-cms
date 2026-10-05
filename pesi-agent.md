@@ -239,7 +239,8 @@ Before placing duplicate practice details into individual pages, adapt
 `pesi-content.php`. Keep one key per shared value (practice name, address,
 phone, email, booking URL) and output it with `pesi_global('key')` wherever it
 is needed (a multi-line address as `nl2br(pesi_global('address'))`). The dashboard
-exposes this file as **Stammdaten**.
+exposes this file as **Shared details** (name it **Stammdaten** in `$PESI_PAGES` when
+`LANG` is `'de'`).
 
 1. **`PESI_PASSWORD`** — set a strong password for the client.
 
@@ -256,7 +257,7 @@ exposes this file as **Stammdaten**.
 2. **`BRAND_NAME`** — the client/project name shown in the dashboard header and login screen.
 3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#a3611b`. White text sits on the colour and must reach 4.5:1 contrast; otherwise the dashboard reports code T12 — open the diagnostics panel after the first login and check.
 4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo.
-5. **`LANG`** — `'de'` for German-speaking clients (default), `'en'` if the site is clearly English-only.
+5. **`LANG`** — `'en'` is the default. Set `'de'` when the site or the client is German-speaking; the German dashboard uses formal address (*Sie*). Name the pages in `$PESI_PAGES` (Step 7) in the same language.
 
 Leave these alone unless the site needs it — the defaults are sane:
 
@@ -279,7 +280,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 List all `.php` files in the root directory. Exclude:
 - `pesi-core.php`
 - `pesi-lib.php`
-- `pesi-content.php` (already registered as Stammdaten)
+- `pesi-content.php` (already registered as the shared details)
 - `pesi.php`
 - files inside any subdirectory
 
@@ -502,9 +503,11 @@ $PESI_PAGES = [
 ];
 ```
 
-Values (right side) are German display names for the dashboard sidebar. Keep
-the `PESI_GLOBALS_FILE` line: without it the Stammdaten page disappears from
-the dashboard and `pesi-content.php` can no longer be edited.
+Values (right side) are the display names in the dashboard sidebar, written in
+the dashboard language — German here, because this example site uses
+`LANG` `'de'`; with `'en'` use e.g. `'Shared details'`, `'Home'`, `'Imprint'`.
+Keep the `PESI_GLOBALS_FILE` line: without it the shared-details page disappears
+from the dashboard and `pesi-content.php` can no longer be edited.
 
 **Group slugs become visible names.** A `pesi:item` group `team_mitglieder` is
 shown to the client as "Team mitglieder", a `pesi:toggle` group

@@ -1,15 +1,15 @@
 <?php
-// pesi CMS — Bibliothek · ludescher.studio
-// Wird bei jedem Update ersetzt. Hier nichts anpassen: Einstellungen stehen
-// in pesi-core.php, die ein Update nie anfasst. Dokumentation: README.md
+// pesi CMS — library · ludescher.studio
+// Replaced by every update. Do not change anything here: settings live
+// in pesi-core.php, which an update never touches. Documentation: README.md
 
-// pesi.php prüft beim Start, dass es aus demselben Release stammt.
-if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.4.0');
+// pesi.php checks on start that it comes from the same release.
+if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.5.0');
 
-// ── Standardwerte ────────────────────────────────────────────
-// Alles, was pesi-core.php nicht setzt. Neue Einstellungen späterer Releases
-// greifen so ohne Änderung an pesi-core.php. PESI_PASSWORD hat bewusst keinen
-// Standard: ohne eigenes Passwort bleibt die Anmeldung gesperrt (T8).
+// ── Defaults ─────────────────────────────────────────────────
+// Everything pesi-core.php does not set. New settings of later releases
+// thus work without changing pesi-core.php. PESI_PASSWORD deliberately has no
+// default: without a password of your own, sign-in stays locked (T8).
 foreach ([
     'BRAND_NAME'            => 'pesi',
     'BRAND_COLOR'           => '#a3611b',
@@ -23,6 +23,7 @@ foreach ([
     'PESI_SESSION_IDLE'     => 30 * 60,
     'PESI_SESSION_MAX'      => 12 * 60 * 60,
     'PESI_GLOBALS_FILE'     => 'pesi-content.php',
+    'PESI_TRUSTED_PROXY_IPS' => [],
     'PESI_UPLOAD_DIR'       => 'uploads',
     'PESI_UPLOAD_MAX_BYTES' => 5 * 1024 * 1024,
     'PESI_UPLOAD_TYPES'     => 'jpg,jpeg,png,webp,avif,gif',
@@ -32,20 +33,20 @@ foreach ([
 }
 unset($pesiKey, $pesiDefault);
 
-// ── Helfer für die Seiten ────────────────────────────────────
+// ── Helpers for the pages ────────────────────────────────────
 
 if (!function_exists('pesi')) {
     function _pesi_e(string $v): string {
         return htmlspecialchars($v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    // Die Feldtypen, die Parser, Dashboard und Saver kennen. Ein Tippfehler
-    // wie 'urll' ist kein Feld, sondern eine Diagnose (T13).
+    // The field types that parser, dashboard and saver know. A typo
+    // like 'urll' is not a field but a diagnostic (T13).
     function _pesi_types(): array {
         return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel'];
     }
 
-    // BRAND_COLOR landet in einem <style>. Nur Hex-Werte, sonst der Standard.
+    // BRAND_COLOR ends up in a <style>. Hex values only, otherwise the default.
     function _pesi_brand_color(): string {
         $c = defined('BRAND_COLOR') ? (string)BRAND_COLOR : '';
         return preg_match('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $c) ? $c : '#a3611b';
@@ -53,7 +54,7 @@ if (!function_exists('pesi')) {
 
     function _pesi_safe_asset_url(string $url): string {
         $url = trim($url);
-        // Backslash: Browser lesen "\\host/x.jpg" als protokollrelative URL.
+        // Backslash: browsers read "\\host/x.jpg" as a protocol-relative URL.
         if ($url === '' || preg_match('/[\x00-\x1F\x7F<>"\'\\\\]/', $url)) return '';
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $url)) {
             return preg_match('/^https?:\/\//i', $url) ? $url : '';
@@ -68,8 +69,8 @@ if (!function_exists('pesi')) {
         if (preg_match('/^https?:\/\//i', $url)) {
             return filter_var($url, FILTER_VALIDATE_URL) ? $url : '';
         }
-        // Interne Links und Sprungmarken. Andere Schemas sind bewusst verboten;
-        // E-Mail und Telefon haben eigene, strengere Feldtypen.
+        // Internal links and anchors. Other schemes are deliberately forbidden;
+        // email and phone have their own, stricter field types.
         return in_array($url[0], ['/', '#', '?'], true) ? $url : '';
     }
 
@@ -98,12 +99,12 @@ if (!function_exists('pesi')) {
     }
 
     function _pesi_sanitize_html_fallback(string $html): string {
-        // Ohne DOM gibt es keinen belastbaren HTML-Parser. Regex-Filter
-        // übersehen insbesondere unquotierte Attribute (onclick=…) und
-        // dürfen deshalb kein Markup zurückgeben. Der Inhalt bleibt als
-        // sicherer Klartext erhalten; Formatierung gibt es erst mit ext/dom.
-        // Block- und Zeilengrenzen werden vorher zu Umbrüchen, sonst wird aus
-        // <p>Alpha</p><p>Beta</p> ein „AlphaBeta“.
+        // Without DOM there is no reliable HTML parser. Regex filters
+        // miss unquoted attributes (onclick=…) in particular and
+        // must therefore not return markup. The content survives as
+        // safe plain text; formatting needs ext/dom.
+        // Block and line boundaries become line breaks first, otherwise
+        // <p>Alpha</p><p>Beta</p> turns into "AlphaBeta".
         $text = preg_replace('#<br\b[^>]*>#i', "\n", $html);
         $text = preg_replace('#</?(p|div|h[1-6]|li|ul|ol|blockquote|pre|tr)\b[^>]*>#i', "\n", (string)$text);
         $text = trim((string)preg_replace("/\n{3,}/", "\n\n", strip_tags((string)$text)));
@@ -111,13 +112,13 @@ if (!function_exists('pesi')) {
     }
 
     /**
-     * Quill 2 serialisiert jede Liste als <ol> und legt die Art in li[data-list]
-     * ab ("bullet" | "ordered"). Die Allowlist im Sanitizer streift das
-     * Attribut, übrig bliebe eine nummerierte Liste — aus jeder Aufzählung
-     * würde beim Speichern 1., 2., 3. Darum vorher nach Art in echte <ul>/<ol>
-     * aufteilen. Rückgabe: die neu eingefügten Listen (leer = nichts zu tun).
-     * Der Aufrufer muss sie selbst säubern: seine Kindliste ist ein Snapshot
-     * von vorher, die neuen Knoten sähe er sonst nie.
+     * Quill 2 serialises every list as <ol> and keeps the kind in li[data-list]
+     * ("bullet" | "ordered"). The sanitizer allowlist strips that
+     * attribute, leaving a numbered list — every bullet list
+     * would turn into 1., 2., 3. on save. So split by kind into real <ul>/<ol>
+     * first. Returns the newly inserted lists (empty = nothing to do).
+     * The caller must clean them itself: its child list is a snapshot
+     * from before and would never see the new nodes.
      */
     function _pesi_split_quill_list(DOMElement $list): array {
         $own  = strtolower($list->nodeName);
@@ -161,14 +162,14 @@ if (!function_exists('pesi')) {
 
         $clean = function ($node) use (&$clean, $allowed): void {
             foreach (iterator_to_array($node->childNodes) as $child) {
-                /* Processing-Instructions (PHP-Tags) und HTML-Kommentare
-                   entfernen. Beide überleben DOMDocument als eigener Knotentyp,
-                   nicht als Element — die Allowlist unten sieht sie also nie und
-                   saveHTML() schreibt sie wortwörtlich zurück. Im Seitenquelltext
-                   wären das dann echte pesi:item-/pesi:toggle-Marker bzw. ein
-                   if(false)-Endif, die den Block- und Toggle-Parser fehlleiten.
-                   (Kein //-Kommentar hier: ein schließendes PHP-Tag im Text
-                   würde PHP selbst in einem Zeilenkommentar beenden.) */
+                /* Remove processing instructions (PHP tags) and HTML comments.
+                   Both survive DOMDocument as their own node type,
+                   not as elements — the allowlist below never sees them and
+                   saveHTML() writes them back verbatim. In the page source
+                   they would become real pesi:item/pesi:toggle markers or an
+                   if(false) endif that misleads the block and toggle parser.
+                   (No // comment here: a closing PHP tag in the text
+                   would end PHP even inside a line comment.) */
                 if ($child->nodeType === XML_PI_NODE || $child->nodeType === XML_COMMENT_NODE) {
                     $child->parentNode->removeChild($child);
                     continue;
@@ -180,11 +181,11 @@ if (!function_exists('pesi')) {
                         $child->parentNode->removeChild($child);
                         continue;
                     }
-                    // Nicht erlaubtes Element auspacken (Inhalt behalten).
-                    // WICHTIG: erst den Teilbaum säubern, dann hochziehen. Die
-                    // Kindliste dieser Schleife ist ein Snapshot von vorher —
-                    // hochgezogene Knoten würden sonst nie geprüft und z. B.
-                    // <div><script>…</script></div> käme ungefiltert durch.
+                    // Unwrap a disallowed element (keep its content).
+                    // IMPORTANT: clean the subtree first, then lift it. The
+                    // child list of this loop is a snapshot from before —
+                    // lifted nodes would otherwise never be checked and e.g.
+                    // <div><script>…</script></div> would pass unfiltered.
                     $clean($child);
                     while ($child->firstChild) {
                         $child->parentNode->insertBefore($child->firstChild, $child);
@@ -193,8 +194,8 @@ if (!function_exists('pesi')) {
                     continue;
                 }
 
-                // Quill-Listen erst nach Art aufteilen, dann die neuen Listen
-                // säubern — sie stehen nicht im Snapshot dieser Schleife.
+                // Split Quill lists by kind first, then clean the new lists
+                // — they are not in this loop's snapshot.
                 if ($name === 'ol' || $name === 'ul') {
                     $split = _pesi_split_quill_list($child);
                     if ($split) {
@@ -211,16 +212,16 @@ if (!function_exists('pesi')) {
                     }
                     if ($name === 'a' && $attrName === 'href') {
                         $href = trim(html_entity_decode($attr->nodeValue, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-                        // Browser ignorieren Steuerzeichen/Whitespace innerhalb des
-                        // Schemas ("\x01javascript:", "java\nscript:" → javascript:).
-                        // Für die Scheme-Prüfung darum alle Zeichen ≤ 0x20 entfernen,
-                        // sonst gilt ein solcher href fälschlich als „schemenlos/relativ".
+                        // Browsers ignore control characters/whitespace inside the
+                        // scheme ("\x01javascript:", "java\nscript:" → javascript:).
+                        // So for the scheme check strip every character ≤ 0x20,
+                        // otherwise such an href wrongly counts as "schemeless/relative".
                         $probe = preg_replace('/[\x00-\x20]+/', '', $href);
                         $ok = $probe === ''
                             || preg_match('/^(https?:|mailto:|tel:|\/|#)/i', $probe)
                             || !preg_match('/^[a-z][a-z0-9+.-]*:/i', $probe);
-                        // Backslashes liest der Browser als Schrägstriche: "\\host"
-                        // wird protokollrelativ. Wie _pesi_safe_link_url() ablehnen.
+                        // Browsers read backslashes as slashes: "\\host"
+                        // becomes protocol-relative. Reject like _pesi_safe_link_url().
                         if (!$ok || substr($probe, 0, 2) === '//' || strpos($probe, '\\') !== false) {
                             $child->removeAttribute('href');
                         }
@@ -282,14 +283,14 @@ if (!function_exists('pesi_global')) {
 
 if (!function_exists('pesi_text')) {
     /**
-     * Klartext aus einem pesi()-Wert, für Stellen ohne HTML: JSON-LD, meta,
-     * title. Entfernt den einmal eingefügten Richtext-Stil, den Wrapper und
-     * alle Tags und hebt die HTML-Maskierung auf. Das Ergebnis ist roh: in JSON
-     * mit json_encode(…, JSON_HEX_TAG), in HTML wieder mit htmlspecialchars().
+     * Plain text from a pesi() value, for places without HTML: JSON-LD, meta,
+     * title. Removes the once-injected richtext style, the wrapper and
+     * all tags, and decodes HTML entities. The result is raw: in JSON
+     * use json_encode(…, JSON_HEX_TAG), in HTML htmlspecialchars() again.
      */
     function pesi_text(string $html): string {
         $s = (string)preg_replace('#<style\b[^>]*>.*?</style>#is', '', $html);
-        // Blockgrenzen werden zu Leerzeichen, sonst klebt „…Satz.</p><p>Nächster“.
+        // Block boundaries become spaces, otherwise "…sentence.</p><p>Next" sticks together.
         $s = (string)preg_replace('#<(?:br|/?(?:p|div|li|ul|ol|h[1-6]|blockquote))\b[^>]*>#i', ' ', $s);
         $s = html_entity_decode(strip_tags($s), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return trim((string)preg_replace('/[\s\x{00A0}]+/u', ' ', $s));
