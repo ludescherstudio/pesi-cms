@@ -55,6 +55,12 @@ session_set_cookie_params([
 session_name('pesi_session');
 // Accept only session IDs the server issued itself.
 ini_set('session.use_strict_mode', '1');
+// PHP deletes session files after session.gc_maxlifetime, often 24 minutes.
+// Below pesi's inactivity limit that would sign the client out early.
+$pesiIdle = _pesi_idle_limit(defined('PESI_SESSION_IDLE') ? (int)PESI_SESSION_IDLE : null);
+if ((int)ini_get('session.gc_maxlifetime') < $pesiIdle) {
+    ini_set('session.gc_maxlifetime', (string)$pesiIdle);
+}
 session_start();
 
 // CSRF token (persistent per session)
@@ -188,6 +194,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['pesi_login'])) {
 }
 
 $auth = !empty($_SESSION[$sk]);
+
+// Keepalive for the open form: typing sends no request, so without it the
+// session would expire mid-text and the save would land on the sign-in page.
+// The answer carries the current CSRF token: after signing in again in
+// another tab, the open form can still be sent.
+if (_pesi_param($_GET, 'pesi_ping') !== '') {
+    http_response_code($auth ? 200 : 401);
+    header('Content-Type: application/json');
+    echo json_encode($auth ? ['csrf' => $csrf] : (object)[]);
+    exit;
+}
 
 // ── Change password ──────────────────────────────────────────
 // Signed in only, and only while PESI_PASSWORD_CHANGE allows it. Checking
@@ -953,6 +970,9 @@ function _pesi_save(string $file, array $fields, array $post, ?string $expectedH
         // first save although nobody touched it — and the file would get
         // CR bytes in the middle of the nowdocs.
         $nv = str_replace(["\r\n", "\r"], "\n", (string)$post[$k]);
+        // Unchanged as stored: nothing to write. Without this, an untouched
+        // richtext would be rewritten in sanitized form on every save.
+        if ($nv === $fld['value']) continue;
         // Without DOM only plain text would be left of richtext. The dashboard
         // then does not offer it for editing (T17); here it is never rewritten.
         if (($fld['type'] ?? '') === 'richtext' && !class_exists('DOMDocument')) continue;
@@ -1135,6 +1155,10 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action, 
             $at   = $last['offset'] + $last['len'];
         }
         $mod  = substr($src, 0, $at) . $clone . substr($src, $at);
+        // A field inside the entry that is not named <group>_<n>_… keeps its
+        // ID in the copy. The page would then hold that ID twice and refuse
+        // every later save (S7), so refuse the copy instead.
+        if (_pesi_duplicate_ids($mod)) return ['msg' => $t['blk_ids'], 'type' => 'error'];
         if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
         return ['msg' => $t[$action === 'add' ? 'blk_added' : 'blk_duplicated'], 'type' => 'success'];
     }
@@ -1307,8 +1331,9 @@ function _pesi_toggle_op(string $file, string $group, ?string $expectedHash = nu
             // make visible: remove the wrapper
             return $mm[1] . $body . $mm[5];
         }
-        // hide: add the wrapper
-        return $mm[1] . '<?php if (false): ?>' . $body . '<?php endif; ?>' . $mm[5];
+        // hide: add the wrapper. On a visible section an endif right before
+        // the end marker is the content's own, so it stays inside.
+        return $mm[1] . '<?php if (false): ?>' . $body . ($mm[4] ?? '') . '<?php endif; ?>' . $mm[5];
     }, $src, 1);
 
     if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
@@ -1563,12 +1588,17 @@ function _pesi_param(array $src, string $key): string {
     return isset($src[$key]) && is_string($src[$key]) ? $src[$key] : '';
 }
 
+// Inactivity limit in seconds: 30 minutes by default, at least one minute.
+function _pesi_idle_limit(?int $cfg): int {
+    return $cfg === null ? 1800 : max(60, $cfg);
+}
+
 // Has the signed-in session expired? Inactivity, absolute maximum lifetime
 // and a password change end it. Both time limits apply independently
 // of each other, each with at least one minute; an absolute limit below
 // the inactivity limit thus takes effect earlier as well.
 function _pesi_session_expired(array $s, int $now, string $storedPassword, ?int $idleCfg, ?int $maxCfg): bool {
-    $idle = $idleCfg === null ? 1800 : max(60, $idleCfg);
+    $idle = _pesi_idle_limit($idleCfg);
     $max  = $maxCfg === null ? 43200 : max(60, $maxCfg);
     return $now - (int)($s['pesi_last'] ?? 0) > $idle
         || $now - (int)($s['pesi_login_at'] ?? 0) > $max
@@ -2203,6 +2233,8 @@ function _pesi_strings(): array { return [
         'saved_many'        => '%d Änderungen gespeichert.',
         'wrong_password'    => 'Das Passwort stimmt nicht.',
         'login_expired'     => 'Die Anmeldeseite war zu lange geöffnet. Bitte geben Sie Ihr Passwort noch einmal ein.',
+        'session_ended'     => 'Ihre Sitzung ist abgelaufen, gespeichert ist noch nichts. Ihre Eingaben bleiben in diesem Formular. Melden Sie sich in einem neuen Tab erneut an und klicken Sie dann hier noch einmal auf „Speichern“.',
+        'session_signin'    => 'In neuem Tab anmelden',
         'login_unavailable' => 'Die Anmeldung ist gerade nicht möglich. Ihre Inhalte sind unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T15)',
         'password_ph'       => 'Passwort',
         'login_btn'         => 'Anmelden',
@@ -2340,6 +2372,7 @@ function _pesi_strings(): array { return [
         'tgl_done'          => 'Sichtbarkeit geändert.',
         'tgl_notfound'      => 'Dieser Bereich ließ sich nicht finden. Bitte laden Sie die Seite neu. Bleibt es dabei, melden Sie sich bitte bei Ihrer Website-Betreuung. (Code S4)',
         'tgl_nested'        => 'Diese Bereiche lassen sich hier nicht ein- und ausblenden, weil sie ineinander verschachtelt sind. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S5)',
+        'blk_ids'           => 'Dieser Eintrag lässt sich nicht kopieren, weil eines seiner Felder nicht nach dem Eintrag benannt ist. Ihre Seite ist unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S8)',
         'blk_nested'        => 'Diese Einträge lassen sich hier nicht bearbeiten, weil sie ineinander verschachtelt sind. Ihre Seite ist unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S6)',
         'unsaved_warn'      => 'Es gibt ungespeicherte Änderungen. Möchten Sie diese verwerfen?',
     ],
@@ -2366,6 +2399,8 @@ function _pesi_strings(): array { return [
         'saved_many'        => '%d changes saved.',
         'wrong_password'    => 'That password is not correct.',
         'login_expired'     => 'The sign-in page was open for too long. Please enter your password again.',
+        'session_ended'     => 'Your session has ended, so nothing has been saved yet. Your entries stay in this form. Sign in again in a new tab, then click “Save” here once more.',
+        'session_signin'    => 'Sign in in a new tab',
         'login_unavailable' => 'Signing in is not possible right now. Your content is unchanged. Please contact whoever looks after your website. (Code T15)',
         'password_ph'       => 'Password',
         'login_btn'         => 'Sign in',
@@ -2503,6 +2538,7 @@ function _pesi_strings(): array { return [
         'tgl_done'          => 'Visibility changed.',
         'tgl_notfound'      => 'This section could not be found. Please reload the page. If it persists, contact whoever looks after your website. (Code S4)',
         'tgl_nested'        => 'These sections cannot be shown or hidden here because they are nested inside one another. Please contact whoever looks after your website. (Code S5)',
+        'blk_ids'           => 'This entry cannot be copied because one of its fields is not named after the entry. Your page is unchanged. Please contact whoever looks after your website. (Code S8)',
         'blk_nested'        => 'These entries cannot be changed here because they are nested inside one another. Your page is unchanged. Please contact whoever looks after your website. (Code S6)',
         'unsaved_warn'      => 'There are unsaved changes. Do you want to discard them?',
     ],
@@ -3596,7 +3632,51 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   }
   document.addEventListener('input',refresh);
   document.addEventListener('change',refresh);
-  form.addEventListener('submit',function(){leaving=true;});
+  // Keep the session alive while someone types, and check it before sending
+  // changes: past the inactivity limit the server answers with the sign-in
+  // page and the entries would be lost. If it has ended, the form stays
+  // and the client signs in again in a new tab.
+  var PING=<?=json_encode($selfUrl . '?pesi_ping=1')?>, EVERY=<?=min(300, intdiv($pesiIdle, 3))?>*1000;
+  var ENDED=<?=json_encode($t['session_ended'], JSON_UNESCAPED_UNICODE)?>, SIGNIN=<?=json_encode($t['session_signin'], JSON_UNESCAPED_UNICODE)?>;
+  var alive=Date.now(), pinging=false, checked=false;
+  function ping(){
+    return fetch(PING,{credentials:'same-origin',cache:'no-store'}).then(function(r){
+      if(r.status===401) return false;
+      if(!r.ok) return null;
+      return r.json().then(function(j){
+        alive=Date.now();
+        document.querySelectorAll('input[name="pesi_csrf"]').forEach(function(i){ i.value=j.csrf; });
+        return true;
+      });
+    }).catch(function(){ return null; });
+  }
+  function keepAlive(){
+    if(pinging||Date.now()-alive<EVERY) return;
+    pinging=true; ping().then(function(){ pinging=false; });
+  }
+  function ended(){
+    var box=document.getElementById('svEnded');
+    if(!box){
+      box=document.createElement('div'); box.id='svEnded'; box.className='ms error'; box.setAttribute('role','alert');
+      var s=document.createElement('span'); s.textContent=ENDED; box.appendChild(s);
+      var a=document.createElement('a'); a.className='ms-l'; a.href=<?=json_encode($selfUrl)?>; a.target='_blank'; a.rel='noopener'; a.textContent=SIGNIN; box.appendChild(a);
+      var w=form.querySelector('.cnt-wrap')||form; w.insertBefore(box,w.firstChild);
+    }
+    box.scrollIntoView({block:'center'});
+  }
+  document.addEventListener('input',keepAlive);
+  form.addEventListener('submit',function(e){
+    // Nothing to lose, recently confirmed, or a browser that cannot repeat
+    // the click with the same button: send as is.
+    if(checked||count()===0||Date.now()-alive<EVERY||!form.requestSubmit||!('submitter' in e)){ leaving=true; return; }
+    e.preventDefault();
+    var by=e.submitter;
+    ping().then(function(ok){
+      if(ok===false){ leaving=false; ended(); return; }
+      checked=true; leaving=true;
+      if(by) form.requestSubmit(by); else form.requestSubmit();
+    });
+  });
   form.querySelectorAll('button[name="pesi_block"],button[name="pesi_toggle"],button[name="pesi_restore"]').forEach(function(b){
     b.addEventListener('click',function(e){
       var c=b.getAttribute('data-confirm');
