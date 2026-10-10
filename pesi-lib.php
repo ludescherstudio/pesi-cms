@@ -52,12 +52,19 @@ if (!function_exists('pesi')) {
         return preg_match('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $c) ? $c : '#a3611b';
     }
 
+    // Image source: an internal path, or an external HTTPS address. No file
+    // extension is required (many image services have none); for uploads
+    // the content is what counts, see _pesi_image_mime().
     function _pesi_safe_asset_url(string $url): string {
         $url = trim($url);
         // Backslash: browsers read "\\host/x.jpg" as a protocol-relative URL.
-        if ($url === '' || preg_match('/[\x00-\x1F\x7F<>"\'\\\\]/', $url)) return '';
+        if ($url === '' || strlen($url) > 2048 || preg_match('/[\x00-\x1F\x7F<>"\'\\\\]/', $url)) return '';
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $url)) {
-            return preg_match('/^https?:\/\//i', $url) ? $url : '';
+            // http:// would be mixed content on an HTTPS site. Credentials in
+            // the address (user:pass@host) have no place in an image source.
+            if (!preg_match('/^https:\/\//i', $url) || !filter_var($url, FILTER_VALIDATE_URL)) return '';
+            $p = parse_url($url);
+            return is_array($p) && ($p['host'] ?? '') !== '' && !isset($p['user']) && !isset($p['pass']) ? $url : '';
         }
         return substr($url, 0, 2) === '//' ? '' : $url;
     }
