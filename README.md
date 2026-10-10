@@ -359,6 +359,16 @@ Shipped German uses formal address (*Sie*), like every product of the family; it
 <img src="<?= pesi('portrait', '/uploads/portrait.jpg', 'image', 'Portrait') ?>" alt="">
 ```
 
+Use an image value only as an image source: in `src`, or in a quoted CSS `url('…')` for a background image. Never in `href`, a script or an unquoted attribute.
+
+**External images.** Instead of uploading, the client can enter an external `https://` address under *Advanced*. No file extension is required. pesi checks the address (valid URL with a host, no credentials, at most 2048 characters) and rejects `http://`, `data:`, `javascript:`, protocol-relative and other addresses. pesi never fetches it; the visitor's browser loads it directly. That has three consequences:
+
+- **CSP.** If the website sends a Content-Security-Policy, its `img-src` must allow the image host, for any HTTPS host for example `img-src 'self' https: data:;`. Keep the sources you already need and do not loosen other directives. pesi sets no CSP for the website and does not change yours. If the policy also covers `/pesi`, the dashboard preview is blocked too. A blocked or unreachable image shows a short error at the image card
+- **Privacy.** The image host receives the visitor's IP address. Mention it in the privacy policy, and add `referrerpolicy="no-referrer"` to the `<img>` so it does not also learn which page was viewed
+- **Availability.** The image host is responsible for the image staying online and unchanged
+
+Uploading is the better default: the image is stored locally, scaled down and stripped of metadata.
+
 **Image description.** A `text` field whose ID is the image ID plus `_alt` belongs to that image. Put it in the `alt` attribute:
 
 ```php
@@ -573,10 +583,10 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 - Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. Typing in an open form counts as activity, and before unsaved changes are sent the dashboard checks the session: if it has ended, the entries stay in the form and the client signs in again in a new tab. `session.gc_maxlifetime` is raised to the inactivity limit where it is lower. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
 - Request parameters that arrive as arrays (`name[]=…`) are treated as empty instead of raising PHP warnings
 - CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY`, a `frame-ancestors 'none'` policy and `Cache-Control: no-store`
-- `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save
+- `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save. `image` accepts internal paths and external `https://` addresses only
 - `richtext` is sanitized through a server-side allowlist before it is saved and on every render; PHP tags and HTML comments inside it are removed
 - Field values containing pesi structure markers are rejected before writing (code `S2`)
-- Image uploads are checked by real MIME type (`finfo`, falling back to `getimagesize()`), size and extension; SVG is deliberately not allowed; the upload folder must stay inside the project root
+- Image uploads are checked by their content (`finfo`, falling back to `getimagesize()`), not by their file name; the stored extension is derived from the detected type, and `PESI_UPLOAD_TYPES` only narrows the allowed types further. Size is limited; SVG is deliberately not allowed; the upload folder must stay inside the project root
 - Uploaded JPEG, PNG and WebP files lose their metadata before they are published, and an image whose structure cannot be read is rejected instead of published unchecked
 - Every write goes to a same-directory temporary file, is flushed and linted with `php -l` there, then atomically replaces the live page; a failed write never truncates the live page. If the check cannot run, nothing is published (`T7`)
 - The backup rotation and the live swap succeed or fail together: if any step fails, the previous backups are put back
@@ -651,7 +661,7 @@ $PESI_PAGES = [
 - The login throttle keeps a **SHA-256 hash** of the client IP plus a counter, never the address, and drops entries an hour after they expire
 - Replaced images are deleted once the page and all of its backups no longer reference them — no orphaned portraits on the web space
 - Uploaded photos lose their camera metadata before they go online: GPS location, device, time of capture, author and comments. The only thing kept is the rotation, so portrait photos stay upright. This happens in plain PHP and does not depend on `gd`
-- No external requests at any time: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`
+- pesi loads nothing of its own from elsewhere: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`. An external image address entered in an image field does make the visitor's browser contact that host (see *External images*)
 
 ---
 
@@ -712,6 +722,10 @@ The web server has no write permission on the PHP file or the folder. Set permis
 
 Quill is bundled inside `pesi.php` — no CDN requests are made. The most likely cause is a strict **Content-Security-Policy** that disallows inline scripts (`script-src` without `'unsafe-inline'`). Look in your `.htaccess` or for a `<meta http-equiv="Content-Security-Policy">` tag. Add `'unsafe-inline'` or exclude the `/pesi` path from the policy.
 
+### An external image shows in the dashboard but not on the website
+
+The website's Content-Security-Policy blocks the image host. Allow it in `img-src`, see *External images* under Field types. The browser console names the blocked address.
+
 ### Uploads fail as "too large" well below 5 MB
 
 The hosting caps uploads (`upload_max_filesize`, often 2 MB) below `PESI_UPLOAD_MAX_BYTES`. pesi shows the smaller, effective limit in the message and reports the mismatch as `T14` in the diagnostics panel. Raise the limit in the hosting or lower `PESI_UPLOAD_MAX_BYTES`. An upload above `post_max_size` is dropped by PHP before pesi runs; pesi detects the empty request and tells the client that nothing, including text changes, was saved.
@@ -756,7 +770,7 @@ On shared hosting `php` on the command line is often an older version than the w
 - **Toggles must not be nested** — a `pesi:toggle` inside another one disables switching for that page, and the dashboard says so
 - **Repeatable entries must not be nested** — a `pesi:item` inside another one disables add, duplicate, reorder and delete for that page (`S6`); the fields stay editable. A toggle may contain entries
 - **No multi-user system** — one password for everyone
-- **AVIF and GIF uploads are published as they are.** GIF cannot carry camera metadata; AVIF can, and pesi does not rewrite it. Ask clients to upload phone photos as JPEG. Scaled-down images also lose their colour profile, so wide-gamut photos can look slightly less saturated
+- **AVIF and GIF uploads are published as they are.** They get no structure check of their own: with `gd` they must decode, without `gd` only their file signature is checked. GIF cannot carry camera metadata; AVIF can, and pesi does not rewrite it. Ask clients to upload phone photos as JPEG. Scaled-down images also lose their colour profile, so wide-gamut photos can look slightly less saturated
 - **A short version history, not an archive.** pesi keeps the last `PESI_BACKUP_COUNT` states per page (5 by default, at most 20), counted in saves, not in days. That covers *"the text from this morning was better"*. A client who saves ten times on Monday has no Friday version of last week left — that is what your host's backups are for. Check that they are enabled before go-live, and tell the client where the boundary runs
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content
 - **Not meant for simultaneous heavy editing** — dashboard writes are lock-protected against each other. An FTP upload or deploy does not use that lock: pesi catches most overlaps and asks the editor to reload, but an upload that lands in the last milliseconds before a save is overwritten. Do not upload a page via FTP while the client may be saving it

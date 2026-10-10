@@ -1873,6 +1873,15 @@ function _pesi_image_scale(string $d, string $mime, int $maxEdge): ?string {
     return $ok && $out !== '' ? $out : null;
 }
 
+// GIF and AVIF are published as they are, without a structure check of
+// their own. Where gd reads the format, the file has to decode, so a bare
+// signature in front of other data does not pass as an image.
+function _pesi_image_decodes(string $d, string $mime): bool {
+    $fn = ['image/gif' => 'imagecreatefromgif', 'image/avif' => 'imagecreatefromavif'][$mime] ?? '';
+    if ($fn === '' || !function_exists($fn) || !function_exists('imagecreatefromstring')) return true;
+    return @imagecreatefromstring($d) !== false;
+}
+
 /**
  * Prepares an uploaded image for publishing: scale down if needed,
  * then remove metadata. Works on the freshly uploaded file that
@@ -1896,6 +1905,7 @@ function _pesi_prepare_image(string $path, string $mime, ?int $maxEdge = null): 
     // in the minimal EXIF; scaling reads it from there.
     $out = $strip($d);
     if ($out === null) return false;
+    if (!_pesi_image_decodes($d, $mime)) return false;
     $scaled = _pesi_image_scale($out, $mime, $maxEdge);
     // GD writes its own comment ("CREATOR: gd-jpeg") into the file.
     if ($scaled !== null) $out = $strip($scaled);
@@ -2330,6 +2340,8 @@ function _pesi_strings(): array { return [
         'ob_dismiss'        => 'Verstanden',
         'img_drop'          => 'Bild hierher ziehen oder klicken zum Auswählen',
         'img_current'       => 'Aktuelles Bild:',
+        'img_load_err'      => 'Dieses Bild lässt sich nicht laden. Bitte prüfen Sie die Adresse.',
+        'img_path_ph'       => '/uploads/… oder https://…',
         'img_advanced'      => 'Erweitert: Pfad / externe URL',
         'img_lib'           => 'Bereits hochgeladenes Bild wählen',
         'img_lib_pick'      => 'Dieses Bild verwenden: %s',
@@ -2491,6 +2503,8 @@ function _pesi_strings(): array { return [
         'ob_dismiss'        => 'Got it',
         'img_drop'          => 'Drag an image here or click to choose',
         'img_current'       => 'Current image:',
+        'img_load_err'      => 'This image cannot be loaded. Please check the address.',
+        'img_path_ph'       => '/uploads/… or https://…',
         'img_advanced'      => 'Advanced: path / external URL',
         'img_lib'           => 'Choose an image you already uploaded',
         'img_lib_pick'      => 'Use this image: %s',
@@ -2783,6 +2797,7 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .img-alt{display:flex;flex-direction:column;gap:4px;margin-top:6px;padding-top:10px;border-top:1px solid var(--bd)}
 .img-alt-l{font-size:.85rem;font-weight:600;color:var(--tx);cursor:pointer}
 .img-alt-note{font-size:12px;font-weight:600;color:#8a5a00}
+.img-err{font-size:12px;font-weight:600;color:var(--er);margin:0}
 .img-cur{margin:0}
 .img-name{font-size:12px;color:var(--tx3);margin-top:5px}
 .img-name span{color:var(--tx2);font-weight:500}
@@ -3292,12 +3307,13 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   <textarea id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" class="fi" rows="4"<?=$fx?>><?=htmlspecialchars($val)?></textarea>
 
                 <?php elseif ($fld['type'] === 'image'): ?>
-                  <?php $hasImg = trim($fld['value']) !== ''; ?>
+                  <?php $imgSrc = _pesi_safe_asset_url((string)$fld['value']); $hasImg = $imgSrc !== ''; ?>
                   <div class="img-field" data-img>
                     <figure class="img-cur"<?=$hasImg?'':' hidden'?> data-img-fig>
-                      <img class="img-prev" src="<?=$hasImg?htmlspecialchars($fld['value']):''?>" alt="" data-img-prev>
-                      <figcaption class="img-name"><?=htmlspecialchars($t['img_current'])?> <span data-img-name><?=$hasImg?htmlspecialchars(basename($fld['value'])):''?></span></figcaption>
+                      <img class="img-prev" src="<?=htmlspecialchars($imgSrc)?>" alt="" data-img-prev>
+                      <figcaption class="img-name"><?=htmlspecialchars($t['img_current'])?> <span data-img-name><?=$hasImg?htmlspecialchars(basename(strtok($imgSrc, '?#'))):''?></span></figcaption>
                     </figure>
+                    <p class="img-err" role="alert" data-img-err hidden><?=htmlspecialchars($t['img_load_err'])?></p>
                     <label class="img-drop" data-img-drop>
                       <input type="file" id="<?=$fid?>" name="pesi_upload_<?=htmlspecialchars($id)?>" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" data-img-input class="sr">
                       <span><?=htmlspecialchars($t['img_drop'])?></span>
@@ -3310,7 +3326,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                     <?php endif; ?>
                     <details class="img-adv"<?=$isDraft || $bad ? ' open' : ''?>>
                       <summary><?=htmlspecialchars($t['img_advanced'])?></summary>
-                      <input type="text" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi img-path" placeholder="/uploads/…">
+                      <input type="text" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi img-path" placeholder="<?=htmlspecialchars($t['img_path_ph'])?>">
                     </details>
                     <?php if (isset($altOf[$id])):
                       $aid   = $altOf[$id];
@@ -3521,6 +3537,27 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
     if(!inp) return;
     var altNote=w.querySelector('[data-img-alt-note]');
     var path=w.querySelector('.img-path');
+    // An external address can be unreachable, or blocked by the website's
+    // CSP: say so at the image instead of showing a broken icon.
+    var err=w.querySelector('[data-img-err]');
+    if(pv&&err){
+      var failed=function(){ err.hidden=!(pv.getAttribute('src')&&fig&&!fig.hidden); pv.hidden=!err.hidden; };
+      pv.addEventListener('error',failed);
+      pv.addEventListener('load',function(){ err.hidden=true; pv.hidden=false; });
+      if(pv.complete&&pv.getAttribute('src')&&pv.naturalWidth===0) failed();
+    }
+    // A typed path or address shows up in the preview once the field is left.
+    if(path) path.addEventListener('change',function(){
+      var v=path.value.trim();
+      if(v===''){ if(fig) fig.hidden=true; if(err) err.hidden=true; return; }
+      if(!/^(\/(?!\/)|https:\/\/)/i.test(v)) return;
+      inp.value='';
+      if(err) err.hidden=true;
+      if(fig) fig.hidden=false;
+      if(nm) nm.textContent=v.split(/[?#]/)[0].split('/').pop()||v;
+      if(pv) pv.src=v;
+      if(altNote) altNote.hidden=false;
+    });
     // Picking an already uploaded image only sets the path. The tiles
     // are created on first expand only, so a page with many
     // image fields does not load every thumbnail several times.

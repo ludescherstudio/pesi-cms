@@ -95,7 +95,7 @@ must be one of the seven below; an unknown type such as `urll` is reported as
 | `text` | Single-line input | Headings, names, button text and short strings used in text context |
 | `textarea` | Multi-line textarea | Plain-text paragraphs, disclaimers, descriptions without formatting. Line breaks collapse in HTML unless you output the value with `nl2br()` or style `white-space: pre-line` |
 | `richtext` | Quill WYSIWYG editor | Formatted HTML blocks with `<p>`, `<strong>`, `<ul>`, `<a>` etc. |
-| `image` | Image preview + file upload + path field | Photos that the client must be able to swap (team members, gallery, hero image) |
+| `image` | Image preview + file upload + path or `https://` address | Photos that the client must be able to swap (team members, gallery, hero image) |
 | `url` | Validated link input | `http(s)` URLs, `/internal` paths, queries and anchors used in `href` |
 | `email` | Validated email input | Address used after `mailto:` |
 | `tel` | Validated phone input | Number used after `tel:` |
@@ -136,7 +136,11 @@ image's card. Decorative images (backgrounds, ornaments) keep `alt=""` and get
 no description field. Inside a `pesi:item`, the `_alt` field follows the
 image's ID (`team_1_foto` → `team_1_foto_alt`).
 
-Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
+Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi checks the file by its content (real MIME + size; the extension is derived from the content, never trusted), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored value is escaped on output.
+
+Use the value **only as an image source**: in `src`, or in a quoted CSS `url('…')` for a background image. Never in `href`, a script or an unquoted attribute.
+
+Clients may also enter an external `https://` address instead of uploading; no file extension is required. pesi validates it and rejects `http://`, `data:`, `javascript:`, protocol-relative addresses and credentials in the URL. pesi never fetches it, the visitor's browser does. If the site sends a CSP whose `img-src` does not allow external HTTPS hosts, such images break on the live site; see Bug 4 in Step 8.
 
 ### Heredoc syntax for richtext
 
@@ -619,6 +623,10 @@ If the site uses both `ErrorDocument 403` and an HTTPS redirect rule, Apache may
 Quill is bundled directly inside `pesi.php` — no CDN requests are made. However, if the site has a `Content-Security-Policy` header with `script-src` that does **not** include `'unsafe-inline'`, the inline `<script>` block containing Quill will be blocked. The result: richtext fields render as a blank box with no toolbar.
 
 If a CSP header is found (via `.htaccess` `Header set Content-Security-Policy` or a `<meta http-equiv="Content-Security-Policy">` tag), and it restricts `script-src`, add a nonce or `'unsafe-inline'` — or simply exclude the dashboard path from the CSP rule. Do not add a CSP header if none exists.
+
+**Bug 4 — Strict Content Security Policy with `img-src` blocks external images**
+
+If the site's CSP restricts `img-src` (or `default-src` without an `img-src`), external image addresses entered in `image` fields show a broken image on the live site, and in the dashboard too if the policy covers `/pesi`. Extend `img-src` with the needed hosts, or with `https:` for any HTTPS host, for example `img-src 'self' https: data:;`. Keep every source already listed and do not loosen any other directive. Do not add a CSP if none exists. Note in the report that external images send the visitor's IP to the image host (privacy policy) and recommend `referrerpolicy="no-referrer"` on those `<img>` tags.
 
 ### Step 9 — Update robots.txt
 
