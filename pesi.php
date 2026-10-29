@@ -23,7 +23,7 @@ require_once $corePath;
 // (only one of the two replaced) or a pesi-core.php from 0.3 that does not
 // load pesi-lib.php yet would otherwise end in a fatal error somewhere. The
 // public website is not affected; it does not need pesi.php.
-$pesiVersion = '0.5.0';
+$pesiVersion = '0.6.0';
 if (!defined('PESI_VERSION') || PESI_VERSION !== $pesiVersion) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
