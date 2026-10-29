@@ -27,6 +27,7 @@ foreach ([
     'PESI_UPLOAD_MAX_BYTES' => 5 * 1024 * 1024,
     'PESI_UPLOAD_TYPES'     => 'jpg,jpeg,png,webp,avif,gif',
     'PESI_IMAGE_MAX_EDGE'   => 2560,
+    'PESI_IMAGE_SIZES'      => '480,960,1600',
 ] as $pesiKey => $pesiDefault) {
     if (!defined($pesiKey)) define($pesiKey, $pesiDefault);
 }
@@ -42,7 +43,7 @@ if (!function_exists('pesi')) {
     // Die Feldtypen, die Parser, Dashboard und Saver kennen. Ein Tippfehler
     // wie 'urll' ist kein Feld, sondern eine Diagnose (T13).
     function _pesi_types(): array {
-        return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel'];
+        return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel', 'date'];
     }
 
     // BRAND_COLOR landet in einem <style>. Nur Hex-Werte, sonst der Standard.
@@ -84,6 +85,29 @@ if (!function_exists('pesi')) {
         return preg_match('/^(?=.*\d)[0-9+()\.\-\/ ]{3,40}$/', $tel) ? $tel : '';
     }
 
+    // Ein Kalendertag als YYYY-MM-DD, so wie <input type="date"> ihn sendet.
+    function _pesi_safe_date(string $date): string {
+        $date = trim($date);
+        if ($date === '') return '';
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m)) return '';
+        return checkdate((int)$m[2], (int)$m[3], (int)$m[1]) ? $date : '';
+    }
+
+    /**
+     * Fokuspunkt eines Bilds (<bild-id>_focus) als „X% Y%“, beide 0–100. Der
+     * Wert steht im Template in object-position; alles andere könnte dort
+     * eigenes CSS anhängen. '' = kein Fokus, null = ungültig.
+     */
+    function _pesi_safe_focus(string $v): ?string {
+        $v = trim($v);
+        if ($v === '') return '';
+        if (!preg_match('/^(\d{1,3}(?:[.,]\d+)?)\s*%?\s*[ ,;]\s*(\d{1,3}(?:[.,]\d+)?)\s*%?$/', $v, $m)) return null;
+        $x = (float)str_replace(',', '.', $m[1]);
+        $y = (float)str_replace(',', '.', $m[2]);
+        if ($x > 100 || $y > 100) return null;
+        return (int)round($x) . '% ' . (int)round($y) . '%';
+    }
+
     function _pesi_safe_typed_value(string $value, string $type): ?string {
         if ($type === 'url') {
             $safe = _pesi_safe_link_url($value);
@@ -91,6 +115,8 @@ if (!function_exists('pesi')) {
             $safe = _pesi_safe_email($value);
         } elseif ($type === 'tel') {
             $safe = _pesi_safe_tel($value);
+        } elseif ($type === 'date') {
+            $safe = _pesi_safe_date($value);
         } else {
             return $value;
         }
@@ -248,7 +274,7 @@ if (!function_exists('pesi')) {
         if ($type === 'image') {
             return _pesi_e(_pesi_safe_asset_url($default));
         }
-        if (in_array($type, ['url', 'email', 'tel'], true)) {
+        if (in_array($type, ['url', 'email', 'tel', 'date'], true)) {
             return _pesi_e(_pesi_safe_typed_value($default, $type) ?? '');
         }
         if ($type !== 'richtext') {
@@ -293,6 +319,97 @@ if (!function_exists('pesi_text')) {
         $s = (string)preg_replace('#<(?:br|/?(?:p|div|li|ul|ol|h[1-6]|blockquote))\b[^>]*>#i', ' ', $s);
         $s = html_entity_decode(strip_tags($s), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return trim((string)preg_replace('/[\s\x{00A0}]+/u', ' ', $s));
+    }
+}
+
+if (!function_exists('pesi_date')) {
+    /**
+     * Ein date-Feld lesbar: pesi_date(pesi('kurs', '2026-08-15', 'date', 'Kursbeginn'))
+     * ergibt „15. August 2026“ (LANG 'en': „15 August 2026“). $format nimmt die
+     * Zeichen von date(); Monats- und Tagesnamen (F, M, l, D) kommen in der
+     * Sprache der Website, ohne ext/intl. Leer oder ungültig → ''.
+     */
+    function pesi_date(string $iso, string $format = ''): string {
+        $iso = _pesi_safe_date(html_entity_decode($iso, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($iso === '') return '';
+        [$y, $m, $d] = array_map('intval', explode('-', $iso));
+        $ts = mktime(12, 0, 0, $m, $d, $y);
+        $de = (defined('LANG') ? LANG : 'de') !== 'en';
+        if ($format === '') $format = $de ? 'j. F Y' : 'j F Y';
+        $names = $de ? [
+            'F' => ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'],
+            'M' => ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sept.', 'Okt.', 'Nov.', 'Dez.'],
+            'l' => ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'],
+            'D' => ['So.', 'Mo.', 'Di.', 'Mi.', 'Do.', 'Fr.', 'Sa.'],
+        ] : [];
+        $out = '';
+        for ($i = 0, $n = strlen($format); $i < $n; $i++) {
+            $c = $format[$i];
+            if ($c === '\\' && $i + 1 < $n) { $out .= $format[++$i]; continue; }
+            if (isset($names[$c])) {
+                $out .= $names[$c][in_array($c, ['F', 'M'], true) ? $m - 1 : (int)date('w', $ts)];
+            } elseif (preg_match('/[A-Za-z]/', $c)) {
+                $out .= date($c, $ts);
+            } else {
+                $out .= $c;   // auch Bytes von UTF-8-Zeichen bleiben, wie sie sind
+            }
+        }
+        return _pesi_e($out);
+    }
+}
+
+/**
+ * Verkleinerte Fassungen eines hochgeladenen Bilds: neben foto-a1b2c3d4e5f6.jpg
+ * liegen foto-a1b2c3d4e5f6-480w.jpg usw., die Zahl ist die Breite in Pixeln.
+ * Rückgabe: [Breite => absoluter Pfad], aufsteigend. pesi.php legt sie beim
+ * Upload an und löscht sie mit dem Original.
+ */
+if (!function_exists('_pesi_variant_files')) {
+    function _pesi_variant_files(string $abs): array {
+        $ext = pathinfo($abs, PATHINFO_EXTENSION);
+        if ($ext === '' || !preg_match('/^[a-z0-9]+$/i', $ext)) return [];
+        $base = substr($abs, 0, -strlen($ext) - 1);
+        // Nur pesis eigene Uploads (…-<12 Hex>.jpg) haben Fassungen. Eine von
+        // Hand abgelegte logo.png darf logo-20w.png nicht mitreißen.
+        if (!preg_match('/-[0-9a-f]{12}$/', $base)) return [];
+        $out  = [];
+        foreach (glob(str_replace(['[', '*', '?'], ['[[]', '[*]', '[?]'], $base) . '-*w.' . $ext) ?: [] as $f) {
+            $w = substr($f, strlen($base) + 1, -strlen($ext) - 2);
+            if (preg_match('/^[1-9]\d{1,4}$/', $w) && is_file($f)) $out[(int)$w] = $f;
+        }
+        ksort($out);
+        return $out;
+    }
+}
+
+if (!function_exists('pesi_srcset')) {
+    /**
+     * srcset für ein image-Feld, damit Telefone kleinere Dateien laden:
+     *   <img src="<?= $bild = pesi('hero', …, 'image', 'Bild') ?>"
+     *        srcset="<?= pesi_srcset($bild) ?>" sizes="100vw" alt="">
+     * Nur für Bilder, die über das Dashboard hochgeladen wurden und für die gd
+     * verkleinerte Fassungen anlegen konnte; sonst '' und der Browser nimmt src.
+     */
+    function pesi_srcset(string $src): string {
+        $path = html_entity_decode($src, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($path === '' || $path[0] !== '/' || _pesi_safe_asset_url($path) !== $path) return '';
+        if (preg_match('#(^|/)\.\.?(/|$)#', $path) || !preg_match('#^[A-Za-z0-9._/-]+$#', $path)) return '';
+        $abs = __DIR__ . $path;
+        $variants = is_file($abs) ? _pesi_variant_files($abs) : [];
+        if (!$variants) return '';
+        $dir = rtrim(dirname($path), '/');
+        $set = [];
+        foreach ($variants as $w => $f) $set[] = $dir . '/' . basename($f) . ' ' . $w . 'w';
+        // Das Original mit seiner Breite. Ein Hochkantfoto, das nur per EXIF
+        // gedreht ist, meldet Breite und Höhe vertauscht; die Fassungen sind
+        // tatsächlich gedreht und verraten die richtige Ausrichtung.
+        $o = @getimagesize($abs);
+        $v = @getimagesize(end($variants));
+        if (is_array($o) && is_array($v) && $o[0] !== $o[1] && ($o[0] > $o[1]) !== ($v[0] > $v[1])) {
+            $o = [$o[1], $o[0]];
+        }
+        if (is_array($o) && $o[0] > array_key_last($variants)) $set[] = $path . ' ' . $o[0] . 'w';
+        return _pesi_e(implode(', ', $set));
     }
 }
 

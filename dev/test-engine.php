@@ -1685,10 +1685,12 @@ $f = tmpImg($FX['gif'], 'gif');
 ok('GIF bleibt unverändert', _pesi_prepare_image($f, 'image/gif', 10) && file_get_contents($f) === $FX['gif']);
 
 if ($hasGd) {
-    // Zu wenig Speicher: unverkleinert, aber bereinigt, kein Fatal Error
+    // Zu wenig Speicher: unverkleinert, aber bereinigt, kein Fatal Error.
+    // Das Testbild vor dem Absenken erzeugen: Ein mitgeliefertes gd (Windows)
+    // zählt gegen memory_limit, das 3000×3000-Bild selbst sprengte sonst die Grenze.
+    $f = tmpImg(dirtyJpeg(enc(quad(3000, 3000), 'imagejpeg'), 6));
     $oldLimit = ini_get('memory_limit');
     ini_set('memory_limit', (string)(memory_get_usage() + 8 * 1048576));
-    $f = tmpImg(dirtyJpeg(enc(quad(3000, 3000), 'imagejpeg'), 6));
     $okp = _pesi_prepare_image($f, 'image/jpeg', 300);
     ini_set('memory_limit', $oldLimit);
     $out = (string)file_get_contents($f);
@@ -1968,7 +1970,7 @@ foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'blk_nested', 'err_no_lint', 'err_dup_ids', 'rt_no_dom',
           'warn_dup_ids', 'warn_no_tokenizer', 'warn_no_dom', 'warn_unparsed', 'warn_default_pw',
           'warn_no_exec', 'warn_upload_limit', 'login_unavailable',
-          'warn_no_gd', 'pw_err_write', 'pw_err_file'] as $k) {
+          'warn_no_gd', 'pw_err_write', 'pw_err_file', 'warn_exposed'] as $k) {
     foreach (['de', 'en'] as $l) {
         ok("$l/$k trägt einen Code", (bool)preg_match('/\(Code [ST]\d+/', $s[$l][$k]),
             $s[$l][$k]);
@@ -2261,7 +2263,75 @@ ok('Dateiauswahl ist per Tastatur erreichbar (nicht hidden)',
     && !preg_match('/<input type="file"[^>]*\bhidden\b/', $x['out']));
 ok('URL-Platzhalter kommt aus der Sprachtabelle',
     strpos($x['out'], 'placeholder="' . htmlspecialchars($GLOBALS['t']['url_ph']) . '"') !== false);
+ok('Gruppe ohne Bild bietet keinen Mehrfach-Upload an', strpos($x['out'], 'pesi_many_team') === false);
 $cpReset();
+
+// ── Seitenauswahl, Datum, Fokuspunkt, mehrere Bilder, Selbsttest ──
+// Zweite registrierte Seite mit allem, was 0.5 dazubringt.
+grp('Dashboard — Seitenauswahl, Datum, Fokus, Galerie');
+$kp = $ctl . '/site/impressum.php';
+$kpSrc = "<?php require_once 'pesi-core.php'; ?>\n"
+    . "<a href=\"<?= pesi('mehr', '/', 'url', 'Mehr') ?>\">x</a>\n"
+    . "<p><?= pesi_date(pesi('kurs', '2026-08-15', 'date', 'Kursbeginn')) ?></p>\n"
+    . "<img src=\"<?= pesi('hero', '/uploads/h.jpg', 'image', 'Hero') ?>\" style=\"object-position: <?= pesi('hero_focus', '30% 60%', 'text', 'Ausschnitt') ?>\" alt=\"\">\n"
+    . "<!-- pesi:item gal:1 -->\n<img src=\"<?= pesi('gal_1_bild', '/uploads/g.jpg', 'image', 'Bild') ?>\" alt=\"<?= pesi('gal_1_bild_alt', 'Wald', 'text', 'Beschreibung') ?>\">\n<!-- /pesi:item -->\n";
+$kpReset = function () use ($kp, $kpSrc) {
+    foreach (['', '.pesi-backup.1', '.pesi-backup.2'] as $s) @unlink($kp . $s);
+    file_put_contents($kp, $kpSrc);
+};
+$kpReset();
+$kAct = function (array $post) use ($ctlRun, $a, $kp) {
+    return $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'get' => ['page' => 'impressum.php'],
+        'post' => $post + ['pesi_save' => '1', 'pesi_csrf' => $a['csrf'], 'pesi_hash' => hash_file('sha256', $kp)]]);
+};
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'impressum.php']])['out'];
+ok('url-Feld bietet die Seiten der Website an', strpos($o, 'data-url-pick="f_mehr"') !== false
+    && strpos($o, '<option value="/">Startseite</option>') !== false
+    && strpos($o, '<option value="/datenschutz.php">Datenschutz</option>') !== false, substr($o, 0, 200));
+ok('… ohne die Stammdaten', strpos($o, '>Stammdaten</option>') === false);
+ok('… und die Auswahl hat keinen Namen, wird also nie gespeichert',
+    (bool)preg_match('/<select class="fi url-pick"(?![^>]*\bname=)[^>]*>/', $o));
+ok('date-Feld als Datumsauswahl', (bool)preg_match('/<input type="date" id="f_kurs" name="pesi_field_kurs" value="2026-08-15"/', $o));
+ok('Fokus steht in der Bildkarte, nicht als eigene Karte',
+    strpos($o, 'data-img-fp="f_hero_focus"') !== false && substr_count($o, 'name="pesi_field_hero_focus"') === 1
+    && strpos($o, '<label class="fc-label" for="f_hero_focus"') === false);
+ok('… Bildausschnitt ist per Tastatur erreichbar', (bool)preg_match('/<span class="img-fp"[^>]*tabindex="0"/', $o));
+ok('Galerie mit einem Bild nimmt mehrere Bilder an',
+    strpos($o, 'name="pesi_many_gal[]"') !== false && strpos($o, 'value="imgs:gal"') !== false);
+ok('… der Mehrfach-Upload zählt nicht als ungespeicherte Änderung',
+    (bool)preg_match('/<input type="file" multiple name="pesi_many_gal\[\]"[^>]*data-nodirty>/', $o));
+$pub = render($kp);
+ok('Website: Datum lesbar, Fokus im style', strpos($pub, '<p>15. August 2026</p>') !== false
+    && strpos($pub, 'object-position: 30% 60%') !== false, $pub);
+
+$x = $kAct(['pesi_field_hero_focus' => '50% 50%; background:url(//x.example/a)']);
+ok('Fokus mit angehängtem CSS → abgelehnt, Datei unverändert', file_get_contents($kp) === $kpSrc);
+ok('… Feld als fehlerhaft markiert', (bool)preg_match('/name="pesi_field_hero_focus"[^>]*aria-invalid="true"/', $x['out']));
+$x = $kAct(['pesi_field_hero_focus' => '12 34', 'pesi_field_kurs' => '2027-01-05']);
+$k = (string)file_get_contents($kp);
+ok('Fokus „12 34“ wird als „12% 34%“ gespeichert, Datum mit', strpos($k, "'12% 34%'") !== false && strpos($k, "'2027-01-05'") !== false, substr($x['out'], 0, 200));
+$kpReset();
+$x = $kAct(['pesi_field_kurs' => '2026-02-30']);
+ok('Datum 30. Februar → abgelehnt', file_get_contents($kp) === $kpSrc);
+
+$kpReset();
+$x = $kAct(['pesi_block' => 'imgs:gal']);
+ok('Mehrere Bilder ohne Dateien → nichts geändert, keine Sicherung', file_get_contents($kp) === $kpSrc && !is_file($kp . '.pesi-backup.1')
+    && strpos($x['out'], htmlspecialchars($GLOBALS['t']['err_no_changes'])) !== false);
+$x = $kAct(['pesi_block' => 'imgs:gal', 'pesi_toggle' => 'x']);
+ok('Mehrere Bilder + Toggle → mehrdeutig', strpos($x['out'], htmlspecialchars($GLOBALS['t']['err_ambiguous'])) !== false);
+
+// Selbsttest T21: Die Sicherung nach einem Speichern steht in der Prüfliste.
+$kAct(['pesi_field_kurs' => '2027-01-05']);
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'impressum.php']])['out'];
+$probe = preg_match('/var P=(\[.*?\]);/', $o, $pm) ? (array)json_decode($pm[1], true) : [];
+$bk = array_values(array_filter($probe, fn($p) => ($p['name'] ?? '') === 'impressum.php.pesi-backup.1'));
+ok('Selbsttest prüft die neue Sicherung mit ihrer Größe', $bk && $bk[0]['url'] === '/impressum.php.pesi-backup.1'
+    && $bk[0]['size'] === filesize($kp . '.pesi-backup.1'), $pm[1] ?? '(keine Liste)');
+ok('… Diagnose-Bereich ist vorhanden, die Meldung kommt aus der Sprachtabelle',
+    strpos($o, 'id="dgL"') !== false && strpos($o, json_encode($GLOBALS['t']['warn_exposed'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG)) !== false);
+$kpReset();
+@unlink($kp);
 
 $ctlClean();
 
@@ -2286,6 +2356,159 @@ foreach ([
 ] as $in => $want) {
     ok('human(' . json_encode($in) . ')', _pesi_human($in) === $want, 'bekam: ' . _pesi_human($in));
 }
+
+// ── Datum: date-Feld, pesi_date() ────────────────────────────
+grp('Datum — Prüfung und Ausgabe');
+foreach (['2026-08-15' => '2026-08-15', '' => '', ' 2026-08-15 ' => '2026-08-15', '2026-02-30' => '',
+          '15.08.2026' => '', '2026-8-15' => '', '2026-08-15x' => ''] as $in => $want) {
+    ok('_pesi_safe_date(' . json_encode($in) . ')', _pesi_safe_date((string)$in) === $want, _pesi_safe_date((string)$in));
+}
+ok('ungültig → null, leer → leer', _pesi_safe_typed_value('15.08.2026', 'date') === null && _pesi_safe_typed_value('', 'date') === '');
+ok('date ist ein bekannter Typ', in_array('date', _pesi_types(), true));
+ok('pesi_date Standard', pesi_date('2026-08-15') === '15. August 2026', pesi_date('2026-08-15'));
+ok('pesi_date mit Wochentag und kurzem Monat', pesi_date('2026-08-15', 'l, j. M Y') === 'Samstag, 15. Aug. 2026', pesi_date('2026-08-15', 'l, j. M Y'));
+ok('pesi_date numerisch, Backslash schützt ein Zeichen', pesi_date('2026-03-01', 'd.m.Y \\F') === '01.03.2026 F', pesi_date('2026-03-01', 'd.m.Y \\F'));
+ok('pesi_date nimmt die escapte Ausgabe von pesi()', pesi_date(pesi('d', '2026-12-24', 'date')) === '24. Dezember 2026');
+ok('pesi_date ungültig → leer', pesi_date('2026-02-30') === '' && pesi_date('') === '');
+ok('Versionsliste zeigt das Datum lesbar', _pesi_version_text('2026-08-15', 'date') === '15. August 2026');
+$dp = page("<?php ?>\n<p><?= pesi('kurs', '15.08.2026', 'date', 'Kurs') ?></p><p><?= pesi('t', 'a', 'text', 'T') ?></p>\n");
+$r = _pesi_save($dp, _pesi_parse($dp), ['pesi_field_kurs' => '', 'pesi_field_t' => 'b']);
+ok('ungültiger Standardwert, leer zurückgeschickt → bleibt, anderes Feld speichert',
+    $r['type'] === 'success' && strpos((string)file_get_contents($dp), "'15.08.2026'") !== false
+    && strpos((string)file_get_contents($dp), "'b'") !== false, $r['msg']);
+
+// ── Fokuspunkt: <bild-id>_focus ──────────────────────────────
+grp('Fokuspunkt — Zuordnung und Prüfung');
+$fx = [
+    'hero'       => ['id' => 'hero', 'value' => '/uploads/h.jpg', 'type' => 'image', 'label' => 'Hero'],
+    'hero_focus' => ['id' => 'hero_focus', 'value' => '50% 50%', 'type' => 'text', 'label' => ''],
+    'hero_alt'   => ['id' => 'hero_alt', 'value' => 'x', 'type' => 'text', 'label' => ''],
+    'x_focus'    => ['id' => 'x_focus', 'value' => '1% 1%', 'type' => 'text', 'label' => ''],
+];
+ok('Bild mit _focus-Textfeld wird gepaart, sonst nichts', _pesi_focus_pairs($fx) === ['hero' => 'hero_focus'], json_encode(_pesi_focus_pairs($fx)));
+ok('_alt-Paare unverändert', _pesi_alt_pairs($fx) === ['hero' => 'hero_alt']);
+foreach (['30% 60%' => '30% 60%', '30 60' => '30% 60%', '0%,100%' => '0% 100%', '33.4% 66,6%' => '33% 67%',
+          '' => '', 'center' => null, '120% 0%' => null, '50% 50%; background:red' => null,
+          '50% 50% 0' => null, '-5% 10%' => null] as $in => $want) {
+    ok('_pesi_safe_focus(' . json_encode($in) . ')', _pesi_safe_focus((string)$in) === $want, var_export(_pesi_safe_focus((string)$in), true));
+}
+$fp = page("<?php ?>\n<img src=\"<?= pesi('hero', '/uploads/h.jpg', 'image', 'Hero') ?>\" style=\"object-position: <?= pesi('hero_focus', 'center', 'text', 'Ausschnitt') ?>\">\n<p><?= pesi('t', 'a', 'text', 'T') ?></p>\n");
+$r = _pesi_save($fp, _pesi_parse($fp), ['pesi_field_hero_focus' => 'center', 'pesi_field_t' => 'b']);
+ok('unveränderter Integrationswert „center“ blockiert nichts', $r['type'] === 'success', $r['msg']);
+$r = _pesi_save($fp, _pesi_parse($fp), ['pesi_field_hero_focus' => 'top; color:red']);
+ok('geänderter ungültiger Fokus → abgelehnt', $r['type'] === 'error' && ($r['invalid'] ?? []) === ['hero_focus'], $r['msg']);
+
+// ── Verkleinerte Fassungen und srcset ────────────────────────
+grp('Bildgrößen — Fassungen, srcset, Bereinigung');
+ok('PESI_IMAGE_SIZES hat einen Standard', _pesi_image_sizes() === [480, 960, 1600], json_encode(_pesi_image_sizes()));
+$vu = $scratch . '/uploads';
+@mkdir($vu, 0777, true);
+$vh = 'foto-0123456789ab';
+foreach (["$vh.jpg", "$vh-480w.jpg", "$vh-960w.jpg", "$vh-12w.jpg.bak", 'logo.png', 'logo-20w.png'] as $n) file_put_contents("$vu/$n", 'x');
+ok('Fassungen eines Uploads werden gefunden, aufsteigend', array_keys(_pesi_variant_files("$vu/$vh.jpg")) === [480, 960],
+    json_encode(array_keys(_pesi_variant_files("$vu/$vh.jpg"))));
+ok('von Hand abgelegte Datei hat keine Fassungen', _pesi_variant_files("$vu/logo.png") === []);
+ok('srcset listet die Fassungen (Original ohne lesbare Größe fehlt)',
+    pesi_srcset("/uploads/$vh.jpg") === "/uploads/$vh-480w.jpg 480w, /uploads/$vh-960w.jpg 960w", pesi_srcset("/uploads/$vh.jpg"));
+ok('srcset nimmt die escapte Ausgabe von pesi()', pesi_srcset(pesi('b', "/uploads/$vh.jpg", 'image')) !== '');
+foreach (['https://x.example/a.jpg', '/uploads/../uploads/' . $vh . '.jpg', '/uploads/fehlt-0123456789ab.jpg', '', 'uploads/' . $vh . '.jpg'] as $bad) {
+    ok('srcset(' . json_encode($bad) . ') → leer', pesi_srcset($bad) === '');
+}
+$GLOBALS['vuList'] = array_column(_pesi_upload_list($scratch), 'name');
+ok('Bildauswahl zeigt keine Fassungen', !preg_grep('/-\d+w\.jpg$/', $GLOBALS['vuList']) && in_array("$vh.jpg", $GLOBALS['vuList'], true),
+    json_encode($GLOBALS['vuList']));
+_pesi_discard_uploads($scratch, ["/uploads/$vh.jpg"]);
+ok('Verwerfen löscht das Original mit seinen Fassungen', !is_file("$vu/$vh.jpg") && !is_file("$vu/$vh-480w.jpg") && !is_file("$vu/$vh-960w.jpg"));
+ok('… und nichts anderes', is_file("$vu/$vh-12w.jpg.bak") && is_file("$vu/logo-20w.png"));
+foreach (["$vh.jpg", "$vh-480w.jpg"] as $n) file_put_contents("$vu/$n", 'x');
+_pesi_cleanup_old($scratch, ["/uploads/$vh.jpg"], []);
+ok('Bild-Bereinigung löscht die Fassungen mit', !is_file("$vu/$vh.jpg") && !is_file("$vu/$vh-480w.jpg"));
+if (!$hasGd) {
+    ok('ohne gd entstehen keine Fassungen, kein Fehler', _pesi_make_variants("$vu/logo.png", 'image/png') === []);
+    echo "  (gd fehlt: Fassungen erzeugen wird übersprungen — php -d extension=gd dev/test-engine.php)\n";
+} else {
+    $mkImg = function (int $w, int $h): string {
+        $im = imagecreatetruecolor($w, $h);
+        imagefilledrectangle($im, 0, 0, $w - 1, $h - 1, imagecolorallocate($im, 200, 40, 40));
+        ob_start(); imagejpeg($im, null, 80); return (string)ob_get_clean();
+    };
+    file_put_contents("$vu/$vh.jpg", $mkImg(2000, 1000));
+    $made = _pesi_make_variants("$vu/$vh.jpg", 'image/jpeg', [480, 960, 1600, 4000]);
+    ok('Querformat: drei Fassungen, keine größer als das Original', array_keys(_pesi_variant_files("$vu/$vh.jpg")) === [480, 960, 1600]
+        && count($made) === 3, json_encode(array_map('basename', $made)));
+    ok('… mit der richtigen Breite', (getimagesize("$vu/$vh-960w.jpg")[0] ?? 0) === 960);
+    ok('… ohne gd-Kommentar', strpos((string)file_get_contents("$vu/$vh-480w.jpg"), 'CREATOR') === false);
+    ok('srcset nennt auch das Original', pesi_srcset("/uploads/$vh.jpg") === "/uploads/$vh-480w.jpg 480w, /uploads/$vh-960w.jpg 960w, /uploads/$vh-1600w.jpg 1600w, /uploads/$vh.jpg 2000w",
+        pesi_srcset("/uploads/$vh.jpg"));
+    _pesi_discard_uploads($scratch, ["/uploads/$vh.jpg"]);
+    file_put_contents("$vu/$vh.jpg", $mkImg(800, 1200));
+    _pesi_make_variants("$vu/$vh.jpg", 'image/jpeg', [480, 960]);
+    ok('Hochformat: Breite zählt, nicht die längere Kante', array_keys(_pesi_variant_files("$vu/$vh.jpg")) === [480]
+        && (getimagesize("$vu/$vh-480w.jpg")[1] ?? 0) === 720, json_encode(array_keys(_pesi_variant_files("$vu/$vh.jpg"))));
+    _pesi_discard_uploads($scratch, ["/uploads/$vh.jpg"]);
+    // Handyfoto: quer gespeichert, per EXIF (6) hochkant angezeigt — wie nach _pesi_prepare_image().
+    file_put_contents("$vu/$vh.jpg", (string)_pesi_jpeg_strip(dirtyJpeg(enc(quad(1200, 800), 'imagejpeg'), 6)));
+    _pesi_make_variants("$vu/$vh.jpg", 'image/jpeg', [480]);
+    $vi = @getimagesize("$vu/$vh-480w.jpg");
+    $vim = @imagecreatefromjpeg("$vu/$vh-480w.jpg");
+    ok('EXIF-gedreht: Fassung ist tatsächlich hochkant, 480 breit', is_array($vi) && $vi[0] === 480 && $vi[1] === 720
+        && $vim && corners($vim) === 'BRYG', json_encode($vi) . ' ' . ($vim ? corners($vim) : '-'));
+    ok('… srcset nennt das Original mit seiner angezeigten Breite', pesi_srcset("/uploads/$vh.jpg") === "/uploads/$vh-480w.jpg 480w, /uploads/$vh.jpg 800w",
+        pesi_srcset("/uploads/$vh.jpg"));
+    _pesi_discard_uploads($scratch, ["/uploads/$vh.jpg"]);
+}
+foreach (glob("$vu/*") as $f) @unlink($f);
+@rmdir($vu);
+
+// ── Mehrere Bilder als neue Einträge ─────────────────────────
+grp('Galerie — mehrere Bilder in einem Commit');
+$gSrc = "<?php require '" . $scratch . "/core.php'; ?>\n<!-- pesi:item gal:1 -->\n<figure><img src=\"<?= pesi('gal_1_bild', '/uploads/a.jpg', 'image', 'Bild') ?>\" alt=\"<?= pesi('gal_1_bild_alt', 'Wald', 'text', 'Beschreibung') ?>\">"
+    . "<figcaption><?= pesi('gal_1_text', 'Herbst', 'text', 'Text') ?></figcaption></figure>\n<!-- /pesi:item -->\n<p>Ende</p>\n";
+$gp = page($gSrc);
+$r = _pesi_block_add_images($gp, 'gal', ['/uploads/b.jpg', '/uploads/c.jpg']);
+$gf = _pesi_parse($gp);
+ok('zwei Bilder → zwei neue Einträge', $r['type'] === 'success' && count(_pesi_block_parse($gp)) === 3, $r['msg']);
+ok('… jeder mit seinem Bild', ($gf['gal_2_bild']['value'] ?? '') === '/uploads/b.jpg' && ($gf['gal_3_bild']['value'] ?? '') === '/uploads/c.jpg');
+ok('… Beschreibung geleert, übrige Felder wie bei „hinzufügen“', ($gf['gal_2_bild_alt']['value'] ?? null) === '' && ($gf['gal_3_text']['value'] ?? '') === 'Herbst');
+ok('… Vorlage unverändert, Einträge vor dem Rest der Seite', ($gf['gal_1_bild_alt']['value'] ?? '') === 'Wald'
+    && strpos((string)file_get_contents($gp), "<!-- pesi:item gal:3 -->") < strpos((string)file_get_contents($gp), '<p>Ende</p>'));
+ok('… eine Sicherung, nicht zwei', is_file($gp . '.pesi-backup.1') && !is_file($gp . '.pesi-backup.2'));
+ok('… Meldung nennt die Zahl und die Beschreibungen', $r['msg'] === sprintf($GLOBALS['t']['blk_imgs_many'], 2) . ' ' . $GLOBALS['t']['blk_imgs_alt'], $r['msg']);
+ok('… gerenderte Seite enthält alle drei Bilder', substr_count(render($gp), '<img src="/uploads/') === 3);
+$gp = page($gSrc);
+$r = _pesi_block_add_images($gp, 'gal', ['/uploads/b.jpg'], str_repeat('0', 64));
+ok('veralteter Stand → abgelehnt, Datei unverändert', $r['msg'] === $GLOBALS['t']['err_stale'] && file_get_contents($gp) === $gSrc);
+$gp = page("<?php ?>\n<!-- pesi:item gal:1 -->\n<img src=\"<?= pesi('gal_1_a', '/a.jpg', 'image', 'A') ?>\"><img src=\"<?= pesi('gal_1_b', '/b.jpg', 'image', 'B') ?>\">\n<!-- /pesi:item -->\n");
+ok('Eintrag mit zwei Bildern → kein Mehrfach-Upload', _pesi_block_image_slot((string)file_get_contents($gp), _pesi_block_parse($gp)) === null
+    && _pesi_block_add_images($gp, 'gal', ['/c.jpg'])['type'] === 'error');
+$gp = page("<?php ?>\n<!-- pesi:item gal:1 -->\n<!-- pesi:item x:1 -->\n<img src=\"<?= pesi('gal_1_a', '/a.jpg', 'image', 'A') ?>\">\n<!-- /pesi:item -->\n<!-- /pesi:item -->\n");
+$gsrc0 = (string)file_get_contents($gp);
+ok('verschachtelt → S6, Datei unverändert', _pesi_block_add_images($gp, 'gal', ['/c.jpg'])['msg'] === $GLOBALS['t']['blk_nested'] && file_get_contents($gp) === $gsrc0);
+$gp = page("<?php ?>\n<!-- pesi:item gal:1 -->\n<img src=\"<?= pesi('gal_1_bild', '/a.jpg', 'image', 'A') ?>\">\n<!-- /pesi:item -->\n");
+$r = _pesi_block_add_images($gp, 'gal', ['/b.jpg']);
+ok('ohne Beschreibungsfeld: Meldung ohne Erinnerung', $r['msg'] === $GLOBALS['t']['blk_imgs_one'], $r['msg']);
+ok('Dateiliste eines Mehrfach-Felds', count(_pesi_files_list(['name' => ['a', 'b', ''], 'type' => ['', '', ''], 'tmp_name' => ['x', 'y', ''],
+    'error' => [UPLOAD_ERR_OK, UPLOAD_ERR_OK, UPLOAD_ERR_NO_FILE], 'size' => [1, 2, 0]])) === 2
+    && _pesi_files_list(null) === [] && _pesi_files_list(['error' => [['x']]]) === []);
+
+// ── Selbsttest: was über das Web nicht erreichbar sein darf ──
+grp('Selbsttest — Prüfliste');
+$sp = $scratch . '/probe-site';
+@mkdir($sp, 0777, true);
+file_put_contents("$sp/index.php", 'a');
+file_put_contents("$sp/index.php.pesi-backup.1", 'abc');
+file_put_contents("$sp/kontakt.php.pesi-backup.1", 'abcdef');
+$pr = _pesi_exposure_probes($sp, ['index.php' => 'Start', 'kontakt.php' => 'Kontakt'], 'kontakt.php');
+$names = array_column($pr, 'name');
+ok('Sicherung der offenen Seite, mit Größe', in_array('kontakt.php.pesi-backup.1', $names, true)
+    && ($pr[array_search('kontakt.php.pesi-backup.1', $names, true)]['size'] ?? 0) === 6, json_encode($pr));
+ok('nur eine Sicherung', count(preg_grep('/pesi-backup/', $names)) === 1);
+ok('URL beginnt an der Website-Wurzel', ($pr[array_search('kontakt.php.pesi-backup.1', $names, true)]['url'] ?? '') === '/kontakt.php.pesi-backup.1');
+$pr = _pesi_exposure_probes($sp, ['index.php' => 'Start'], null);
+ok('ohne offene Seite die erste mit Sicherung', in_array('index.php.pesi-backup.1', array_column($pr, 'name'), true), json_encode($pr));
+ok('ohne Sicherungen nichts davon', !preg_grep('/backup/', array_column(_pesi_exposure_probes($sp, ['fehlt.php' => 'x'], null), 'name')));
+foreach (glob("$sp/*") as $f) @unlink($f);
+@rmdir($sp);
 
 // Aufräumen erledigt der Shutdown-Handler ganz oben — auch bei einem Abbruch.
 
