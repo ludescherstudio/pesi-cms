@@ -717,6 +717,15 @@ An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload 
 
 Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
 
+### From 0.5 to 0.6
+
+Upload `pesi.php` and `pesi-lib.php` as usual; `pesi-core.php` needs no change. Worth knowing:
+
+- **New field type `date`** with `pesi_date()` for the page, a **focus point** (`<image-id>_focus`) and **smaller image copies** for `pesi_srcset()` (`PESI_IMAGE_SIZES`, needs gd). Existing pages keep working; use them where they help — see [Field types](#field-types).
+- **Earlier uploads have no smaller copies.** `pesi_srcset()` returns an empty string for them until the client uploads the image once more.
+- **New diagnostic `T21`:** the dashboard checks from the browser whether backups, `.pesi-password` or `.pesi-throttle` can be downloaded. If it appears after the update, the `.htaccess` rules from Step 3 are not in effect on that server.
+- The dashboard got a start view with page cards, a change bar with *Discard*, its own confirmation dialogs, collapsible entries and drag sorting. Nothing to configure.
+
 ### From 0.4 to 0.5
 
 Upload `pesi.php` and `pesi-lib.php` as usual; `pesi-core.php` needs no change. Worth knowing:

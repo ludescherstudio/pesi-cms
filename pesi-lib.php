@@ -4,7 +4,7 @@
 // in pesi-core.php, which an update never touches. Documentation: README.md
 
 // pesi.php checks on start that it comes from the same release.
-if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.5.0');
+if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.6.0');
 
 // ── Defaults ─────────────────────────────────────────────────
 // Everything pesi-core.php does not set. New settings of later releases
