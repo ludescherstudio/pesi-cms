@@ -32,6 +32,7 @@ define('PESI_UPLOAD_DIR',       'uploads');
 define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);          // 5 MB
 define('PESI_UPLOAD_TYPES',     'jpg,jpeg,png,webp,avif,gif'); // SVG deliberately not allowed
 define('PESI_IMAGE_MAX_EDGE',   2560);   // longer edge in px, larger images are scaled down (needs gd); 0 = never
+define('PESI_IMAGE_SIZES',      '480,960,1600'); // widths of the smaller copies for pesi_srcset() (needs gd); '' = none
 
 // Pages in the dashboard: file => sidebar label. Write the labels in the
 // dashboard language, e.g. 'Startseite' with LANG 'de'.
