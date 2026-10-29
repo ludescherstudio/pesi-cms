@@ -542,11 +542,11 @@ PESI, 'richtext', 'Legal notice content') ?>
 
 The dashboard is built for the client — a therapist, a practice, an artist; rarely technical; opens it every few weeks. You use it twice, during setup.
 
-- **Pages** in the sidebar, one card per field, labels only — no IDs, no types
+- **Pages** in the sidebar and as cards on the start view — the page's first image, its number of fields and when it last changed. One card per field, labels only — no IDs, no types. Short fields (`text`, `url`, `email`, `tel`, `date`) stand two side by side where the form is wide enough
 - **Image cards** take a new upload by click or drag and drop, or *Choose an image you already uploaded* — the 60 newest files in the upload folder as thumbnails, one click to use one. No renaming or deleting; that stays out of the client's way
 - **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 Wörter · vorher 120`), so the client sees when a new text grows far beyond what the layout was built for
-- **Save** at the bottom, with a live count of unsaved changes and a warning before leaving the page or running a structural action
-- **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group; groups whose entry holds one image also take several images at once by drag and drop
+- **Save** at the bottom. As soon as something is unsaved, the bar turns into a change bar with a live count and *Discard*, which reloads the saved state after asking. A success message appears as a toast for a few seconds; errors stay in the form next to the field. Questions before deleting, restoring or discarding use the dashboard's own dialog, not the browser's, and the page warns before it is left with unsaved changes
+- **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group. Every entry folds up into one line with its first image and first text; groups of up to three entries start open, larger ones closed, and the browser tab remembers what the client opened. With a mouse, entries can be dragged into a new order by their handle ⠿ — one save for the whole group; ↑ ↓ stay for keyboard and touch. Groups whose entry holds one image also take several images at once by drag and drop
 - **Links** to the site's own pages are picked from a list under every `url` field; **dates** use a date picker; a **focus point** is set by clicking into the image
 - **Visibility** panel with Show/Hide for every `pesi:toggle` group; fields of a hidden section say so on their card
 - **Earlier versions** lists the last `PESI_BACKUP_COUNT` states of the page (5 by default). Each entry says which fields differ from now, shows old and new values side by side, and restores with one click. The current state is backed up first, so a restore can itself be undone

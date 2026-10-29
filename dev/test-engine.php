@@ -2264,6 +2264,44 @@ ok('Dateiauswahl ist per Tastatur erreichbar (nicht hidden)',
 ok('URL-Platzhalter kommt aus der Sprachtabelle',
     strpos($x['out'], 'placeholder="' . htmlspecialchars($GLOBALS['t']['url_ph']) . '"') !== false);
 ok('Gruppe ohne Bild bietet keinen Mehrfach-Upload an', strpos($x['out'], 'pesi_many_team') === false);
+
+// ── Oberfläche: Einträge, Raster, Änderungsleiste, Dialog ────
+grp('Dashboard — Einträge, Raster, Toast, Dialog, Startansicht');
+$o = $x['out'];
+ok('Eintrag ist einklappbar, mit Gruppe und Nummer für das Ziehen',
+    (bool)preg_match('/<details class="blk" data-group="team" data-inst="1" open>/', $o), substr($o, 0, 200));
+ok('… eingeklappt mit erstem Text als Vorschau', strpos($o, '<span class="blk-prev">Anna</span>') !== false);
+ok('… mit Ziehgriff, für Screenreader verborgen', (bool)preg_match('/<span class="blk-drag"[^>]*aria-hidden="true">/', $o));
+ok('kurze Felder nebeneinander: Titel und Link', (bool)preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_titel"/', $o)
+    && (bool)preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_link"/', $o));
+ok('Bildfeld bleibt breit', !preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_bild"/', $o));
+ok('Verwerfen-Knopf: kein Submit, verborgen, lädt per GET', (bool)preg_match('/<button type="button" class="sv-x" id="svDiscard" data-href="\?page=index\.php" hidden>/', $o));
+$dlgAt = strpos($o, '<dialog class="dlg" id="dlg"');
+ok('Rückfrage-Dialog steht ausserhalb des Speicherformulars', $dlgAt !== false && $dlgAt > strpos($o, '</form>'));
+$sortAt = strpos($o, 'id="pesiOrderGo"');
+ok('Sortier-Knopf steht hinter Speichern, ohne Rückfrage-Haken',
+    $sortAt !== false && $sortAt > strpos($o, 'class="sv-b"') && (bool)preg_match('/name="pesi_block" value="" id="pesiOrderGo" data-direct>/', $o));
+// Ausser im Rückfall von pesiAsk() selbst und in Kommentaren.
+ok('kein confirm() und kein alert() mehr im Dashboard-Skript',
+    !preg_match('/[^.\w](confirm|alert)\(/', preg_replace(['/window\.pesiAsk=function.*?\n\};\n/s', '#^\s*//.*$#m'], '', $o)));
+
+$cpReset();
+$x = $act(['pesi_block' => 'order:team', 'pesi_order' => '2,1']);
+$blk = array_column(_pesi_block_parse($cp), 'inst');
+ok('Reihenfolge per Ziehen: 2,1 geschrieben', $blk === [2, 1], json_encode($blk) . ' ' . substr($x['out'], 0, 200));
+ok('… Erfolg kommt als Toast', (bool)preg_match('/<div class="ms success toast" id="toast" role="status"><span>' . preg_quote(htmlspecialchars($GLOBALS['t']['blk_moved']), '/') . '<\/span>/', $x['out']));
+$cpReset();
+$x = $act(['pesi_block' => 'order:team', 'pesi_order' => '2,x']);
+ok('unlesbare Reihenfolge → S3, Datei unverändert', file_get_contents($cp) === $cpSrc && strpos($x['out'], '(Code S3)') !== false);
+ok('… Fehler bleibt im Formular, nicht als Toast', strpos($x['out'], 'id="toast"') === false && strpos($x['out'], '<div class="ms error"') !== false);
+$x = $act(['pesi_block' => 'order:team', 'pesi_order' => '2,1', 'pesi_toggle' => 'hinweis']);
+ok('Sortieren + Toggle → mehrdeutig', strpos($x['out'], htmlspecialchars($GLOBALS['t']['err_ambiguous'])) !== false && file_get_contents($cp) === $cpSrc);
+
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET'])['out'];
+ok('Startansicht: eine Karte je registrierter Seite', substr_count($o, '<a class="pc" href="?page=') === 4
+    && strpos($o, '<a class="pc" href="?page=index.php">') !== false, substr($o, 0, 200));
+ok('… mit Bild der Seite und Zahl der Felder', strpos($o, '<img src="/uploads/a.jpg" alt="" loading="lazy">') !== false
+    && strpos($o, sprintf($GLOBALS['t']['home_fields'], 5)) !== false);
 $cpReset();
 
 // ── Seitenauswahl, Datum, Fokuspunkt, mehrere Bilder, Selbsttest ──
@@ -2490,6 +2528,29 @@ ok('ohne Beschreibungsfeld: Meldung ohne Erinnerung', $r['msg'] === $GLOBALS['t'
 ok('Dateiliste eines Mehrfach-Felds', count(_pesi_files_list(['name' => ['a', 'b', ''], 'type' => ['', '', ''], 'tmp_name' => ['x', 'y', ''],
     'error' => [UPLOAD_ERR_OK, UPLOAD_ERR_OK, UPLOAD_ERR_NO_FILE], 'size' => [1, 2, 0]])) === 2
     && _pesi_files_list(null) === [] && _pesi_files_list(['error' => [['x']]]) === []);
+
+// ── Reihenfolge einer ganzen Gruppe ──────────────────────────
+grp('Sortieren — ganze Reihenfolge in einem Commit');
+$oSrc = "<?php ?>\n<!-- pesi:item s:1 -->\n<p><?= pesi('s_1_t', 'A', 'text', 'T') ?></p>\n<!-- /pesi:item -->\n<hr>\n"
+    . "<!-- pesi:item s:2 -->\n<p><?= pesi('s_2_t', 'B', 'text', 'T') ?></p>\n<!-- /pesi:item -->\n"
+    . "<!-- pesi:item s:4 -->\n<p><?= pesi('s_4_t', 'C', 'text', 'T') ?></p>\n<!-- /pesi:item -->\n<!-- pesi:item x:1 -->\n<p>x</p>\n<!-- /pesi:item -->\n";
+$op = page($oSrc);
+$r = _pesi_block_reorder($op, 's', ['4', '1', '2']);
+$os = (string)file_get_contents($op);
+ok('4,1,2 → Einträge getauscht, Plätze bleiben', $r['type'] === 'success' && array_column(_pesi_block_parse($op), 'inst') === [4, 1, 2, 1]
+    && strpos($os, "<!-- /pesi:item -->\n<hr>\n") !== false, $r['msg']);
+ok('… Felder wandern mit ihrem Eintrag', ($pf = _pesi_parse($op)) && $pf['s_4_t']['value'] === 'C' && strpos($os, "'C'") < strpos($os, "'A'"));
+ok('… eine Sicherung', is_file($op . '.pesi-backup.1') && !is_file($op . '.pesi-backup.2'));
+foreach (['fehlt eine' => ['1', '2'], 'fremde Nummer' => ['1', '2', '3'], 'doppelt' => ['1', '1', '2'], 'andere Gruppe' => ['1']] as $n => $ord) {
+    $op = page($oSrc);
+    $r = _pesi_block_reorder($op, $n === 'andere Gruppe' ? 'y' : 's', $ord);
+    ok("$n → S3, Datei unverändert", $r['msg'] === $GLOBALS['t']['blk_notfound'] && file_get_contents($op) === $oSrc, $r['msg']);
+}
+$op = page($oSrc);
+$r = _pesi_block_reorder($op, 's', ['1', '2', '4']);
+ok('gleiche Reihenfolge → nichts geschrieben', $r['type'] === 'info' && !is_file($op . '.pesi-backup.1'));
+$r = _pesi_block_reorder($op, 's', ['2', '1', '4'], str_repeat('0', 64));
+ok('veralteter Stand → abgelehnt', $r['msg'] === $GLOBALS['t']['err_stale'] && file_get_contents($op) === $oSrc);
 
 // ── Selbsttest: was über das Web nicht erreichbar sein darf ──
 grp('Selbsttest — Prüfliste');

@@ -132,6 +132,17 @@ the same source and commit the same way.
   `pesi()` has exactly four arguments. Field options (limits, hints, flags)
   were tried and removed: every extra argument clutters the page source.
 - Unsaved-changes guard (JS) warns before structural actions / unload.
+- **Dashboard UI** (Kirby-inspired, plain CSS/JS): the dashboard CSS takes
+  sizes from the tokens in `:root` (`--sp-*`, `--fs-*`, `--h-*`, `--r*`) —
+  add a token rather than a new literal. Entries are `<details class="blk">`
+  with `data-group`/`data-inst`; dragging submits `pesi_block=order:GROUP`
+  with `pesi_order`, and `_pesi_block_reorder()` rewrites the whole group in
+  one commit. `pesiAsk()` replaces `confirm()`/`alert()` with a `<dialog>`;
+  a structural button is then submitted with `form.requestSubmit(button)`, so
+  its name/value still arrive. Buttons that the JS submits itself carry
+  `data-direct` and are skipped by the confirm handler. Short fields pair up in
+  a container-query grid (`.fgrid`, `fc-half` computed in PHP); success messages
+  render as a toast, errors stay inline.
 
 ## Traps — verified the hard way, do not re-introduce
 
@@ -280,6 +291,16 @@ tests, which is why the suite now also renders real dashboard responses:
 
 JS registries keyed by field ID use `Object.create(null)`: `__proto__` is a
 valid field ID.
+
+Three from the UI work (2026-10-29), each found or nearly found in the browser:
+
+- **The `<dialog>` must sit outside `#pf`.** It holds its own
+  `<form method="dialog">`, and a form inside a form is dropped by the parser —
+  the dialog buttons would then submit the save form.
+- **`.cnt-wrap` has `container-type`, which makes it the containing block for
+  `position: fixed`.** The toast is therefore rendered before it, not inside.
+- **Discard loads `?page=…` by GET, never `location.reload()`.** After a save
+  the page is a POST response; reloading it would send the form again.
 
 Two from the first live install (2026-09-26):
 

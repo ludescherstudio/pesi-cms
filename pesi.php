@@ -292,6 +292,23 @@ if ($auth) {
         } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
             $msg = $t['err_stale'];
             $msgType = 'error';
+        } elseif (preg_match('/^order:([a-z0-9_]+)$/', _pesi_param($_POST, 'pesi_block'), $bm)) {
+            // Ganze Reihenfolge nach Ziehen und Ablegen; Pfeile bleiben für Tastatur.
+            $fp = $basePath . '/' . $page;
+            $ord = _pesi_param($_POST, 'pesi_order');
+            if (!preg_match('/^\d{1,6}(?:,\d{1,6}){0,199}$/', $ord)) {
+                $msg = $t['blk_notfound'];
+                $msgType = 'error';
+            } else {
+                $expiredImages = _pesi_expiring_images($fp);
+                $r = _pesi_block_reorder($fp, $bm[1], explode(',', $ord), $postedHash);
+                $msg = $r['msg'];
+                $msgType = $r['type'];
+                if ($msgType === 'success') {
+                    _pesi_cleanup_old($basePath, $expiredImages, $PESI_PAGES);
+                    $fields = _pesi_parse($fp);
+                }
+            }
         } elseif (preg_match('/^imgs:([a-z0-9_]+)$/', _pesi_param($_POST, 'pesi_block'), $bm)) {
             // Mehrere Bilder als neue Einträge: erst alle Uploads prüfen und
             // ablegen, dann ein einziger Commit. Scheitert eines, geht keines online.
@@ -1189,6 +1206,36 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action, 
     }
 
     return ['msg' => $t['blk_notfound'], 'type' => 'error'];
+}
+
+/**
+ * Neue Reihenfolge einer ganzen Gruppe in einem Commit (Ziehen im Dashboard).
+ * $order: alle Instanznummern der Gruppe in der gewünschten Reihenfolge. Die
+ * Plätze bleiben, wo sie im Quelltext stehen; nur die Einträge wechseln, wie
+ * bei ↑↓. Fehlt eine Instanz oder ist eine fremd, wird nichts geschrieben.
+ */
+function _pesi_block_reorder(string $file, string $group, array $order, ?string $expectedHash = null): array {
+    global $t;
+    $src = (string)file_get_contents($file);
+    if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
+    if (_pesi_block_nested($file)) return ['msg' => $t['blk_nested'], 'type' => 'error'];
+    $srcHash = hash('sha256', $src);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $srcHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
+    $grp = array_values(array_filter(_pesi_block_parse($file), fn($b) => $b['group'] === $group));
+    $byInst = array_column($grp, null, 'inst');
+    $order = array_map('intval', $order);
+    $want = $order; sort($want);
+    $have = array_keys($byInst); sort($have);
+    if (!$grp || $want !== $have || count($order) !== count($grp)) return ['msg' => $t['blk_notfound'], 'type' => 'error'];
+    if ($order === array_column($grp, 'inst')) return ['msg' => $t['err_no_changes'], 'type' => 'info'];
+    $mod = $src;
+    for ($k = count($grp) - 1; $k >= 0; $k--) {
+        $mod = substr_replace($mod, $byInst[$order[$k]]['text'], $grp[$k]['offset'], $grp[$k]['len']);
+    }
+    if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
+    return ['msg' => $t['blk_moved'], 'type' => 'success'];
 }
 
 /**
@@ -2430,7 +2477,7 @@ function _pesi_strings(): array { return [
         'save_hint'         => 'Ihre Änderungen werden erst mit „Speichern“ übernommen. Frühere Stände finden Sie unter „Frühere Versionen“.',
         'save_btn'          => 'Speichern',
         'welcome_title'     => 'Willkommen',
-        'welcome_hint'      => 'Wählen Sie links eine Seite aus, um deren Inhalte zu bearbeiten.',
+        'welcome_hint'      => 'Wählen Sie eine Seite, deren Inhalte Sie bearbeiten möchten.',
         'globals_hint'      => 'Diese Angaben gelten gemeinsam auf der ganzen Website. Änderungen werden überall wirksam, wo die Website das entsprechende Stammdatenfeld verwendet.',
         'diag_summary'      => '⚙ Technischer Hinweis für Ihre Website-Betreuung — für Sie ist nichts zu tun',
         'diag_intro'        => 'Diese Punkte betreffen die Einrichtung, nicht Ihre Inhalte. Bitte leiten Sie sie weiter:',
@@ -2532,6 +2579,15 @@ function _pesi_strings(): array { return [
         'tgl_nested'        => 'Diese Bereiche lassen sich hier nicht ein- und ausblenden, weil sie ineinander verschachtelt sind. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S5)',
         'blk_nested'        => 'Diese Einträge lassen sich hier nicht bearbeiten, weil sie ineinander verschachtelt sind. Ihre Seite ist unverändert. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code S6)',
         'unsaved_warn'      => 'Es gibt ungespeicherte Änderungen. Möchten Sie diese verwerfen?',
+        'unsaved_ok'        => 'Änderungen verwerfen',
+        'chg_discard'       => 'Verwerfen',
+        'chg_discard_q'     => 'Alle ungespeicherten Änderungen auf dieser Seite verwerfen? Es bleibt der zuletzt gespeicherte Stand.',
+        'dlg_cancel'        => 'Abbrechen',
+        'dlg_ok'            => 'OK',
+        'toast_close'       => 'Meldung schließen',
+        'home_field'        => '1 Feld',
+        'home_fields'       => '%d Felder',
+        'blk_drag'          => 'Zum Sortieren ziehen',
     ],
     'en' => [
         'err_not_readable'  => 'This page cannot be read right now. Your content is unchanged. Please contact whoever looks after your website. (Code T1)',
@@ -2585,7 +2641,7 @@ function _pesi_strings(): array { return [
         'save_hint'         => 'Your changes only take effect once you click "Save". Earlier states are under "Earlier versions".',
         'save_btn'          => 'Save',
         'welcome_title'     => 'Welcome',
-        'welcome_hint'      => 'Select a page on the left to edit its content.',
+        'welcome_hint'      => 'Choose the page whose content you want to edit.',
         'globals_hint'      => 'These details are shared across the whole website. A change applies everywhere the corresponding shared field is used.',
         'diag_summary'      => '⚙ Technical note for whoever looks after your website — nothing for you to do',
         'diag_intro'        => 'These points concern the setup, not your content. Please pass them on:',
@@ -2687,6 +2743,15 @@ function _pesi_strings(): array { return [
         'tgl_nested'        => 'These sections cannot be shown or hidden here because they are nested inside one another. Please contact whoever looks after your website. (Code S5)',
         'blk_nested'        => 'These entries cannot be changed here because they are nested inside one another. Your page is unchanged. Please contact whoever looks after your website. (Code S6)',
         'unsaved_warn'      => 'There are unsaved changes. Do you want to discard them?',
+        'unsaved_ok'        => 'Discard changes',
+        'chg_discard'       => 'Discard',
+        'chg_discard_q'     => 'Discard all unsaved changes on this page? The last saved state stays.',
+        'dlg_cancel'        => 'Cancel',
+        'dlg_ok'            => 'OK',
+        'toast_close'       => 'Close message',
+        'home_field'        => '1 field',
+        'home_fields'       => '%d fields',
+        'blk_drag'          => 'Drag to reorder',
     ],
 ]; }
 
@@ -2774,6 +2839,12 @@ foreach ($fields as $f) { if ($f['type'] === 'richtext' && $rtEditable) { $hasRt
   --in: #60a5fa; --in-b: #60a5fa0f;
   --r: 10px;
   --r2: 7px;
+  /* Werteskala wie im Kirby-Panel: jede Größe kommt von hier, nicht aus der Regel. */
+  --r-sm: 5px;
+  --sp-1: .25rem; --sp-2: .5rem; --sp-3: .75rem; --sp-4: 1rem; --sp-5: 1.25rem; --sp-6: 1.5rem; --sp-8: 2rem;
+  --fs-xs: .75rem; --fs-sm: .8125rem; --fs-md: .875rem; --fs-lg: .9375rem; --fs-xl: 1.0625rem;
+  --h-sm: 1.875rem; --h-md: 2.25rem; --h-lg: 2.75rem;
+  --shadow: 0 1px 2px rgba(0,0,0,.06), 0 6px 20px rgba(0,0,0,.1);
 }
 
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;-webkit-font-smoothing:antialiased}
@@ -2786,27 +2857,27 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 /* Login-Karte auf hellem Grund */
 .L-c{width:100%;max-width:340px;animation:up .45s ease-out;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:2rem;box-shadow:0 4px 24px rgba(26,32,44,.06)}
 .L-logo{display:block;height:42px;width:auto;margin-bottom:.15rem}
-.L-c .sub{font-size:.8rem;color:var(--tx2);margin:.25rem 0 2rem}
+.L-c .sub{font-size:var(--fs-sm);color:var(--tx2);margin:.25rem 0 2rem}
 /* Eigene Töne statt var(--er)/var(--tx3): die erreichen auf der weissen Karte
    nur 2,8:1 bzw. 2,5:1 — unter WCAG AA. */
-.L-c .err{padding:.6rem .85rem;background:var(--er-b);border:1px solid #f8717130;border-radius:var(--r2);color:#c0392b;font-size:.84rem;margin-bottom:1rem}
-.L-i{width:100%;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:inherit;font-size:.93rem;outline:0;transition:border .2s,box-shadow .2s}
+.L-c .err{padding:.6rem .85rem;background:var(--er-b);border:1px solid #f8717130;border-radius:var(--r2);color:#c0392b;font-size:var(--fs-sm);margin-bottom:1rem}
+.L-i{width:100%;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:inherit;font-size:var(--fs-lg);outline:0;transition:border .2s,box-shadow .2s}
 .L-i:focus{border-color:var(--b);box-shadow:0 0 0 3px var(--b-g)}
 .L-i::placeholder{color:var(--tx3)}
-.L-b{width:100%;padding:.8rem;margin-top:.75rem;background:var(--b);color:#fff;border:0;border-radius:var(--r);font-family:inherit;font-size:.93rem;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
+.L-b{width:100%;padding:.8rem;margin-top:.75rem;background:var(--b);color:#fff;border:0;border-radius:var(--r);font-family:inherit;font-size:var(--fs-lg);font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
 .L-b:hover{opacity:.88}
 .L-b:active{transform:scale(.98)}
-.L-help{margin-top:1rem;font-size:.78rem;color:var(--tx2);line-height:1.5;text-align:center}
+.L-help{margin-top:1rem;font-size:var(--fs-xs);color:var(--tx2);line-height:1.5;text-align:center}
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* ───── DIAGNOSE (Einrichtung — Adressat ist die Betreuung) ───── */
-.dg{margin:1rem 2rem 0;border:1px solid var(--bd);border-radius:var(--r2);background:var(--bg2);font-size:.82rem}
+.dg{margin:1rem 2rem 0;border:1px solid var(--bd);border-radius:var(--r2);background:var(--bg2);font-size:var(--fs-sm)}
 .dg summary{cursor:pointer;padding:.6rem .9rem;color:var(--tx2);user-select:none;list-style:none}
 .dg summary::-webkit-details-marker{display:none}
 .dg summary::before{content:'▸ ';color:var(--tx3)}
 .dg[open] summary::before{content:'▾ '}
 .dg summary:hover{color:var(--tx)}
-.dg-in{padding:0 .9rem;color:var(--tx3);font-size:.78rem}
+.dg-in{padding:0 .9rem;color:var(--tx3);font-size:var(--fs-xs)}
 .dg-l{margin:.5rem 0 .3rem;padding:0 .9rem .7rem 2rem;color:var(--tx2);line-height:1.55}
 .dg-l li{list-style:disc;margin-bottom:.35rem}
 
@@ -2818,20 +2889,20 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .S{width:250px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:20;transition:transform .3s ease}
 .S-head{padding:1.3rem 1.3rem .25rem}
 .S-logo{display:block;height:28px;width:auto}
-.S-site{padding:0 1.3rem;font-size:.75rem;color:var(--tx2);margin-bottom:1.8rem}
+.S-site{padding:0 1.3rem;font-size:var(--fs-xs);color:var(--tx2);margin-bottom:1.8rem}
 .S-lbl{padding:0 1.3rem;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin-bottom:.4rem}
 
 .S-nav{list-style:none;flex:1;overflow-y:auto}
-.S-nav a{display:flex;align-items:center;gap:.65rem;padding:.55rem 1.3rem;color:var(--tx2);text-decoration:none;font-size:.86rem;font-weight:500;border-left:2px solid transparent;transition:all .12s}
+.S-nav a{display:flex;align-items:center;gap:.65rem;padding:.55rem 1.3rem;color:var(--tx2);text-decoration:none;font-size:var(--fs-sm);font-weight:500;border-left:2px solid transparent;transition:all .12s}
 .S-nav a:hover{color:var(--tx);background:var(--b-s)}
 .S-nav a.on{color:var(--b);background:var(--b-s);border-left-color:var(--b)}
-.S-nav .ic{width:26px;height:26px;border-radius:6px;background:var(--sf);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600;color:var(--tx3);flex-shrink:0}
+.S-nav .ic{width:26px;height:26px;border-radius:var(--r-sm);background:var(--sf);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;font-size:var(--fs-xs);font-weight:600;color:var(--tx3);flex-shrink:0}
 .S-nav a.on .ic{background:var(--b);border-color:var(--b);color:#fff}
-.S-nav .cnt{font-size:.65rem;color:var(--tx3);margin-left:auto;background:var(--sf);padding:.1rem .4rem;border-radius:4px}
+.S-nav .cnt{font-size:.65rem;color:var(--tx3);margin-left:auto;background:var(--sf);padding:.1rem .4rem;border-radius:var(--r-sm)}
 
 .S-ft{padding:.9rem 1.3rem;border-top:1px solid var(--bd);margin-top:auto;display:flex;flex-direction:column;gap:.45rem}
 .S-ft form{margin:0}
-.S-ft a,.S-ft button{font:inherit;font-size:.78rem;color:var(--tx3);text-decoration:none;transition:color .12s;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.S-ft a,.S-ft button{font:inherit;font-size:var(--fs-xs);color:var(--tx3);text-decoration:none;transition:color .12s;background:none;border:0;padding:0;cursor:pointer;text-align:left}
 .S-ft a:hover,.S-ft button:hover{color:var(--tx2)}
 
 /* Mobile hamburger */
@@ -2847,12 +2918,12 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 
 .top{padding:1rem 2rem;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:5}
 .top-t{font-size:1rem;font-weight:600}
-.top-f{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.74rem;color:var(--tx3);background:var(--bg2);padding:.25rem .6rem;border-radius:5px;border:1px solid var(--bd)}
+.top-f{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:var(--fs-xs);color:var(--tx3);background:var(--bg2);padding:.25rem .6rem;border-radius:var(--r-sm);border:1px solid var(--bd)}
 
-.cnt-wrap{flex:1;padding:1.8rem 2rem;max-width:740px}
+.cnt-wrap{flex:1;padding:var(--sp-8);max-width:820px;container-type:inline-size}
 
 /* Messages */
-.ms{padding:.7rem .9rem;border-radius:var(--r2);font-size:.86rem;font-weight:500;margin-bottom:1.3rem;animation:up .3s ease-out}
+.ms{padding:.7rem .9rem;border-radius:var(--r2);font-size:var(--fs-sm);font-weight:500;margin-bottom:1.3rem;animation:up .3s ease-out}
 .ms.success{background:var(--ok-b);color:var(--ok);border:1px solid #4ade8018}
 .ms.error{background:var(--er-b);color:var(--er);border:1px solid #f8717118}
 .ms.info{background:var(--in-b);color:var(--in);border:1px solid #60a5fa18}
@@ -2864,12 +2935,12 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .W-in.pw h2{margin-bottom:.4rem}
 .W-in.pw>p{margin-bottom:1.2rem}
 .pw-f{display:flex;flex-direction:column;gap:.35rem;margin-bottom:1rem}
-.pw-f label{font-size:.85rem;font-weight:600;margin-top:.6rem}
+.pw-f label{font-size:var(--fs-sm);font-weight:600;margin-top:.6rem}
 .pw-f .sv-b{margin-top:1rem;align-self:flex-start}
 .W-ic{width:52px;height:52px;border-radius:13px;background:var(--b-s);border:1px solid <?=$bc?>18;display:inline-flex;align-items:center;justify-content:center;margin-bottom:1rem}
 .W-ic svg{width:22px;height:22px;stroke:var(--b);fill:none;stroke-width:1.5;stroke-linecap:round}
 .W h2{font-size:1.08rem;font-weight:600;margin-bottom:.4rem}
-.W p{font-size:.86rem;color:var(--tx2);line-height:1.6}
+.W p{font-size:var(--fs-sm);color:var(--tx2);line-height:1.6}
 
 /* ───── FIELD CARDS ───── */
 
@@ -2885,27 +2956,27 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .fc-err,.fc-err:focus-within{border-color:var(--er);box-shadow:0 0 0 3px var(--er-b)}
 .rt-ro{height:auto;min-height:0;white-space:normal;color:var(--tx2)}
 
-.fc-label{display:block;font-size:.92rem;font-weight:600;color:var(--tx);margin-bottom:.15rem}
+.fc-label{display:block;font-size:var(--fs-lg);font-weight:600;color:var(--tx);margin-bottom:.15rem}
 label.fc-label{cursor:pointer}
 /* Feld-ID und Typ nur in der technischen Ansicht. */
 .fc-meta{display:none;align-items:center;gap:.5rem;margin-bottom:.7rem}
 body.tech .fc-meta{display:flex}
 .fc-label{margin-bottom:.7rem}
 body.tech .fc-label{margin-bottom:.15rem}
-.fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.72rem;color:var(--tx3)}
+.fc-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:var(--fs-xs);color:var(--tx3)}
 
 /* Zugehörigkeit zu einem Sichtbarkeits-Bereich. Bewusst ohne opacity: das Feld
    gehört weiterhin bearbeitet, abgesenkter Kontrast wäre das falsche Signal.
    Punktfarben wie im Panel oben, damit beides zusammengehört. */
-.fc-cnt{font-size:.74rem;color:var(--tx2);text-align:right;margin-top:.35rem;font-variant-numeric:tabular-nums}
-.fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:.73rem;color:var(--tx2);margin:-.1rem 0 .6rem}
+.fc-cnt{font-size:var(--fs-xs);color:var(--tx2);text-align:right;margin-top:.35rem;font-variant-numeric:tabular-nums}
+.fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:var(--fs-xs);color:var(--tx2);margin:-.1rem 0 .6rem}
 .fc-tgl-dot{width:8px;height:8px;border-radius:50%;background:#1f9d55;flex:0 0 auto}
 .fc-off{border-left:3px solid #9aa0a6}
 .fc-off .fc-tgl{color:#8a5a00;font-weight:600}
 .fc-off .fc-tgl-dot{background:#9aa0a6}
 .fc-badge{font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:.12rem .4rem;border-radius:3px;background:var(--sf);color:var(--tx3);border:1px solid var(--bd)}
 
-.fi{width:100%;padding:.7rem .85rem;background:var(--bg3);border:1px solid var(--bd);border-radius:var(--r2);color:var(--tx);font-family:inherit;font-size:.9rem;outline:0;transition:border .2s}
+.fi{width:100%;padding:.7rem .85rem;background:var(--bg3);border:1px solid var(--bd);border-radius:var(--r2);color:var(--tx);font-family:inherit;font-size:var(--fs-md);outline:0;transition:border .2s}
 .fi:focus{border-color:var(--b)}
 .fi::placeholder{color:var(--tx3)}
 textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
@@ -2921,50 +2992,50 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .fc .ql-toolbar .ql-active .ql-stroke{stroke:var(--b)!important}
 .fc .ql-toolbar button:hover .ql-fill,
 .fc .ql-toolbar .ql-active .ql-fill{fill:var(--b)!important}
-.fc .ql-container{background:var(--bg3)!important;border-color:var(--bd)!important;border-radius:0 0 var(--r2) var(--r2);color:var(--tx);font-family:system-ui,-apple-system,sans-serif;font-size:.9rem}
+.fc .ql-container{background:var(--bg3)!important;border-color:var(--bd)!important;border-radius:0 0 var(--r2) var(--r2);color:var(--tx);font-family:system-ui,-apple-system,sans-serif;font-size:var(--fs-md)}
 .fc .ql-editor{min-height:110px;line-height:1.7}
 .fc .ql-editor.ql-blank::before{color:var(--tx3)!important;font-style:normal!important}
 .fc .ql-editor a{color:var(--b)}
 .img-field{display:flex;flex-direction:column;gap:8px}
-.img-prev{max-width:220px;max-height:160px;width:auto;border-radius:6px;border:1px solid var(--bd);object-fit:cover;background:var(--b-s)}
-.img-path{font-size:12px;opacity:.8;margin-top:6px}
-.img-hint{font-size:12px;color:var(--tx3)}
-.img-lib>summary{cursor:pointer;font-size:12px;color:var(--tx2);user-select:none}
+.img-prev{max-width:220px;max-height:160px;width:auto;border-radius:var(--r-sm);border:1px solid var(--bd);object-fit:cover;background:var(--b-s)}
+.img-path{font-size:var(--fs-xs);opacity:.8;margin-top:6px}
+.img-hint{font-size:var(--fs-xs);color:var(--tx3)}
+.img-lib>summary{cursor:pointer;font-size:var(--fs-xs);color:var(--tx2);user-select:none}
 .img-lib>summary:hover{color:var(--b)}
 .img-lib-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px;margin-top:8px;max-height:260px;overflow:auto;padding:2px}
-.img-lib-b{padding:0;border:2px solid transparent;border-radius:6px;background:var(--bg3);cursor:pointer;aspect-ratio:1;overflow:hidden}
+.img-lib-b{padding:0;border:2px solid transparent;border-radius:var(--r-sm);background:var(--bg3);cursor:pointer;aspect-ratio:1;overflow:hidden}
 .img-lib-b img{width:100%;height:100%;object-fit:cover;display:block}
 .img-lib-b:hover,.img-lib-b:focus-visible{border-color:var(--b)}
 .img-lib-b[aria-current]{border-color:var(--b);box-shadow:0 0 0 2px var(--b-g)}
 .img-alt{display:flex;flex-direction:column;gap:4px;margin-top:6px;padding-top:10px;border-top:1px solid var(--bd)}
-.img-alt-l{font-size:.85rem;font-weight:600;color:var(--tx);cursor:pointer}
-.img-alt-note{font-size:12px;font-weight:600;color:#8a5a00}
+.img-alt-l{font-size:var(--fs-sm);font-weight:600;color:var(--tx);cursor:pointer}
+.img-alt-note{font-size:var(--fs-xs);font-weight:600;color:#8a5a00}
 .img-cur{margin:0}
-.img-name{font-size:12px;color:var(--tx3);margin-top:5px}
+.img-name{font-size:var(--fs-xs);color:var(--tx3);margin-top:5px}
 .img-name span{color:var(--tx2);font-weight:500}
-.img-drop{display:flex;align-items:center;justify-content:center;text-align:center;padding:1.1rem;border:1.5px dashed var(--bd);border-radius:var(--r2);color:var(--tx2);font-size:.84rem;cursor:pointer;background:var(--bg3);transition:border-color .15s,background .15s}
+.img-drop{display:flex;align-items:center;justify-content:center;text-align:center;padding:1.1rem;border:1.5px dashed var(--bd);border-radius:var(--r2);color:var(--tx2);font-size:var(--fs-sm);cursor:pointer;background:var(--bg3);transition:border-color .15s,background .15s}
 .img-drop:hover,.img-drop.drag,.img-drop:focus-within{border-color:var(--b);background:var(--b-s);color:var(--tx)}
-.img-adv{font-size:.8rem}
-.img-adv summary{cursor:pointer;color:var(--tx3);font-size:.78rem;padding:.2rem 0;user-select:none}
+.img-adv{font-size:var(--fs-sm)}
+.img-adv summary{cursor:pointer;color:var(--tx3);font-size:var(--fs-xs);padding:.2rem 0;user-select:none}
 .img-adv summary:hover{color:var(--b)}
 .img-adv[open] summary{margin-bottom:6px}
 .ms{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 .ms-l{font-weight:600;color:inherit;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
-.top-l{display:inline-flex;align-items:center;gap:.3rem;margin-left:1rem;padding:.4rem .8rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2);font-size:.74rem;font-weight:600;color:var(--b);text-decoration:none}
+.top-l{display:inline-flex;align-items:center;gap:.3rem;margin-left:1rem;padding:.4rem .8rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2);font-size:var(--fs-xs);font-weight:600;color:var(--b);text-decoration:none}
 .top-l:hover{background:var(--b);color:#fff}
 .sv-info{display:flex;flex-direction:column;gap:.2rem;min-width:0}
-.sv-safe{font-size:.74rem;color:var(--tx3)}
-.sv-dirty{font-size:.78rem;font-weight:600;color:var(--b)}
+.sv-safe{font-size:var(--fs-xs);color:var(--tx3)}
+.sv-dirty{font-size:var(--fs-xs);font-weight:600;color:var(--b)}
 .sv-act{display:flex;align-items:center;flex:0 0 auto}
 .sv-b.has-changes{box-shadow:0 0 0 3px <?=$bc?>40;animation:pulse 1.6s ease-in-out infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 3px <?=$bc?>30}50%{box-shadow:0 0 0 5px <?=$bc?>10}}
 .ob{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:1.2rem 2rem 0;padding:.9rem 1.1rem;background:var(--b-s);border:1px solid <?=$bc?>30;border-radius:var(--r2)}
-.ob-t{display:block;font-size:.9rem;margin-bottom:.35rem}
-.ob-steps{margin:0;padding-left:1.1rem;display:flex;gap:1.4rem;flex-wrap:wrap;font-size:.84rem;color:var(--tx2)}
+.ob-t{display:block;font-size:var(--fs-md);margin-bottom:.35rem}
+.ob-steps{margin:0;padding-left:1.1rem;display:flex;gap:1.4rem;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--tx2)}
 .ob-steps li{list-style:decimal}
-.ob-x{font:inherit;font-size:.8rem;font-weight:600;padding:.45rem 1rem;background:var(--b);color:#fff;border:0;border-radius:var(--r2);cursor:pointer;flex:0 0 auto}
+.ob-x{font:inherit;font-size:var(--fs-sm);font-weight:600;padding:.45rem 1rem;background:var(--b);color:#fff;border:0;border-radius:var(--r2);cursor:pointer;flex:0 0 auto}
 .ob-x:hover{opacity:.9}
-.top-tech{display:inline-flex;align-items:center;gap:.3rem;margin-left:.4rem;padding:.4rem .8rem;font:inherit;font-size:.74rem;font-weight:600;background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;opacity:.6}
+.top-tech{display:inline-flex;align-items:center;gap:.3rem;margin-left:.4rem;padding:.4rem .8rem;font:inherit;font-size:var(--fs-xs);font-weight:600;background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;opacity:.6}
 .top-tech:hover{border-color:var(--b);color:var(--b)}
 .top-tech[aria-pressed="true"]{opacity:1;border-color:var(--b);color:var(--b)}
 /* ── Vorschau-Split (nur Desktop) ── */
@@ -2973,70 +3044,90 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .ws-edit{min-width:0}
 .pv{display:none}
 @media(min-width:1280px){
-  .top-pv{display:inline-flex;align-items:center;gap:.3rem;margin-left:.7rem;padding:.4rem .8rem;font:inherit;font-size:.74rem;font-weight:600;background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer}
+  .top-pv{display:inline-flex;align-items:center;gap:.3rem;margin-left:.7rem;padding:.4rem .8rem;font:inherit;font-size:var(--fs-xs);font-weight:600;background:var(--bg2);color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer}
   .top-pv:hover{border-color:var(--b);color:var(--b)}
   .top-pv[aria-pressed="false"]{opacity:.6}
   .ws{display:flex;align-items:flex-start;flex:1;min-height:0}
   .ws-edit{flex:1;min-width:0}
   .pv{display:block;position:sticky;top:56px;flex:0 0 480px;width:480px;height:calc(100vh - 56px);border-left:1px solid var(--bd);background:var(--bg2)}
-  .pv-bar{height:26px;display:flex;align-items:center;padding:0 .8rem;font-size:.7rem;color:var(--tx3);border-bottom:1px solid var(--bd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pv-bar{height:26px;display:flex;align-items:center;padding:0 .8rem;font-size:var(--fs-xs);color:var(--tx3);border-bottom:1px solid var(--bd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pv-frame{width:480px;height:calc(100vh - 56px - 27px);overflow:hidden;background:#fff}
   .pv-frame iframe{width:1280px;height:calc((100vh - 83px) / .375);border:0;transform:scale(.375);transform-origin:top left;background:#fff}
   .M.pv-off .ws{display:block}
   .M.pv-off .pv{display:none}
 }
-.blk{border:1px solid var(--bd);border-radius:8px;margin:18px 0;background:var(--b-s)}
-.blk-head{font-weight:600;font-size:13px;padding:10px 14px;border-bottom:1px solid var(--bd);color:var(--tx)}
-.blk-fields{padding:14px}
-.blk-foot{display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--bd)}
-.blk-b{font:inherit;font-size:12px;padding:5px 10px;border:1px solid var(--bd);border-radius:5px;background:var(--sf);color:var(--tx);cursor:pointer}
+/* Kurze Felder paarweise, sobald der Bearbeitungsbereich breit genug ist. */
+.fgrid>.fc{min-width:0}
+@container (min-width:620px){
+  .fgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--sp-3)}
+  .fgrid>*{grid-column:1/-1}
+  .fgrid>.fc-half{grid-column:auto}
+}
+/* Einträge: einklappbar, eingeklappt mit Vorschaubild und erstem Text */
+.blk{border:1px solid var(--bd);border-radius:var(--r);margin:var(--sp-5) 0;background:var(--b-s);transition:opacity .15s}
+.blk.is-drag{opacity:.45}
+.blk-sum{display:flex;align-items:center;gap:var(--sp-3);min-height:var(--h-lg);padding:var(--sp-2) var(--sp-4);cursor:pointer;list-style:none;user-select:none}
+.blk-sum::-webkit-details-marker{display:none}
+.blk-sum::after{content:'▸';margin-left:auto;color:var(--tx2);transition:transform .15s}
+.blk[open]>.blk-sum::after{transform:rotate(90deg)}
+.blk[open]>.blk-sum{border-bottom:1px solid var(--bd)}
+.blk-sum:hover .blk-head{color:var(--b)}
+.blk-drag{cursor:grab;color:var(--tx2);font-size:var(--fs-lg);line-height:1;padding:var(--sp-1);border-radius:var(--r-sm)}
+.blk-drag:hover{color:var(--b);background:var(--bg2)}
+.blk-thumb{width:2rem;height:2rem;flex:0 0 auto;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--bd);background:var(--bg2)}
+.blk-head{font-weight:600;font-size:var(--fs-sm);color:var(--tx);white-space:nowrap}
+.blk-prev{flex:1 1 auto;min-width:0;font-size:var(--fs-sm);color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blk-fields{padding:var(--sp-4)}
+.blk-foot{display:flex;gap:var(--sp-2);flex-wrap:wrap;padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--bd)}
+.blk-b{font:inherit;font-size:var(--fs-xs);min-height:var(--h-sm);padding:0 var(--sp-3);border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--sf);color:var(--tx);cursor:pointer}
 .blk-b:hover{border-color:var(--b);color:var(--b)}
-.blk-del:hover{border-color:#c0392b;color:#c0392b}
-.blk-add-wrap{margin:-6px 0 18px}
-.blk-add{font:inherit;font-size:13px;padding:8px 14px;border:1px dashed var(--bd);border-radius:6px;background:transparent;color:var(--tx2);cursor:pointer;width:100%}
+.blk-del:hover{border-color:var(--er);color:var(--er)}
+.blk-add-wrap{margin:calc(-1 * var(--sp-2)) 0 var(--sp-5)}
+.blk-add{font:inherit;font-size:var(--fs-sm);min-height:var(--h-md);padding:0 var(--sp-4);border:1px dashed var(--bd);border-radius:var(--r2);background:transparent;color:var(--tx2);cursor:pointer;width:100%}
 .blk-add:hover{border-color:var(--b);color:var(--b)}
-.blk-imgs{margin:-10px 0 18px}
-.url-pick{margin-top:6px;padding:.45rem .7rem;font-size:.82rem;color:var(--tx2);cursor:pointer}
+.blk-imgs{margin:calc(-1 * var(--sp-3)) 0 var(--sp-5)}
+@media(hover:none){.blk-drag{display:none}}
+.url-pick{margin-top:6px;padding:.45rem .7rem;font-size:var(--fs-sm);color:var(--tx2);cursor:pointer}
 .fi-date{max-width:220px}
-.img-fp{position:relative;display:inline-block;line-height:0;cursor:crosshair;border-radius:6px}
+.img-fp{position:relative;display:inline-block;line-height:0;cursor:crosshair;border-radius:var(--r-sm)}
 .img-fp .img-prev{display:block}
 .img-fp-d{position:absolute;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:var(--b);border:2px solid #fff;box-shadow:0 0 0 2px #1a1a1a,0 1px 4px rgba(0,0,0,.5);pointer-events:none}
-.img-fc-v{max-width:150px;font-size:.82rem;padding:.45rem .7rem}
-.top-m{font-size:.74rem;color:var(--tx3);margin-left:auto}
-.rst-b{font:inherit;font-size:.82rem;padding:.55rem 1rem;background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;margin-right:.6rem}
+.img-fc-v{max-width:150px;font-size:var(--fs-sm);padding:.45rem .7rem}
+.top-m{font-size:var(--fs-xs);color:var(--tx3);margin-left:auto}
+.rst-b{font:inherit;font-size:var(--fs-sm);padding:.55rem 1rem;background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;margin-right:.6rem}
 .rst-b:hover{border-color:var(--b);color:var(--b)}
 /* Versionsliste */
-.vh{border:1px solid var(--bd);border-radius:8px;margin:18px 0;background:var(--b-s);font-size:13px}
-.vh>summary{cursor:pointer;font-weight:600;padding:10px 14px;list-style:none;user-select:none}
+.vh{border:1px solid var(--bd);border-radius:var(--r);margin:var(--sp-5) 0;background:var(--b-s);font-size:var(--fs-sm)}
+.vh>summary{cursor:pointer;font-weight:600;padding:var(--sp-3) var(--sp-4);list-style:none;user-select:none}
 .vh>summary::-webkit-details-marker{display:none}
 .vh>summary::before{content:'▸ ';color:var(--tx2)}
 .vh[open]>summary::before{content:'▾ '}
-.vh-in{padding:0 14px 10px;color:var(--tx2);font-size:12px;line-height:1.5}
+.vh-in{padding:0 14px 10px;color:var(--tx2);font-size:var(--fs-xs);line-height:1.5}
 .vh-l{list-style:none;margin:0;padding:0}
-.vh-i{border-top:1px solid var(--bd);padding:10px 14px}
+.vh-i{border-top:1px solid var(--bd);padding:var(--sp-3) var(--sp-4)}
 .vh-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .vh-t{font-weight:600}
 .vh-s{color:var(--tx2);flex:1 1 12rem}
 .vh-h .rst-b{margin:0;padding:.4rem .8rem}
 .vh-d{margin-top:8px}
-.vh-d>summary{cursor:pointer;color:var(--tx2);font-size:12px}
+.vh-d>summary{cursor:pointer;color:var(--tx2);font-size:var(--fs-xs)}
 .vh-d>summary:hover{color:var(--b)}
-.vh-tb{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;table-layout:fixed}
+.vh-tb{width:100%;border-collapse:collapse;margin-top:8px;font-size:var(--fs-xs);table-layout:fixed}
 .vh-tb th,.vh-tb td{text-align:left;vertical-align:top;padding:6px 8px;border-top:1px solid var(--bd);overflow-wrap:anywhere}
 .vh-tb thead th{border-top:0;color:var(--tx2);font-weight:500}
 .vh-tb tbody th{font-weight:500;width:28%}
-.vh-img{display:block;max-width:64px;max-height:48px;border-radius:4px;margin-bottom:3px}
+.vh-img{display:block;max-width:64px;max-height:48px;border-radius:var(--r-sm);margin-bottom:3px}
 .vh-no{color:var(--tx2);font-style:italic}
-.tgl-sec{border:1px solid var(--bd);border-radius:8px;margin:0 0 18px;background:var(--b-s)}
-.tgl-sec-h{font-weight:600;font-size:13px;padding:10px 14px;border-bottom:1px solid var(--bd)}
-.tgl{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bd)}
+.tgl-sec{border:1px solid var(--bd);border-radius:var(--r);margin:0 0 var(--sp-5);background:var(--b-s)}
+.tgl-sec-h{font-weight:600;font-size:var(--fs-sm);padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--bd)}
+.tgl{display:flex;align-items:center;gap:10px;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--bd)}
 .tgl:last-child{border-bottom:0}
 .tgl-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
 .tgl.is-on .tgl-dot{background:#1f9d55}
 .tgl.is-off .tgl-dot{background:#9aa0a6}
-.tgl-name{font-weight:600;font-size:13px}
-.tgl-state{font-size:12px;color:var(--tx3)}
-.tgl-b{font:inherit;font-size:12px;padding:5px 12px;margin-left:auto;border:1px solid var(--bd);border-radius:5px;background:var(--sf);color:var(--tx);cursor:pointer}
+.tgl-name{font-weight:600;font-size:var(--fs-sm)}
+.tgl-state{font-size:var(--fs-xs);color:var(--tx3)}
+.tgl-b{font:inherit;font-size:var(--fs-xs);min-height:var(--h-sm);padding:0 var(--sp-3);margin-left:auto;border:1px solid var(--bd);border-radius:var(--r-sm);background:var(--sf);color:var(--tx);cursor:pointer}
 .tgl-b:hover{border-color:var(--b);color:var(--b)}
 .fc .ql-snow .ql-tooltip{background:var(--sf);border-color:var(--bd);color:var(--tx);box-shadow:0 4px 12px rgba(0,0,0,.3)}
 .fc .ql-snow .ql-tooltip input[type=text]{background:var(--bg3);border-color:var(--bd);color:var(--tx)}
@@ -3044,13 +3135,13 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 /* ───── SAVE BAR ───── */
 
 .sv{position:sticky;bottom:0;background:var(--bg2);border-top:1px solid var(--bd);padding:.9rem 2rem;display:flex;justify-content:space-between;align-items:center}
-.sv-h{font-size:.78rem;color:var(--tx3)}
-.sv-b{padding:.65rem 1.8rem;background:var(--b);color:#fff;border:0;border-radius:var(--r2);font-family:inherit;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
+.sv-h{font-size:var(--fs-xs);color:var(--tx3)}
+.sv-b{min-height:var(--h-lg);padding:0 var(--sp-8);background:var(--b);color:#fff;border:0;border-radius:var(--r2);font-family:inherit;font-size:var(--fs-md);font-weight:600;cursor:pointer;transition:opacity .15s,transform .1s}
 .sv-b:hover{opacity:.88}
 .sv-b:active{transform:scale(.97)}
 
 /* Footer */
-.ft{padding:1.3rem 2rem;font-size:.7rem;color:var(--tx3)}
+.ft{padding:1.3rem 2rem;font-size:var(--fs-xs);color:var(--tx3)}
 .ft a{color:var(--b);text-decoration:none}
 
 /* ───── MOBILE ───── */
@@ -3127,6 +3218,48 @@ body.dash .fc .ql-container{background:#fff!important;border-color:#ddd!importan
 body.dash .fc .ql-editor.ql-blank::before{color:#999!important}
 body.dash .fc .ql-snow .ql-tooltip{background:#fff;border-color:#ddd;color:#333;box-shadow:0 4px 12px rgba(0,0,0,.1)}
 body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-color:#ddd;color:#333}
+
+/* ───── ÄNDERUNGSLEISTE · TOAST · DIALOG ───── */
+.sv{transition:background .2s,border-color .2s}
+.sv.is-dirty{background:linear-gradient(var(--b-s),var(--b-s)),var(--bg2);border-top:2px solid var(--b)}
+.sv-x{font:inherit;font-size:var(--fs-md);font-weight:600;min-height:var(--h-lg);padding:0 var(--sp-5);margin-right:var(--sp-2);background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer}
+.sv-x:hover{border-color:var(--er);color:var(--er)}
+.toast{position:fixed;right:var(--sp-6);bottom:5.5rem;z-index:40;display:grid;grid-template-columns:1fr auto;gap:var(--sp-1) var(--sp-3);align-items:start;max-width:min(26rem,calc(100vw - 2rem));margin:0;background:var(--bg2);border:1px solid var(--ok);border-left-width:4px;box-shadow:var(--shadow);transition:opacity .25s,transform .25s}
+.toast .ms-l{grid-row:2;grid-column:1;justify-self:start}
+.toast-x{grid-row:1;grid-column:2;font:inherit;font-size:var(--fs-xl);line-height:1;padding:0 var(--sp-1);background:none;border:0;color:var(--tx2);cursor:pointer}
+.toast-x:hover{color:var(--tx)}
+.toast.is-out{opacity:0;transform:translateY(8px)}
+.dlg{margin:auto;width:min(28rem,calc(100vw - 2rem));padding:var(--sp-6);border:1px solid var(--bd);border-radius:var(--r);background:var(--bg2);color:var(--tx);box-shadow:var(--shadow)}
+.dlg::backdrop{background:rgba(20,20,20,.45)}
+.dlg-t{font-size:var(--fs-lg);line-height:1.55;margin-bottom:var(--sp-5)}
+.dlg-b{display:flex;justify-content:flex-end;gap:var(--sp-2);flex-wrap:wrap}
+.dlg-b button{font:inherit;font-size:var(--fs-md);font-weight:600;min-height:var(--h-md);padding:0 var(--sp-4);border-radius:var(--r2);cursor:pointer}
+.dlg-c{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.dlg-c:hover{border-color:var(--tx2)}
+.dlg-ok{background:var(--b);color:#fff;border:1px solid var(--b)}
+.dlg-ok.is-danger{background:var(--er);border-color:var(--er)}
+
+/* ───── STARTANSICHT: Seitenkarten ───── */
+.home{padding:var(--sp-8);max-width:1000px;animation:up .4s ease-out}
+.home-t{font-size:var(--fs-xl);font-weight:600;margin-bottom:var(--sp-1)}
+.home-h{font-size:var(--fs-md);color:var(--tx2);margin-bottom:var(--sp-6)}
+.pcs{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));gap:var(--sp-4)}
+.pc{display:flex;flex-direction:column;height:100%;background:var(--bg2);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;color:var(--tx);text-decoration:none;transition:border-color .15s,box-shadow .15s,transform .15s}
+.pc:hover{border-color:var(--b);box-shadow:var(--shadow);transform:translateY(-2px)}
+.pc-img{display:flex;align-items:center;justify-content:center;aspect-ratio:16/9;background:var(--b-s);border-bottom:1px solid var(--bd)}
+.pc-img img{width:100%;height:100%;object-fit:cover;display:block}
+.pc-ic{font-size:1.75rem;font-weight:600;color:var(--b)}
+.pc-t{font-size:var(--fs-lg);font-weight:600;padding:var(--sp-3) var(--sp-4) 0}
+.pc-m{font-size:var(--fs-xs);color:var(--tx2);padding:var(--sp-1) var(--sp-4) var(--sp-4)}
+.pc-f{display:none;padding:0 var(--sp-4) var(--sp-3);margin-top:auto}
+body.tech .pc-f{display:block}
+@media(max-width:768px){
+  .home{padding:var(--sp-5)}
+  .toast{right:var(--sp-4);left:var(--sp-4);max-width:none}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
 </style>
 </head>
 <body class="<?= $auth ? 'dash' : 'login' ?>">
@@ -3174,13 +3307,19 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
     <div class="S-site"><?=htmlspecialchars($sn)?></div>
     <div class="S-lbl"><?=$t['nav_pages']?></div>
     <ul class="S-nav">
-      <?php $anyImage = false; foreach ($PESI_PAGES as $file => $label):
+      <?php $anyImage = false; $pageInfo = []; foreach ($PESI_PAGES as $file => $label):
         $isActive = $page === $file;
         // Felder zählen; Bildfelder merken (Diagnose T14 nur, wenn es welche gibt)
         $pf = $basePath . '/' . $file;
         $pageFields = file_exists($pf) ? _pesi_parse($pf) : [];
         $fc = count($pageFields);
         foreach ($pageFields as $pfld) { if (($pfld['type'] ?? '') === 'image') $anyImage = true; }
+        // Für die Seitenkarten der Startansicht: erstes Bild und letzte Änderung.
+        $pfImg = '';
+        foreach ($pageFields as $pfld) {
+            if (($pfld['type'] ?? '') === 'image' && ($pfImg = _pesi_safe_asset_url((string)$pfld['value'])) !== '') break;
+        }
+        $pageInfo[$file] = ['n' => $fc, 'img' => $pfImg, 'mtime' => file_exists($pf) ? (int)@filemtime($pf) : 0];
       ?>
         <li>
           <a href="?page=<?=urlencode($file)?>" class="<?=$isActive?'on':''?>" onclick="closeMobileNav()">
@@ -3315,8 +3454,12 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
            versteckt (.sr, nicht hidden), sonst zählt er nicht als Standardaktion. */ ?>
         <?php if (!empty($fields)): ?><button type="submit" class="sr sv-def" tabindex="-1" aria-hidden="true"><?=htmlspecialchars($t['save_btn'])?></button><?php endif; ?>
 
+        <?php /* Erfolg als Toast, ausserhalb von .cnt-wrap: dessen container-type
+           wäre sonst der Bezugsrahmen für position:fixed. Fehler und Hinweise
+           bleiben im Formular, dort, wo die Kundin weiterarbeitet. */ ?>
+        <?php if ($msg && $msgType === 'success'): ?><div class="ms success toast" id="toast" role="status"><span><?=htmlspecialchars($msg)?></span><?php if (!$isGlobals): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?><button type="button" class="toast-x" aria-label="<?=htmlspecialchars($t['toast_close'])?>">×</button></div><?php endif; ?>
         <div class="cnt-wrap">
-          <?php if ($msg): ?><div class="ms <?=$msgType?>" role="status"><span><?=htmlspecialchars($msg)?></span><?php if ($msgType === 'success' && !$isGlobals): ?><a class="ms-l" href="<?=htmlspecialchars($liveUrl)?>" target="_blank" rel="noopener noreferrer"><?=htmlspecialchars($t['saved_view'])?></a><?php endif; ?></div><?php endif; ?>
+          <?php if ($msg && $msgType !== 'success'): ?><div class="ms <?=$msgType?>" role="status"><span><?=htmlspecialchars($msg)?></span></div><?php endif; ?>
           <?php if ($draft): ?><div class="ms info"><span><?=htmlspecialchars($t['draft_kept'])?></span></div><?php endif; ?>
           <?php if ($isGlobals): ?><div class="ms info"><span><?=htmlspecialchars($t['globals_hint'])?></span></div><?php endif; ?>
 
@@ -3378,7 +3521,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   printf('<button class="blk-b" formnovalidate name="pesi_block" value="dup:%1$s:%2$d">%3$s</button>', $b['group'], $b['inst'], htmlspecialchars($t['blk_dup']));
                   printf('<button class="blk-b blk-del" formnovalidate name="pesi_block" value="del:%1$s:%2$d" data-confirm="%3$s">%4$s</button>',
                       $b['group'], $b['inst'], htmlspecialchars($t['blk_confirm_del'], ENT_QUOTES), htmlspecialchars($t['blk_del']));
-                  echo '</div></div>';
+                  echo '</div></details>';
                   if (($grpLast[$b['group']] ?? null) === $key) {
                       printf('<div class="blk-add-wrap"><button class="blk-add" formnovalidate name="pesi_block" value="add:%1$s">%2$s</button></div>',
                           $b['group'], htmlspecialchars($t['blk_add']));
@@ -3387,7 +3530,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                           printf('<div class="blk-imgs" data-blk-imgs data-max="%3$d"><label class="img-drop" data-img-drop>'
                               . '<input type="file" multiple name="pesi_many_%1$s[]" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" class="sr" data-nodirty>'
                               . '<span>%2$s</span></label>'
-                              . '<button class="sr" tabindex="-1" aria-hidden="true" formnovalidate name="pesi_block" value="imgs:%1$s" data-blk-imgs-go>%2$s</button></div>',
+                              . '<button class="sr" tabindex="-1" aria-hidden="true" formnovalidate name="pesi_block" value="imgs:%1$s" data-blk-imgs-go data-direct>%2$s</button></div>',
                               $b['group'], htmlspecialchars($t['blk_imgs']), $maxUploads);
                       }
                   }
@@ -3416,7 +3559,38 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   if (_pesi_block_image_slot($pageSrcNow, $grpB) !== null) $imgGroups[$g] = true;
               }
               $maxUploads = (int)ini_get('max_file_uploads') ?: 20;
+              // Kurze Felder paarweise nebeneinander, wenn Platz ist (CSS-Raster).
+              // Nur zwei aufeinanderfolgende im selben Eintrag, sonst bliebe eine
+              // Lücke neben einem einzelnen kurzen Feld.
+              $renderIds = array_values(array_filter(array_keys($fields), fn($i) => !isset($altFor[$i])));
+              $isShort = fn($i) => in_array($fields[$i]['type'], ['text', 'url', 'email', 'tel', 'date'], true) && !isset($focusOf[$i]);
+              $half = [];
+              for ($i = 0; $i + 1 < count($renderIds); $i++) {
+                  [$a1, $a2] = [$renderIds[$i], $renderIds[$i + 1]];
+                  if ($isShort($a1) && $isShort($a2) && ($blockOf[$a1] ?? '') === ($blockOf[$a2] ?? '')) {
+                      $half[$a1] = $half[$a2] = true;
+                      $i++;
+                  }
+              }
+              // Einträge: eingeklappt zeigt die Zeile ein Vorschaubild und den
+              // ersten Text. Gruppen bis drei Einträge stehen offen; ein Eintrag
+              // mit Entwurf oder Fehler immer (data-force), sonst fände die
+              // Kundin das markierte Feld nicht.
+              $grpCount = array_count_values(array_column($blocks, 'group'));
+              $blkSum = [];
+              foreach ($fields as $fid => $f) {
+                  $k = $blockOf[$fid] ?? null;
+                  if ($k === null) continue;
+                  $blkSum[$k] ??= ['img' => '', 'text' => '', 'force' => false];
+                  if ($f['type'] === 'image' && $blkSum[$k]['img'] === '') $blkSum[$k]['img'] = _pesi_safe_asset_url((string)$f['value']);
+                  if (in_array($f['type'], ['text', 'textarea', 'richtext'], true) && !isset($altFor[$fid]) && $blkSum[$k]['text'] === '') {
+                      $blkSum[$k]['text'] = _pesi_version_text((string)$f['value'], $f['type']);
+                      if ($blkSum[$k]['text'] === $t['vh_empty']) $blkSum[$k]['text'] = '';
+                  }
+                  if (array_key_exists($fid, $draft) || in_array($fid, $invalidIds, true)) $blkSum[$k]['force'] = true;
+              }
             ?>
+            <div class="fgrid">
             <?php foreach ($fields as $id => $fld):
               if (isset($altFor[$id])) continue;
               $label = !empty($fld['label']) ? $fld['label'] : $id;
@@ -3426,9 +3600,16 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                 if ($bk !== null):
                   $bm = $blkMeta[$bk];
             ?>
-              <div class="blk">
-                <h2 class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></h2>
-                <div class="blk-fields">
+              <?php $bs = $blkSum[$bk] ?? ['img' => '', 'text' => '', 'force' => false];
+                $bOpen = $bs['force'] || ($grpCount[$bm['group']] ?? 0) <= 3; ?>
+              <details class="blk" data-group="<?=htmlspecialchars($bm['group'])?>" data-inst="<?=(int)$bm['inst']?>"<?=$bOpen ? ' open' : ''?><?=$bs['force'] ? ' data-force' : ''?>>
+                <summary class="blk-sum">
+                  <span class="blk-drag" title="<?=htmlspecialchars($t['blk_drag'])?>" aria-hidden="true">⠿</span>
+                  <?php if ($bs['img'] !== ''): ?><img class="blk-thumb" src="<?=htmlspecialchars($bs['img'])?>" alt="" loading="lazy"><?php endif; ?>
+                  <h2 class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></h2>
+                  <?php if ($bs['text'] !== ''): ?><span class="blk-prev"><?=htmlspecialchars($bs['text'])?></span><?php endif; ?>
+                </summary>
+                <div class="blk-fields fgrid">
             <?php endif; $curBlk = $bk; endif; ?>
               <?php
                 $fid = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $id);
@@ -3441,7 +3622,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                 $fx = ($isDraft ? ' data-saved="' . htmlspecialchars((string)$fld['value']) . '"' : '') . ($bad ? ' aria-invalid="true"' : '');
                 $ft  = $fieldToggle[$id] ?? null;
               ?>
-              <div class="fc<?=$ft && !$ft['visible'] ? ' fc-off' : ''?><?=$bad ? ' fc-err' : ''?>">
+              <div class="fc<?=$ft && !$ft['visible'] ? ' fc-off' : ''?><?=$bad ? ' fc-err' : ''?><?=isset($half[$id]) ? ' fc-half' : ''?>">
                 <?php if ($fld['type'] === 'richtext'): ?>
                   <div class="fc-label"><?=htmlspecialchars($label)?></div>
                 <?php else: ?>
@@ -3556,6 +3737,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
               </div>
             <?php endforeach; ?>
             <?php if ($curBlk !== null) $closeBlk($curBlk); ?>
+            </div>
           <?php endif; ?>
         </div>
 
@@ -3614,9 +3796,16 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
             <span class="sv-h"><?=htmlspecialchars($t['save_hint'])?></span>
           </span>
           <span class="sv-act">
-          <?php if (!empty($fields)): ?><button type="submit" class="sv-b"><?=$t['save_btn']?></button><?php endif; ?>
+          <?php if (!empty($fields)): ?><button type="button" class="sv-x" id="svDiscard" data-href="?page=<?=htmlspecialchars(urlencode($page))?>" hidden><?=htmlspecialchars($t['chg_discard'])?></button><button type="submit" class="sv-b"><?=$t['save_btn']?></button><?php endif; ?>
           </span>
         </div>
+        <?php endif; ?>
+        <?php /* Ziehen zum Sortieren: die JS-Seite setzt Gruppe und Reihenfolge
+           und schickt mit diesem Knopf ab. Ganz am Ende des Formulars, damit
+           der erste Knopf der Standard-Speichern-Knopf bleibt. */ ?>
+        <?php if (!empty($blocks)): ?>
+        <input type="hidden" name="pesi_order" id="pesiOrder" value="">
+        <button type="submit" class="sr" tabindex="-1" aria-hidden="true" formnovalidate name="pesi_block" value="" id="pesiOrderGo" data-direct><?=htmlspecialchars($t['blk_moved'])?></button>
         <?php endif; ?>
       </form>
       <?php if (!$isGlobals): ?><aside class="pv" id="pv" aria-label="<?=htmlspecialchars($t['pv_title'])?>">
@@ -3652,18 +3841,39 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       </div>
 
     <?php else: ?>
-      <div class="W">
-        <div class="W-in">
-          <div class="W-ic"><svg viewBox="0 0 24 24"><path d="M3 12h18M12 3v18"/></svg></div>
-          <h2><?=$t['welcome_title']?></h2>
-          <p><?=$t['welcome_hint']?></p>
-        </div>
+      <div class="home">
+        <h2 class="home-t"><?=htmlspecialchars($t['welcome_title'])?></h2>
+        <p class="home-h"><?=htmlspecialchars($t['welcome_hint'])?></p>
+        <ul class="pcs">
+          <?php foreach ($PESI_PAGES as $file => $label): $pi = $pageInfo[$file] ?? ['n' => 0, 'img' => '', 'mtime' => 0]; ?>
+          <li><a class="pc" href="?page=<?=urlencode($file)?>">
+            <span class="pc-img"><?php if ($pi['img'] !== ''): ?><img src="<?=htmlspecialchars($pi['img'])?>" alt="" loading="lazy"><?php else: ?><span class="pc-ic" aria-hidden="true"><?=htmlspecialchars(mb_strtoupper(mb_substr((string)$label, 0, 1)))?></span><?php endif; ?></span>
+            <span class="pc-t"><?=htmlspecialchars($label)?></span>
+            <span class="pc-m"><?=htmlspecialchars(implode(' · ', array_filter([
+                $pi['n'] > 0 ? ($pi['n'] === 1 ? $t['home_field'] : sprintf($t['home_fields'], $pi['n'])) : '',
+                $pi['mtime'] ? sprintf($t['last_mod'], _pesi_when($pi['mtime'])) : '',
+            ])))?></span>
+            <span class="pc-f fc-id"><?=htmlspecialchars($file)?></span>
+          </a></li>
+          <?php endforeach; ?>
+        </ul>
       </div>
     <?php endif; ?>
 
     <div class="ft">pesi CMS · <a href="https://ludescher.studio" target="_blank" rel="noopener noreferrer">ludescher.studio</a></div>
   </div>
 </div>
+<?php /* Eigener Rückfrage-Dialog (pesiAsk). Ausserhalb von #pf: ein Formular
+   darf kein zweites enthalten. */ ?>
+<dialog class="dlg" id="dlg" aria-labelledby="dlgT">
+  <form method="dialog">
+    <p class="dlg-t" id="dlgT"></p>
+    <div class="dlg-b">
+      <button type="submit" value="cancel" class="dlg-c"><?=htmlspecialchars($t['dlg_cancel'])?></button>
+      <button type="submit" value="ok" class="dlg-ok" data-ok="<?=htmlspecialchars($t['dlg_ok'])?>"><?=htmlspecialchars($t['dlg_ok'])?></button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 function toggleNav(){
@@ -3871,11 +4081,51 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   });
 })();
 
+// ── Rückfragen im eigenen Dialog statt confirm()/alert() ──
+// pesiAsk(text, okLabel, gefährlich, nurHinweis) → Promise<bool>. Ohne
+// <dialog>-Unterstützung die Browser-Rückfrage. Bei gefährlichen Aktionen
+// steht der Fokus auf „Abbrechen“, Escape bricht immer ab.
+window.pesiAsk=function(text,ok,danger,info){
+  var d=document.getElementById('dlg');
+  if(!d||typeof d.showModal!=='function'){
+    if(info){ alert(text); return Promise.resolve(true); }
+    return Promise.resolve(confirm(text));
+  }
+  var okB=d.querySelector('.dlg-ok'), cB=d.querySelector('.dlg-c');
+  d.querySelector('.dlg-t').textContent=text;
+  okB.textContent=ok||okB.getAttribute('data-ok');
+  okB.classList.toggle('is-danger',!!danger);
+  cB.hidden=!!info;
+  d.returnValue='';
+  return new Promise(function(res){
+    d.addEventListener('close',function(){ res(d.returnValue==='ok'); },{once:true});
+    d.showModal();
+    (danger&&!info ? cB : okB).focus();
+  });
+};
+
+// ── Toast: Erfolgsmeldung verschwindet nach einer Weile ──
+// Nicht solange Maus oder Fokus darauf liegen; Fehler bleiben im Formular stehen.
+(function(){
+  var t=document.getElementById('toast'); if(!t) return;
+  var hold=false, timer=0;
+  function hide(){ t.classList.add('is-out'); setTimeout(function(){ t.hidden=true; },250); }
+  function arm(){ clearTimeout(timer); timer=setTimeout(function(){ if(!hold) hide(); },7000); }
+  t.addEventListener('mouseenter',function(){ hold=true; });
+  t.addEventListener('mouseleave',function(){ hold=false; arm(); });
+  t.addEventListener('focusin',function(){ hold=true; });
+  t.addEventListener('focusout',function(){ hold=false; arm(); });
+  var x=t.querySelector('.toast-x'); if(x) x.addEventListener('click',hide);
+  arm();
+})();
+
 // ── Speichern: ungespeicherte Änderungen zählen + warnen ──
 (function(){
   var form=document.getElementById('pf'); if(!form) return;
   var leaving=false;
   var DISCARD=<?=json_encode($t['unsaved_warn'], JSON_UNESCAPED_UNICODE)?>;
+  var DOK=<?=json_encode($t['unsaved_ok'], JSON_UNESCAPED_UNICODE)?>;
+  var CHGQ=<?=json_encode($t['chg_discard_q'], JSON_UNESCAPED_UNICODE)?>;
   var D1=<?=json_encode($t['dirty_one'], JSON_UNESCAPED_UNICODE)?>;
   var DN=<?=json_encode($t['dirty_many'], JSON_UNESCAPED_UNICODE)?>;
   var badge=document.getElementById('svDirty');
@@ -3909,20 +4159,111 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
       else { badge.hidden=true; }
     }
     if(saveBtn) saveBtn.classList.toggle('has-changes',n>0);
+    // Änderungsleiste wie im Kirby-Panel: deutlich, sobald etwas offen ist.
+    if(svBar) svBar.classList.toggle('is-dirty',n>0);
+    if(discardBtn) discardBtn.hidden=n===0;
   }
+  var svBar=form.querySelector('.sv'), discardBtn=document.getElementById('svDiscard');
   document.addEventListener('input',refresh);
   document.addEventListener('change',refresh);
   form.addEventListener('submit',function(){leaving=true;});
-  form.querySelectorAll('button[name="pesi_block"]:not([data-blk-imgs-go]),button[name="pesi_toggle"],button[name="pesi_restore"]').forEach(function(b){
+  // Strukturaktion mit dem Knopf als Absender abschicken. requestSubmit löst
+  // kein click aus; ohne es (alte Browser) markiert data-go den zweiten Klick.
+  function submitWith(b){
+    leaving=true;
+    if(form.requestSubmit) form.requestSubmit(b); else { b.setAttribute('data-go',''); b.click(); }
+  }
+  // Ungespeichertes geht bei jeder Strukturaktion verloren: vorher fragen.
+  function discardOk(){ return count()>0 ? pesiAsk(DISCARD, DOK, true) : Promise.resolve(true); }
+  form.querySelectorAll('button[name="pesi_block"]:not([data-direct]),button[name="pesi_toggle"],button[name="pesi_restore"]').forEach(function(b){
     b.addEventListener('click',function(e){
+      if(b.hasAttribute('data-go')){ b.removeAttribute('data-go'); return; }
+      e.preventDefault();
       var c=b.getAttribute('data-confirm');
-      if(c && !confirm(c)){e.preventDefault();leaving=false;return;}
-      if(count()>0 && !confirm(DISCARD)){e.preventDefault();leaving=false;}
+      (c ? pesiAsk(c, b.textContent.trim(), b.classList.contains('blk-del')) : Promise.resolve(true))
+        .then(function(y){ return y ? discardOk() : false; })
+        .then(function(y){ if(y) submitWith(b); });
     });
   });
   window.addEventListener('beforeunload',function(e){
     if(count()>0 && !leaving){e.preventDefault();e.returnValue='';}
   });
+  // Änderungsleiste: „Verwerfen“ lädt den gespeicherten Stand per GET neu.
+  // Ein Neuladen nach einem POST schickte das Formular sonst erneut ab.
+  var discard=document.getElementById('svDiscard');
+  if(discard) discard.addEventListener('click',function(){
+    pesiAsk(CHGQ, discard.textContent.trim(), true).then(function(y){
+      if(!y) return;
+      leaving=true;
+      location.href=discard.getAttribute('data-href');
+    });
+  });
+
+  // ── Einträge: Klappzustand pro Tab merken, neue Einträge offen ──
+  var blks=form.querySelectorAll('details.blk[data-group]');
+  var BKEY='pesi_blk:'+location.pathname+location.search, known=null;
+  try{ known=JSON.parse(sessionStorage.getItem(BKEY)||'null'); }catch(_){}
+  if(known&&typeof known==='object') blks.forEach(function(d){
+    var k=d.dataset.group+':'+d.dataset.inst;
+    if(d.hasAttribute('data-force')) return;   // Entwurf oder Fehler: bleibt offen
+    d.open=Object.prototype.hasOwnProperty.call(known,k) ? !!known[k] : true;
+  });
+  function saveBlk(){
+    var o={};
+    blks.forEach(function(d){ o[d.dataset.group+':'+d.dataset.inst]=d.open; });
+    try{ sessionStorage.setItem(BKEY,JSON.stringify(o)); }catch(_){}
+  }
+  blks.forEach(function(d){ d.addEventListener('toggle',saveBlk); });
+  saveBlk();
+
+  // ── Einträge per Ziehen sortieren; ↑↓ bleiben für Tastatur und Touch ──
+  var ORD=document.getElementById('pesiOrder'), OGO=document.getElementById('pesiOrderGo'), dragEl=null, before=[];
+  function order(g){
+    return [].map.call(form.querySelectorAll('details.blk[data-group="'+g+'"]'),function(x){ return x.dataset.inst; });
+  }
+  function restoreOrder(g,ids){
+    var cur=[].slice.call(form.querySelectorAll('details.blk[data-group="'+g+'"]'));
+    var marks=cur.map(function(x){ var m=document.createComment(''); x.parentNode.insertBefore(m,x); return m; });
+    ids.forEach(function(i,k){
+      var el=form.querySelector('details.blk[data-group="'+g+'"][data-inst="'+i+'"]');
+      marks[k].parentNode.replaceChild(el,marks[k]);
+    });
+    marks.forEach(function(m){ if(m.parentNode) m.parentNode.removeChild(m); });
+  }
+  if(ORD&&OGO) blks.forEach(function(d){
+    var h=d.querySelector('.blk-drag');
+    if(!h) return;
+    h.addEventListener('mousedown',function(){ d.draggable=true; });
+    h.addEventListener('mouseup',function(){ if(!dragEl) d.draggable=false; });
+    h.addEventListener('click',function(e){ e.preventDefault(); });   // klappt nicht auf
+    d.addEventListener('dragstart',function(e){
+      if(!d.draggable){ e.preventDefault(); return; }
+      dragEl=d; before=order(d.dataset.group); d.classList.add('is-drag');
+      e.dataTransfer.effectAllowed='move';
+      try{ e.dataTransfer.setData('text/plain',''); }catch(_){}
+    });
+    d.addEventListener('dragover',function(e){
+      if(!dragEl||dragEl.dataset.group!==d.dataset.group) return;
+      e.preventDefault();
+      if(dragEl===d) return;
+      var r=d.getBoundingClientRect();
+      d.parentNode.insertBefore(dragEl, e.clientY>r.top+r.height/2 ? d.nextSibling : d);
+    });
+    d.addEventListener('drop',function(e){ if(dragEl) e.preventDefault(); });
+    d.addEventListener('dragend',function(){
+      d.draggable=false; d.classList.remove('is-drag');
+      var g=d.dataset.group, now=order(g);
+      dragEl=null;
+      if(now.join()===before.join()) return;
+      discardOk().then(function(y){
+        if(!y){ restoreOrder(g,before); return; }
+        ORD.value=now.join(',');
+        OGO.value='order:'+g;
+        submitWith(OGO);
+      });
+    });
+  });
+
   // Mehrere Bilder als neue Einträge: Die Auswahl selbst ist die Aktion.
   // PHP verwirft Dateien über max_file_uploads stillschweigend, darum vorher.
   var IMAX=<?=json_encode($t['blk_imgs_max'], JSON_UNESCAPED_UNICODE)?>;
@@ -3932,9 +4273,8 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
     if(!inp||!go) return;
     function send(){
       if(!inp.files||!inp.files.length) return;
-      if(inp.files.length>max){ alert(IMAX.replace('%d',max)); inp.value=''; return; }
-      if(count()>0 && !confirm(DISCARD)){ inp.value=''; return; }
-      if(form.requestSubmit) form.requestSubmit(go); else { leaving=true; go.click(); }
+      if(inp.files.length>max){ pesiAsk(IMAX.replace('%d',max),null,false,true); inp.value=''; return; }
+      discardOk().then(function(y){ if(y) submitWith(go); else inp.value=''; });
     }
     inp.addEventListener('change',send);
     if(drop){
