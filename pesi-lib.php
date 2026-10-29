@@ -4,7 +4,7 @@
 // in pesi-core.php, which an update never touches. Documentation: README.md
 
 // pesi.php checks on start that it comes from the same release.
-if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.5.0');
+if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.6.0');
 
 // ── Defaults ─────────────────────────────────────────────────
 // Everything pesi-core.php does not set. New settings of later releases
@@ -28,6 +28,7 @@ foreach ([
     'PESI_UPLOAD_MAX_BYTES' => 5 * 1024 * 1024,
     'PESI_UPLOAD_TYPES'     => 'jpg,jpeg,png,webp,avif,gif',
     'PESI_IMAGE_MAX_EDGE'   => 2560,
+    'PESI_IMAGE_SIZES'      => '480,960,1600',
 ] as $pesiKey => $pesiDefault) {
     if (!defined($pesiKey)) define($pesiKey, $pesiDefault);
 }
@@ -43,7 +44,7 @@ if (!function_exists('pesi')) {
     // The field types that parser, dashboard and saver know. A typo
     // like 'urll' is not a field but a diagnostic (T13).
     function _pesi_types(): array {
-        return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel'];
+        return ['text', 'textarea', 'richtext', 'image', 'url', 'email', 'tel', 'date'];
     }
 
     // BRAND_COLOR ends up in a <style>. Hex values only, otherwise the default.
@@ -92,6 +93,29 @@ if (!function_exists('pesi')) {
         return preg_match('/^(?=.*\d)[0-9+()\.\-\/ ]{3,40}$/', $tel) ? $tel : '';
     }
 
+    // A calendar day as YYYY-MM-DD, as <input type="date"> sends it.
+    function _pesi_safe_date(string $date): string {
+        $date = trim($date);
+        if ($date === '') return '';
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $m)) return '';
+        return checkdate((int)$m[2], (int)$m[3], (int)$m[1]) ? $date : '';
+    }
+
+    /**
+     * Focus point of an image (<image-id>_focus) as “X% Y%”, both 0–100. The
+     * value sits in object-position in the template; anything else could append
+     * its own CSS there. '' = no focus, null = invalid.
+     */
+    function _pesi_safe_focus(string $v): ?string {
+        $v = trim($v);
+        if ($v === '') return '';
+        if (!preg_match('/^(\d{1,3}(?:[.,]\d+)?)\s*%?\s*[ ,;]\s*(\d{1,3}(?:[.,]\d+)?)\s*%?$/', $v, $m)) return null;
+        $x = (float)str_replace(',', '.', $m[1]);
+        $y = (float)str_replace(',', '.', $m[2]);
+        if ($x > 100 || $y > 100) return null;
+        return (int)round($x) . '% ' . (int)round($y) . '%';
+    }
+
     function _pesi_safe_typed_value(string $value, string $type): ?string {
         if ($type === 'url') {
             $safe = _pesi_safe_link_url($value);
@@ -99,6 +123,8 @@ if (!function_exists('pesi')) {
             $safe = _pesi_safe_email($value);
         } elseif ($type === 'tel') {
             $safe = _pesi_safe_tel($value);
+        } elseif ($type === 'date') {
+            $safe = _pesi_safe_date($value);
         } else {
             return $value;
         }
@@ -256,7 +282,7 @@ if (!function_exists('pesi')) {
         if ($type === 'image') {
             return _pesi_e(_pesi_safe_asset_url($default));
         }
-        if (in_array($type, ['url', 'email', 'tel'], true)) {
+        if (in_array($type, ['url', 'email', 'tel', 'date'], true)) {
             return _pesi_e(_pesi_safe_typed_value($default, $type) ?? '');
         }
         if ($type !== 'richtext') {
@@ -301,6 +327,97 @@ if (!function_exists('pesi_text')) {
         $s = (string)preg_replace('#<(?:br|/?(?:p|div|li|ul|ol|h[1-6]|blockquote))\b[^>]*>#i', ' ', $s);
         $s = html_entity_decode(strip_tags($s), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         return trim((string)preg_replace('/[\s\x{00A0}]+/u', ' ', $s));
+    }
+}
+
+if (!function_exists('pesi_date')) {
+    /**
+     * A date field made readable: pesi_date(pesi('course', '2026-08-15', 'date', 'Course start'))
+     * gives “15 August 2026” (LANG 'de': “15. August 2026”). $format takes the
+     * characters of date(); month and day names (F, M, l, D) come in the
+     * website's language, without ext/intl. Empty or invalid → ''.
+     */
+    function pesi_date(string $iso, string $format = ''): string {
+        $iso = _pesi_safe_date(html_entity_decode($iso, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($iso === '') return '';
+        [$y, $m, $d] = array_map('intval', explode('-', $iso));
+        $ts = mktime(12, 0, 0, $m, $d, $y);
+        $de = (defined('LANG') ? LANG : 'de') !== 'en';
+        if ($format === '') $format = $de ? 'j. F Y' : 'j F Y';
+        $names = $de ? [
+            'F' => ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'],
+            'M' => ['Jan.', 'Feb.', 'März', 'Apr.', 'Mai', 'Juni', 'Juli', 'Aug.', 'Sep.', 'Okt.', 'Nov.', 'Dez.'],
+            'l' => ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'],
+            'D' => ['So.', 'Mo.', 'Di.', 'Mi.', 'Do.', 'Fr.', 'Sa.'],
+        ] : [];
+        $out = '';
+        for ($i = 0, $n = strlen($format); $i < $n; $i++) {
+            $c = $format[$i];
+            if ($c === '\\' && $i + 1 < $n) { $out .= $format[++$i]; continue; }
+            if (isset($names[$c])) {
+                $out .= $names[$c][in_array($c, ['F', 'M'], true) ? $m - 1 : (int)date('w', $ts)];
+            } elseif (preg_match('/[A-Za-z]/', $c)) {
+                $out .= date($c, $ts);
+            } else {
+                $out .= $c;   // bytes of UTF-8 characters stay as they are
+            }
+        }
+        return _pesi_e($out);
+    }
+}
+
+/**
+ * Smaller copies of an uploaded image: next to photo-a1b2c3d4e5f6.jpg
+ * lie photo-a1b2c3d4e5f6-480w.jpg etc.; the number is the width in pixels.
+ * Returns [width => absolute path], ascending. pesi.php writes them on
+ * upload and deletes them with the original.
+ */
+if (!function_exists('_pesi_variant_files')) {
+    function _pesi_variant_files(string $abs): array {
+        $ext = pathinfo($abs, PATHINFO_EXTENSION);
+        if ($ext === '' || !preg_match('/^[a-z0-9]+$/i', $ext)) return [];
+        $base = substr($abs, 0, -strlen($ext) - 1);
+        // Only pesi's own uploads (…-<12 hex>.jpg) have copies. A logo.png placed
+        // by hand must not take logo-20w.png with it.
+        if (!preg_match('/-[0-9a-f]{12}$/', $base)) return [];
+        $out  = [];
+        foreach (glob(str_replace(['[', '*', '?'], ['[[]', '[*]', '[?]'], $base) . '-*w.' . $ext) ?: [] as $f) {
+            $w = substr($f, strlen($base) + 1, -strlen($ext) - 2);
+            if (preg_match('/^[1-9]\d{1,4}$/', $w) && is_file($f)) $out[(int)$w] = $f;
+        }
+        ksort($out);
+        return $out;
+    }
+}
+
+if (!function_exists('pesi_srcset')) {
+    /**
+     * srcset for an image field, so that phones load smaller files:
+     *   <img src="<?= $img = pesi('hero', …, 'image', 'Image') ?>"
+     *        srcset="<?= pesi_srcset($img) ?>" sizes="100vw" alt="">
+     * Only for images uploaded through the dashboard for which gd could write
+     * smaller copies; otherwise '' and the browser uses src.
+     */
+    function pesi_srcset(string $src): string {
+        $path = html_entity_decode($src, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($path === '' || $path[0] !== '/' || _pesi_safe_asset_url($path) !== $path) return '';
+        if (preg_match('#(^|/)\.\.?(/|$)#', $path) || !preg_match('#^[A-Za-z0-9._/-]+$#', $path)) return '';
+        $abs = __DIR__ . $path;
+        $variants = is_file($abs) ? _pesi_variant_files($abs) : [];
+        if (!$variants) return '';
+        $dir = rtrim(dirname($path), '/');
+        $set = [];
+        foreach ($variants as $w => $f) $set[] = $dir . '/' . basename($f) . ' ' . $w . 'w';
+        // The original with its width. A portrait photo rotated only by EXIF
+        // reports width and height swapped; the copies are rotated for real
+        // and reveal the right orientation.
+        $o = @getimagesize($abs);
+        $v = @getimagesize(end($variants));
+        if (is_array($o) && is_array($v) && $o[0] !== $o[1] && ($o[0] > $o[1]) !== ($v[0] > $v[1])) {
+            $o = [$o[1], $o[0]];
+        }
+        if (is_array($o) && $o[0] > array_key_last($variants)) $set[] = $path . ' ' . $o[0] . 'w';
+        return _pesi_e(implode(', ', $set));
     }
 }
 

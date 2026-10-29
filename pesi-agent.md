@@ -58,7 +58,7 @@ outside the public web root. The installation guides need not be uploaded.
 |-------|----------|-------------|
 | `$id` | yes | Unique field ID per file. snake_case, `[a-z0-9_]` only |
 | `$default` | yes | Content shown on the page. This IS the content — no separate storage |
-| `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, `image`, `url`, `email`, or `tel` |
+| `$type` | defaults to `text` — **always pass it** | `text`, `textarea`, `richtext`, `image`, `url`, `email`, `tel`, or `date` |
 | `$label` | optional in code — **always pass it** | Human-readable label shown in dashboard. **Always German.** Omit it and the client sees the raw field ID (`footer_firma`) instead of a readable name. |
 
 > **Single quotes around the value — never double.** `pesi('id', 'Text', …)` is
@@ -85,7 +85,7 @@ in the diagnostics panel). Keep them unique.
 The parser reads the page with PHP's tokenizer and only counts real global
 `pesi()` calls in PHP code. Commented-out calls, `->pesi()`, `Foo::pesi()`
 and `pesi(…)` text inside strings, nowdocs or plain HTML are ignored. The type
-must be one of the seven below; an unknown type such as `urll` is reported as
+must be one of the eight below; an unknown type such as `urll` is reported as
 `T13` and the field does not appear.
 
 ### Types
@@ -99,6 +99,20 @@ must be one of the seven below; an unknown type such as `urll` is reported as
 | `url` | Validated link input | `http(s)` URLs, `/internal` paths, queries and anchors used in `href` |
 | `email` | Validated email input | Address used after `mailto:` |
 | `tel` | Validated phone input | Number used after `tel:` |
+| `date` | Date picker | A calendar day (course start, holiday until …). Stored as `YYYY-MM-DD`; print it with `pesi_date()` |
+
+**`date`** stores the ISO day and `pesi()` returns it unchanged, so it also fits
+a `datetime` attribute. For the visible text wrap it in `pesi_date()`, which
+prints German month names without ext/intl (`15. August 2026`; `LANG` `en`:
+`15 August 2026`) and takes an optional `date()` format:
+
+```php
+<?php $kurs = pesi('kurs_beginn', '2026-09-14', 'date', 'Kursbeginn'); ?>
+<time datetime="<?= $kurs ?>"><?= pesi_date($kurs, 'l, j. F Y') ?></time>
+```
+
+Convert an existing date to ISO for the default. A value pesi cannot read as a
+date prints as nothing, so check the page after converting.
 
 ### Image type
 
@@ -120,6 +134,9 @@ scheme safe.
 <a href="tel:<?= pesi('telefon', '+43 123 456789', 'tel', 'Telefonnummer') ?>">Anrufen</a>
 ```
 
+The dashboard offers the pages registered in `$PESI_PAGES` under every `url`
+field, so an internal link is one pick away. Nothing to configure.
+
 **Content images get a description field.** For every image that carries
 meaning — portraits, team photos, project or product images — add a `text`
 field in the `alt` attribute whose ID is the image ID plus `_alt`, with
@@ -135,6 +152,34 @@ The dashboard pairs the two by name and shows the description inside the
 image's card. Decorative images (backgrounds, ornaments) keep `alt=""` and get
 no description field. Inside a `pesi:item`, the `_alt` field follows the
 image's ID (`team_1_foto` → `team_1_foto_alt`).
+
+**Cropped images get a focus field.** Where the layout crops an image with
+`object-fit: cover` (hero banners, square team tiles), add a `text` field
+whose ID is the image ID plus `_focus` and put it in `object-position`. The
+client clicks the spot that must stay visible; pesi only stores values of the
+form `X% Y%`. Default `50% 50%`:
+
+```php
+<img src="<?= pesi('hero', '/uploads/hero.jpg', 'image', 'Titelbild') ?>"
+     style="object-position: <?= pesi('hero_focus', '50% 50%', 'text', 'Bildausschnitt') ?>"
+     alt="<?= pesi('hero_alt', 'Praxisraum mit Blick ins Grüne', 'text', 'Bildbeschreibung') ?>">
+```
+
+An image that is never cropped gets no focus field.
+
+**Large images get a `srcset`.** With gd, every upload also gets smaller
+copies (`PESI_IMAGE_SIZES`, default 480, 960 and 1600 px wide).
+`pesi_srcset()` lists them; without copies it returns an empty string and the
+browser uses `src`. Keep the value in a variable — the field ID may appear
+only once per page:
+
+```php
+<img src="<?= $hero = pesi('hero', '/uploads/hero.jpg', 'image', 'Titelbild') ?>"
+     srcset="<?= pesi_srcset($hero) ?>" sizes="100vw" alt="…">
+```
+
+Set `sizes` to the width the image really takes in the layout. Images placed
+by hand have no copies until the client uploads them once through the dashboard.
 
 Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi checks the file by its content (real MIME + size; the extension is derived from the content, never trusted), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored value is escaped on output.
 
@@ -444,6 +489,11 @@ The dashboard then renders each entry as its own card with ↑ ↓ · Dupliziere
 Löschen, plus one "+ Eintrag hinzufügen" button under the group. pesi refuses to
 delete the last remaining entry, so the template can never be lost.
 
+An entry with **exactly one `image` field** — a gallery, a logo row — also
+gets a drop zone "Mehrere Bilder als neue Einträge hinzufügen". Each image
+becomes a copy of entry `:1` with that image and an empty `_alt` field, all in
+one save. Keep a gallery entry to one image so the client gets this zone.
+
 Do not put a `pesi:item` block inside another one. pesi detects this, shows
 the fields without entry buttons and refuses every entry operation on that
 page (code `S6`). A team with a list of services per person is two separate
@@ -670,11 +720,13 @@ Then run through this checklist. Report any failures:
 - `BRAND_COLOR` is set in `pesi-core.php` (matched to site's primary color)
 - `.htaccess` contains rewrite rules for both `pesi` and `cms`
 - `.htaccess` denies direct access to `pesi-core.php` and all `.pesi-*` files (pattern `\.pesi-`, **unanchored** — `^\.pesi-` would miss `page.php.pesi-backup.1`)
-- Verified by hand: requesting `/<page>.php.pesi-backup.1` in a browser returns 403, not the source
+- Verified by hand: requesting `/<page>.php.pesi-backup.1` in a browser returns 403, not the source. After the first save the dashboard repeats this check on every visit and reports `T21` if a backup, `.pesi-password` or `.pesi-throttle` comes back
 - On Nginx/non-Apache: equivalent `deny` rules exist in the server config (`.htaccess` is ignored there)
 - `.htaccess` does **not** block the upload folder; `uploads/.htaccess` exists and disables script execution
 - `PESI_UPLOAD_DIR` is a relative folder inside the project root, without `..` segments
 - All `image` fields wrap only the path, with a valid existing image path as `$default`
+- Every image cropped by `object-fit: cover` has a `_focus` field in `object-position`; large content images use `pesi_srcset()` with a fitting `sizes`
+- Every `date` default is a valid `YYYY-MM-DD` and the page shows it through `pesi_date()`
 - Richtext is sanitized by pesi; do not use it as a place for custom scripts or embeds
 - `robots.txt` contains `Disallow: /pesi` and `Disallow: /cms`
 - No `pesi()` value is escaped a second time (`htmlspecialchars(pesi(…))`), and none goes into JSON-LD, `<meta>`, `<title>` or a `<script>` without `pesi_text()`
