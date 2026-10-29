@@ -81,8 +81,15 @@ if ($start === false || $end === false || $end <= $start) {
     fwrite(STDERR, "Konnte den Funktionsblock in pesi.php nicht finden.\n");
     exit(2);
 }
+// Seit 0.5.0 ist Englisch Standard. Die Suite prüft gegen die deutsche Tabelle,
+// darum stellt sie jede Kopie von pesi-core.php auf LANG 'de'.
+function core_de(string $src): string {
+    $out = preg_replace("/define\('LANG',\s*'[a-z]+'\);/", "define('LANG', 'de');", $src, 1, $n);
+    if ($n !== 1) { fwrite(STDERR, "LANG in pesi-core.php nicht gefunden\n"); exit(2); }
+    return $out;
+}
 // pesi-core.php lädt pesi-lib.php aus ihrem eigenen Ordner: beide nebeneinander.
-copy($root . '/pesi-core.php', $scratch . '/core.php');
+file_put_contents($scratch . '/core.php', core_de((string)file_get_contents($root . '/pesi-core.php')));
 copy($root . '/pesi-lib.php', $scratch . '/pesi-lib.php');
 file_put_contents(
     $scratch . '/engine.php',
@@ -90,6 +97,7 @@ file_put_contents(
 );
 require $scratch . '/engine.php';
 $GLOBALS['t'] = _pesi_strings()['de'];
+$GLOBALS['lang'] = 'de';   // _pesi_date() liest die Sprache über global $lang
 
 // ── Mini-Harness ─────────────────────────────────────────────
 $pass = 0; $fail = 0; $group = '';
@@ -1970,7 +1978,7 @@ foreach (['err_not_readable', 'err_backup', 'err_locked', 'err_php_rollback',
           'blk_notfound', 'tgl_notfound', 'tgl_nested', 'blk_nested', 'err_no_lint', 'err_dup_ids', 'rt_no_dom',
           'warn_dup_ids', 'warn_no_tokenizer', 'warn_no_dom', 'warn_unparsed', 'warn_default_pw',
           'warn_no_exec', 'warn_upload_limit', 'login_unavailable',
-          'warn_no_gd', 'pw_err_write', 'pw_err_file', 'warn_exposed'] as $k) {
+          'warn_no_gd', 'pw_err_write', 'pw_err_file', 'warn_exposed', 'blk_ids'] as $k) {
     foreach (['de', 'en'] as $l) {
         ok("$l/$k trägt einen Code", (bool)preg_match('/\(Code [ST]\d+/', $s[$l][$k]),
             $s[$l][$k]);
@@ -2023,7 +2031,7 @@ grp('$PESI_STRINGS — wirkt bis in die Ausgabe');
 $e2e = $scratch . '/e2e';
 @mkdir($e2e, 0777, true);
 copy($root . '/pesi.php', $e2e . '/pesi.php');
-copy($root . '/pesi-core.php', $e2e . '/pesi-core.php');
+file_put_contents($e2e . '/pesi-core.php', core_de((string)file_get_contents($root . '/pesi-core.php')));
 copy($root . '/pesi-lib.php', $e2e . '/pesi-lib.php');
 $render = function (string $dir): string {
     $cmd = 'cd ' . escapeshellarg($dir) . ' && '
@@ -2068,7 +2076,7 @@ $ctlHash = password_hash($ctlPw, PASSWORD_BCRYPT, ['cost' => 10]);
 file_put_contents($ctl . '/site/pesi-core.php', preg_replace_callback(
     "/define\('PESI_PASSWORD',[^\n]*\n/",
     function () use ($ctlHash) { return "define('PESI_PASSWORD', " . var_export($ctlHash, true) . ");\n"; },
-    (string)file_get_contents($root . '/pesi-core.php')));
+    core_de((string)file_get_contents($root . '/pesi-core.php'))));
 file_put_contents($ctl . '/runner.php', <<<'RUN'
 <?php
 $req = json_decode((string)file_get_contents($argv[1]), true);
@@ -2122,8 +2130,11 @@ $thrEntry = function (string $ip) use ($thrFile) {
     return is_array($d) ? ($d[hash('sha256', $ip)] ?? null) : null;
 };
 // error_log() aus dem T15-Pfad landet auf stderr und ist erwünscht.
+// PHPs eigenes Format ("Warning: … in … on line"), nicht jedes Vorkommen des
+// Worts: seit 0.5.0 sind die Kommentare im Dashboard-Skript englisch und
+// sprechen von „the warning before leaving“.
 $noDiag = function (string $out): bool {
-    return !preg_match('/(Warning|Notice|Deprecated|Fatal error|Uncaught|Stack trace)/i', $out);
+    return !preg_match('/\b(Warning|Notice|Deprecated|Fatal error|Parse error): |Uncaught [A-Z]\w*|Stack trace:/', $out);
 };
 
 // Positive Kontrolle — sonst bestünden die Negativfälle auch mit kaputter Fixture
@@ -2307,8 +2318,10 @@ $cpReset();
 // ── Seitenauswahl, Datum, Fokuspunkt, mehrere Bilder, Selbsttest ──
 // Zweite registrierte Seite mit allem, was 0.5 dazubringt.
 grp('Dashboard — Seitenauswahl, Datum, Fokus, Galerie');
-$kp = $ctl . '/site/impressum.php';
-$kpSrc = "<?php require_once 'pesi-core.php'; ?>\n"
+$kp = $ctl . '/site/imprint.php';
+// __DIR__: ein relativer Pfad liefe über das Arbeitsverzeichnis und fände die
+// pesi-core.php des Repos statt der Testsite.
+$kpSrc = "<?php require_once __DIR__ . '/pesi-core.php'; ?>\n"
     . "<a href=\"<?= pesi('mehr', '/', 'url', 'Mehr') ?>\">x</a>\n"
     . "<p><?= pesi_date(pesi('kurs', '2026-08-15', 'date', 'Kursbeginn')) ?></p>\n"
     . "<img src=\"<?= pesi('hero', '/uploads/h.jpg', 'image', 'Hero') ?>\" style=\"object-position: <?= pesi('hero_focus', '30% 60%', 'text', 'Ausschnitt') ?>\" alt=\"\">\n"
@@ -2319,13 +2332,13 @@ $kpReset = function () use ($kp, $kpSrc) {
 };
 $kpReset();
 $kAct = function (array $post) use ($ctlRun, $a, $kp) {
-    return $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'get' => ['page' => 'impressum.php'],
+    return $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'get' => ['page' => 'imprint.php'],
         'post' => $post + ['pesi_save' => '1', 'pesi_csrf' => $a['csrf'], 'pesi_hash' => hash_file('sha256', $kp)]]);
 };
-$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'impressum.php']])['out'];
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'imprint.php']])['out'];
 ok('url-Feld bietet die Seiten der Website an', strpos($o, 'data-url-pick="f_mehr"') !== false
-    && strpos($o, '<option value="/">Startseite</option>') !== false
-    && strpos($o, '<option value="/datenschutz.php">Datenschutz</option>') !== false, substr($o, 0, 200));
+    && strpos($o, '<option value="/">Home</option>') !== false
+    && strpos($o, '<option value="/privacy.php">Privacy policy</option>') !== false, substr($o, 0, 200));
 ok('… ohne die Stammdaten', strpos($o, '>Stammdaten</option>') === false);
 ok('… und die Auswahl hat keinen Namen, wird also nie gespeichert',
     (bool)preg_match('/<select class="fi url-pick"(?![^>]*\bname=)[^>]*>/', $o));
@@ -2361,10 +2374,10 @@ ok('Mehrere Bilder + Toggle → mehrdeutig', strpos($x['out'], htmlspecialchars(
 
 // Selbsttest T21: Die Sicherung nach einem Speichern steht in der Prüfliste.
 $kAct(['pesi_field_kurs' => '2027-01-05']);
-$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'impressum.php']])['out'];
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'imprint.php']])['out'];
 $probe = preg_match('/var P=(\[.*?\]);/', $o, $pm) ? (array)json_decode($pm[1], true) : [];
-$bk = array_values(array_filter($probe, fn($p) => ($p['name'] ?? '') === 'impressum.php.pesi-backup.1'));
-ok('Selbsttest prüft die neue Sicherung mit ihrer Größe', $bk && $bk[0]['url'] === '/impressum.php.pesi-backup.1'
+$bk = array_values(array_filter($probe, fn($p) => ($p['name'] ?? '') === 'imprint.php.pesi-backup.1'));
+ok('Selbsttest prüft die neue Sicherung mit ihrer Größe', $bk && $bk[0]['url'] === '/imprint.php.pesi-backup.1'
     && $bk[0]['size'] === filesize($kp . '.pesi-backup.1'), $pm[1] ?? '(keine Liste)');
 ok('… Diagnose-Bereich ist vorhanden, die Meldung kommt aus der Sprachtabelle',
     strpos($o, 'id="dgL"') !== false && strpos($o, json_encode($GLOBALS['t']['warn_exposed'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG)) !== false);
@@ -2378,7 +2391,8 @@ grp('_pesi_when');
 ok('heute',    _pesi_when(mktime(14, 23, 0)) === 'heute 14:23 Uhr', _pesi_when(mktime(14, 23, 0)));
 ok('gestern',  _pesi_when(strtotime('-1 day 09:05')) === 'gestern 09:05 Uhr', _pesi_when(strtotime('-1 day 09:05')));
 $alt = strtotime('-9 days 16:40');
-ok('älter → Datum', _pesi_when($alt) === date('d.m.Y', $alt) . ' 16:40', _pesi_when($alt));
+ok('älter → Datum', _pesi_when($alt) === _pesi_date($alt) . ', 16:40'
+    && (bool)preg_match('/^\d{1,2}\. \S+ \d{4}, 16:40$/u', _pesi_when($alt)), _pesi_when($alt));
 ok('Rückfrage nennt den Zeitpunkt',
     strpos(sprintf($GLOBALS['t']['rst_confirm'], _pesi_when(mktime(14, 23, 0))), 'heute 14:23') !== false);
 
@@ -2525,6 +2539,15 @@ ok('verschachtelt → S6, Datei unverändert', _pesi_block_add_images($gp, 'gal'
 $gp = page("<?php ?>\n<!-- pesi:item gal:1 -->\n<img src=\"<?= pesi('gal_1_bild', '/a.jpg', 'image', 'A') ?>\">\n<!-- /pesi:item -->\n");
 $r = _pesi_block_add_images($gp, 'gal', ['/b.jpg']);
 ok('ohne Beschreibungsfeld: Meldung ohne Erinnerung', $r['msg'] === $GLOBALS['t']['blk_imgs_one'], $r['msg']);
+// S8 (seit 0.5.0): Ein Feld der Vorlage, das nicht nach dem Eintrag heisst,
+// stünde in jeder Kopie mit derselben ID. Wie bei 'dup' und 'add' ablehnen.
+$s8 = "<?php ?>\n<!-- pesi:item gal:1 -->\n<img src=\"<?= pesi('gal_1_bild', '/a.jpg', 'image', 'A') ?>\"><p><?= pesi('fremd', 'x', 'text', 'F') ?></p>\n<!-- /pesi:item -->\n";
+$gp = page($s8);
+$r = _pesi_block_add_images($gp, 'gal', ['/b.jpg', '/c.jpg']);
+ok('fremd benanntes Feld in der Vorlage → S8, Datei unverändert', $r['msg'] === $GLOBALS['t']['blk_ids'] && file_get_contents($gp) === $s8, $r['msg']);
+$gp = page($s8);
+$r = _pesi_block_op($gp, 'gal', 1, 'dup');
+ok('… gleich wie beim Duplizieren', $r['msg'] === $GLOBALS['t']['blk_ids'] && file_get_contents($gp) === $s8, $r['msg']);
 ok('Dateiliste eines Mehrfach-Felds', count(_pesi_files_list(['name' => ['a', 'b', ''], 'type' => ['', '', ''], 'tmp_name' => ['x', 'y', ''],
     'error' => [UPLOAD_ERR_OK, UPLOAD_ERR_OK, UPLOAD_ERR_NO_FILE], 'size' => [1, 2, 0]])) === 2
     && _pesi_files_list(null) === [] && _pesi_files_list(['error' => [['x']]]) === []);
