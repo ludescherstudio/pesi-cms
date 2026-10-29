@@ -1,19 +1,19 @@
 <?php
 /**
- * Gemeinsam verwendete Website-Angaben.
+ * Website details shared across pages.
  *
- * Seiten verwenden sie zum Beispiel so:
+ * Pages use them like this:
  *   <?= pesi_global('practice_name') ?>
  *   <a href="mailto:<?= pesi_global('email') ?>"><?= pesi_global('email') ?></a>
- *   <a href="<?= pesi_global('booking_url') ?>">Termin vereinbaren</a>
- *   <address><?= nl2br(pesi_global('address')) ?></address>   (Zeilenumbrüche bleiben so erhalten)
+ *   <a href="<?= pesi_global('booking_url') ?>">Book an appointment</a>
+ *   <address><?= nl2br(pesi_global('address')) ?></address>   (keeps the line breaks)
  */
 if (!function_exists('pesi')) require_once __DIR__ . '/pesi-core.php';
 
 $PESI_GLOBALS = [
-    'practice_name' => pesi('practice_name', 'Meine Praxis', 'text', 'Praxisname'),
-    'address'       => pesi('address', 'Musterstraße 1, 6800 Feldkirch', 'textarea', 'Adresse'),
-    'phone'         => pesi('phone', '+43 123 456789', 'tel', 'Telefonnummer'),
-    'email'         => pesi('email', 'praxis@example.com', 'email', 'E-Mail-Adresse'),
-    'booking_url'   => pesi('booking_url', '/kontakt', 'url', 'Link zur Terminvereinbarung'),
+    'practice_name' => pesi('practice_name', 'My Practice', 'text', 'Practice name'),
+    'address'       => pesi('address', '1 Sample Street, 6800 Feldkirch', 'textarea', 'Address'),
+    'phone'         => pesi('phone', '+43 123 456789', 'tel', 'Phone number'),
+    'email'         => pesi('email', 'practice@example.com', 'email', 'Email address'),
+    'booking_url'   => pesi('booking_url', '/contact', 'url', 'Booking link'),
 ];

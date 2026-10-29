@@ -95,7 +95,7 @@ must be one of the eight below; an unknown type such as `urll` is reported as
 | `text` | Single-line input | Headings, names, button text and short strings used in text context |
 | `textarea` | Multi-line textarea | Plain-text paragraphs, disclaimers, descriptions without formatting. Line breaks collapse in HTML unless you output the value with `nl2br()` or style `white-space: pre-line` |
 | `richtext` | Quill WYSIWYG editor | Formatted HTML blocks with `<p>`, `<strong>`, `<ul>`, `<a>` etc. |
-| `image` | Image preview + file upload + path field | Photos that the client must be able to swap (team members, gallery, hero image) |
+| `image` | Image preview + file upload + path or `https://` address | Photos that the client must be able to swap (team members, gallery, hero image) |
 | `url` | Validated link input | `http(s)` URLs, `/internal` paths, queries and anchors used in `href` |
 | `email` | Validated email input | Address used after `mailto:` |
 | `tel` | Validated phone input | Number used after `tel:` |
@@ -181,7 +181,11 @@ only once per page:
 Set `sizes` to the width the image really takes in the layout. Images placed
 by hand have no copies until the client uploads them once through the dashboard.
 
-Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi validates the file (extension + real MIME + size), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored path is escaped on output and rejects script/data-style schemes; clients may paste normal `http(s)` URLs instead of uploading.
+Wrap **only the path** in `pesi()` — never the `<img>` tag, `class` or `width`/`height`; `alt` only as the paired description field above. Use the existing image path as `$default`. On upload, pesi checks the file by its content (real MIME + size; the extension is derived from the content, never trusted), stores it under a collision-free name, writes the new path back into the PHP, and deletes the replaced file only after the current pages and all of their backups no longer reference it. The stored value is escaped on output.
+
+Use the value **only as an image source**: in `src`, or in a quoted CSS `url('…')` for a background image. Never in `href`, a script or an unquoted attribute.
+
+Clients may also enter an external `https://` address instead of uploading; no file extension is required. pesi validates it and rejects `http://`, `data:`, `javascript:`, protocol-relative addresses and credentials in the URL. pesi never fetches it, the visitor's browser does. If the site sends a CSP whose `img-src` does not allow external HTTPS hosts, such images break on the live site; see Bug 4 in Step 8.
 
 ### Heredoc syntax for richtext
 
@@ -284,7 +288,8 @@ Before placing duplicate practice details into individual pages, adapt
 `pesi-content.php`. Keep one key per shared value (practice name, address,
 phone, email, booking URL) and output it with `pesi_global('key')` wherever it
 is needed (a multi-line address as `nl2br(pesi_global('address'))`). The dashboard
-exposes this file as **Stammdaten**.
+exposes this file as **Shared details** (name it **Stammdaten** in `$PESI_PAGES` when
+`LANG` is `'de'`).
 
 1. **`PESI_PASSWORD`** — set a strong password for the client.
 
@@ -301,7 +306,7 @@ exposes this file as **Stammdaten**.
 2. **`BRAND_NAME`** — the client/project name shown in the dashboard header and login screen.
 3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#a3611b`. White text sits on the colour and must reach 4.5:1 contrast; otherwise the dashboard reports code T12 — open the diagnostics panel after the first login and check.
 4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo.
-5. **`LANG`** — `'de'` for German-speaking clients (default), `'en'` if the site is clearly English-only.
+5. **`LANG`** — `'en'` is the default. Set `'de'` when the site or the client is German-speaking; the German dashboard uses formal address (*Sie*). Name the pages in `$PESI_PAGES` (Step 7) in the same language.
 
 Leave these alone unless the site needs it — the defaults are sane:
 
@@ -324,7 +329,7 @@ Leave these alone unless the site needs it — the defaults are sane:
 List all `.php` files in the root directory. Exclude:
 - `pesi-core.php`
 - `pesi-lib.php`
-- `pesi-content.php` (already registered as Stammdaten)
+- `pesi-content.php` (already registered as the shared details)
 - `pesi.php`
 - files inside any subdirectory
 
@@ -552,9 +557,11 @@ $PESI_PAGES = [
 ];
 ```
 
-Values (right side) are German display names for the dashboard sidebar. Keep
-the `PESI_GLOBALS_FILE` line: without it the Stammdaten page disappears from
-the dashboard and `pesi-content.php` can no longer be edited.
+Values (right side) are the display names in the dashboard sidebar, written in
+the dashboard language — German here, because this example site uses
+`LANG` `'de'`; with `'en'` use e.g. `'Shared details'`, `'Home'`, `'Imprint'`.
+Keep the `PESI_GLOBALS_FILE` line: without it the shared-details page disappears
+from the dashboard and `pesi-content.php` can no longer be edited.
 
 **Group slugs become visible names.** A `pesi:item` group `team_mitglieder` is
 shown to the client as "Team mitglieder", a `pesi:toggle` group
@@ -666,6 +673,10 @@ If the site uses both `ErrorDocument 403` and an HTTPS redirect rule, Apache may
 Quill is bundled directly inside `pesi.php` — no CDN requests are made. However, if the site has a `Content-Security-Policy` header with `script-src` that does **not** include `'unsafe-inline'`, the inline `<script>` block containing Quill will be blocked. The result: richtext fields render as a blank box with no toolbar.
 
 If a CSP header is found (via `.htaccess` `Header set Content-Security-Policy` or a `<meta http-equiv="Content-Security-Policy">` tag), and it restricts `script-src`, add a nonce or `'unsafe-inline'` — or simply exclude the dashboard path from the CSP rule. Do not add a CSP header if none exists.
+
+**Bug 4 — Strict Content Security Policy with `img-src` blocks external images**
+
+If the site's CSP restricts `img-src` (or `default-src` without an `img-src`), external image addresses entered in `image` fields show a broken image on the live site, and in the dashboard too if the policy covers `/pesi`. Extend `img-src` with the needed hosts, or with `https:` for any HTTPS host, for example `img-src 'self' https: data:;`. Keep every source already listed and do not loosen any other directive. Do not add a CSP if none exists. Note in the report that external images send the visitor's IP to the image host (privacy policy) and recommend `referrerpolicy="no-referrer"` on those `<img>` tags.
 
 ### Step 9 — Update robots.txt
 

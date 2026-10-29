@@ -16,6 +16,12 @@ from source archives with `export-ignore`; this is packaging, not privacy.
 `.claude/`, `.codex/` and other local tool configuration stay untracked.
 Never force-add local tool settings.
 
+Make every change on `dev` first. Release 0.5.0 was committed on `main` only
+and had to be ported back by a three-way merge before the next release; fetch
+and compare `origin/main` with `dev` before every release, and base the
+release worktree on `origin/main`, not on a local `main` that may predate a
+history cleanup.
+
 Publish by copying the public files from `dev` to a clean `main` worktree.
 Review the explicit file list, diff and archive before committing. Do not
 merge development-only files onto `main`. Add new public files deliberately.
@@ -391,11 +397,16 @@ Ansicht* toggle, not on the card.
 ## Conventions
 
 - All user-facing strings go through the `$strings` DE/EN i18n arrays in
-  `pesi.php`. German is the default and **siezt**; both languages must be kept
-  in sync — same keys, same `%` placeholders. `dev/test-engine.php` fails on
-  drift, on dead keys, and on a missing error code.
-- German typography: `„…“`, not `„…"`. The straight ASCII quote renders as a
-  mismatched pair and shows up as `&quot;` in the HTML.
+  `pesi.php`. Since 0.5.0 **English is the default** (`LANG 'en'` in
+  `pesi-core.php`); German stays one line away and **siezt**. Both languages
+  must be kept in sync — same keys, same `%` placeholders.
+  `dev/test-engine.php` fails on drift, on dead keys, and on a missing error
+  code. Keep messages short: 0.5.0 cut every hint that restates the obvious.
+- **Code comments are English** in `pesi.php`, `pesi-lib.php` and
+  `pesi-core.php`, since 0.5.0. The suite and this guide may stay German.
+- Typography: `„…“` in German, `“…”` in English, never straight quotes. The
+  straight ASCII quote renders as a mismatched pair and shows up as `&quot;`
+  in the HTML.
 - Integrators reword via `$PESI_STRINGS` in `pesi-core.php`, which overrides
   individual keys. Never remove a key without checking it is unused — the
   override is a documented public surface now.
@@ -447,6 +458,12 @@ to `_pesi_strings()`, all pure functions — into a temp file, requires
 (the ops read `$t` via `global`). If you add a function outside that span, the
 suite will not see it; extend the slice bounds in the script rather than
 loosening what the span contains.
+
+The suite checks against the German string table. Every copy of
+`pesi-core.php` it makes goes through `core_de()`, which sets `LANG 'de'`;
+a test page must load its settings with `__DIR__`, because a relative
+`require_once 'pesi-core.php'` resolves against the working directory first
+and finds the repo's English one.
 
 Work in a scratch directory, never against the real repo files.
 

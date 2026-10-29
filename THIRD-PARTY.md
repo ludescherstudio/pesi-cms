@@ -55,3 +55,22 @@ Re-check the copyright years and the license text against the upstream `LICENSE`
 file at the version you vendor in, and update this file accordingly. The
 copyright header inside the CSS block of `pesi.php` should be kept intact — do
 not strip it when minifying.
+
+---
+
+## Outbound network calls
+
+**None.** Neither the dashboard nor the public pages contact another server.
+Quill is bundled inside `pesi.php`, so there is no CDN reference, and the logo
+is an inline SVG. The only link to another site is the `ludescher.studio`
+credit in the dashboard footer, which the browser follows only when clicked.
+
+## Data pesi stores
+
+pesi has no database. The content lives in your page files, as it did before
+pesi. Next to them pesi writes earlier versions of each page, write locks, the
+login throttle register (a SHA-256 of the client IP plus a counter, never the
+raw IP) and, once the client changes it, a `password_hash()` of the dashboard
+password. Uploaded images lose their EXIF, XMP and IPTC metadata, GPS location
+included, before they are published. The full list with file names is in the
+README under *What pesi writes to disk*.

@@ -48,7 +48,7 @@ Only the four files you actually need:
 pesi.php             ← Dashboard (served at /pesi and /cms)
 pesi-lib.php         ← The pesi() helper and its safety checks — replaced on every update
 pesi-core.php        ← Your settings (password, branding, page list) — never touched by an update
-pesi-content.php     ← Shared details (address, phone, email, booking link), editable as "Stammdaten"
+pesi-content.php     ← Shared details (address, phone, email, booking link), editable as "Shared details"
 ```
 
 `pesi.php` and `pesi-lib.php` are pesi's code. `pesi-core.php` and `pesi-content.php` are yours. See [Updating](#updating).
@@ -80,7 +80,7 @@ your-webroot/
 ├── pesi-core.php
 ├── pesi-content.php
 ├── index.php
-├── impressum.php
+├── imprint.php
 └── ...
 ```
 
@@ -100,7 +100,7 @@ define('BRAND_COLOR', '#a3611b');             // any hex color — white text si
 define('BRAND_LOGO',  '');                    // e.g. '/assets/logo.svg' — leave empty for the pesi logo
 
 // Language
-define('LANG', 'de'); // 'de' = German, 'en' = English
+define('LANG', 'en'); // 'en' = English (default), 'de' = Deutsch
 ```
 
 **Store a password hash, not the plaintext.** Any value starting with `$` is verified with `password_verify()`, so the password never sits readable in the file. Generate one on your machine and paste the result verbatim — the `$` characters are part of the hash:
@@ -121,15 +121,15 @@ Then register the pages that should appear in the dashboard sidebar:
 
 ```php
 $PESI_PAGES = [
-    PESI_GLOBALS_FILE => 'Stammdaten',   // keep this line — the shared details
-    'index.php'       => 'Startseite',
-    'impressum.php'   => 'Impressum',
-    'datenschutz.php' => 'Datenschutz',
-    'kontakt.php'     => 'Kontakt',
+    PESI_GLOBALS_FILE => 'Shared details', // keep this line — the shared details
+    'index.php'       => 'Home',
+    'imprint.php'     => 'Imprint',
+    'privacy.php'     => 'Privacy policy',
+    'contact.php'     => 'Contact',
 ];
 ```
 
-Only pages listed here appear in the dashboard. The values on the right are the names the client sees — keep them plain. Keep the `PESI_GLOBALS_FILE` entry: without it the shared details in `pesi-content.php` can no longer be edited.
+Only pages listed here appear in the dashboard. The values on the right are the names the client sees — keep them plain, and write them in the dashboard language (`'Startseite'`, `'Impressum'` … with `LANG` set to `'de'`). Keep the `PESI_GLOBALS_FILE` entry: without it the shared details in `pesi-content.php` can no longer be edited.
 
 ### Step 3 — Add the pesi rules to your existing `.htaccess`
 
@@ -292,10 +292,10 @@ Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and
 
 ## Language
 
-pesi CMS ships in German and English. Set your language in `pesi-core.php`:
+pesi CMS ships in English and German. English is the default; for a German dashboard change one line in `pesi-core.php`, and name the pages in `$PESI_PAGES` in German too:
 
 ```php
-define('LANG', 'de'); // 'de' = German, 'en' = English
+define('LANG', 'de'); // 'en' = English (default), 'de' = Deutsch
 ```
 
 **Adding your own language** takes about 5 minutes — open `pesi.php`, find the `_pesi_strings()` function, copy the `'en'` block, give it a new key (e.g. `'fr'`), translate the strings, and set `LANG` to `'fr'` in your config. All dashboard labels and messages will follow.
@@ -310,7 +310,7 @@ $PESI_STRINGS = [
 ];
 ```
 
-Shipped German uses formal address (*Sie*), which suits practices and firms; the example above switches it to informal.
+Shipped German uses formal address (*Sie*), like every product of the family; it suits practices and firms. The example above switches it to informal.
 
 ---
 
@@ -370,6 +370,16 @@ A default pesi cannot read as a date prints as nothing. An invalid value from th
 ```php
 <img src="<?= pesi('portrait', '/uploads/portrait.jpg', 'image', 'Portrait') ?>" alt="">
 ```
+
+Use an image value only as an image source: in `src`, or in a quoted CSS `url('…')` for a background image. Never in `href`, a script or an unquoted attribute.
+
+**External images.** Instead of uploading, the client can enter an external `https://` address under *Advanced*. No file extension is required. pesi checks the address (valid URL with a host, no credentials, at most 2048 characters) and rejects `http://`, `data:`, `javascript:`, protocol-relative and other addresses. pesi never fetches it; the visitor's browser loads it directly. That has three consequences:
+
+- **CSP.** If the website sends a Content-Security-Policy, its `img-src` must allow the image host, for any HTTPS host for example `img-src 'self' https: data:;`. Keep the sources you already need and do not loosen other directives. pesi sets no CSP for the website and does not change yours. If the policy also covers `/pesi`, the dashboard preview is blocked too. A blocked or unreachable image shows a short error at the image card
+- **Privacy.** The image host receives the visitor's IP address. Mention it in the privacy policy, and add `referrerpolicy="no-referrer"` to the `<img>` so it does not also learn which page was viewed
+- **Availability.** The image host is responsible for the image staying online and unchanged
+
+Uploading is the better default: the image is stored locally, scaled down and stripped of metadata.
 
 **Image description.** A `text` field whose ID is the image ID plus `_alt` belongs to that image. Put it in the `alt` attribute:
 
@@ -477,7 +487,7 @@ Group names are shown with underscores turned into spaces and the first letter c
 
 ### Shared details — `pesi-content.php`
 
-`pesi-content.php` is an ordinary editable pesi file, registered as **Stammdaten**. Its values load with `pesi-core.php` and can be reused on any page, so address, phone or booking details never drift between header, footer, contact page and imprint:
+`pesi-content.php` is an ordinary editable pesi file, registered as **Shared details**. Its values load with `pesi-core.php` and can be reused on any page, so address, phone or booking details never drift between header, footer, contact page and imprint:
 
 ```php
 <h1><?= pesi_global('practice_name') ?></h1>
@@ -544,7 +554,7 @@ The dashboard is built for the client — a therapist, a practice, an artist; ra
 
 - **Pages** in the sidebar and as cards on the start view — the page's first image, its number of fields and when it last changed. One card per field, labels only — no IDs, no types. Short fields (`text`, `url`, `email`, `tel`, `date`) stand two side by side where the form is wide enough
 - **Image cards** take a new upload by click or drag and drop, or *Choose an image you already uploaded* — the 60 newest files in the upload folder as thumbnails, one click to use one. No renaming or deleting; that stays out of the client's way
-- **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 Wörter · vorher 120`), so the client sees when a new text grows far beyond what the layout was built for
+- **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 words · before 120`), so the client sees when a new text grows far beyond what the layout was built for
 - **Save** at the bottom. As soon as something is unsaved, the bar turns into a change bar with a live count and *Discard*, which reloads the saved state after asking. A success message appears as a toast for a few seconds; errors stay in the form next to the field. Questions before deleting, restoring or discarding use the dashboard's own dialog, not the browser's, and the page warns before it is left with unsaved changes
 - **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group. Every entry folds up into one line with its first image and first text; groups of up to three entries start open, larger ones closed, and the browser tab remembers what the client opened. With a mouse, entries can be dragged into a new order by their handle ⠿ — one save for the whole group; ↑ ↓ stay for keyboard and touch. Groups whose entry holds one image also take several images at once by drag and drop
 - **Links** to the site's own pages are picked from a list under every `url` field; **dates** use a date picker; a **focus point** is set by clicking into the image
@@ -569,6 +579,7 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `S5` | Two `pesi:toggle` sections are nested; switching is disabled for the page | Unnest them — a toggle must not contain another toggle |
 | `S6` | Two `pesi:item` entries are nested; add, duplicate, reorder and delete are disabled for the page, the fields stay editable | Unnest them — an entry must not contain another entry |
 | `S7` | A field ID occurs more than once in the page. Which occurrence the dashboard would edit is not defined, so the page cannot be saved | Give every `pesi()` call in the file its own ID |
+| `S8` | An entry could not be duplicated or added because one of its fields is not named after the entry (`team_1_…`). The copy would have held that field ID twice and blocked every later save, so nothing was written | Name every `pesi()` call inside a `pesi:item` entry `<group>_<n>_…`, matching the marker |
 | `T1` | The page file could not be read | Check file permissions and that the file still exists |
 | `T2` | The rotated backup could not be written. Nothing was published, and the previous backups were restored | The web server needs write access to the project directory |
 | `T3` | The page file was locked by another request | Transient; if permanent, a stale lock or a hung process |
@@ -600,13 +611,14 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 - Changing the password in the dashboard needs the current one, goes through the same throttle as sign-in, and signs out every other session. The new password is stored only as a `password_hash()` in `.pesi-password` (mode 0600, covered by the `.pesi-` rule)
 - Failed logins are slowed down twice: per session, and per client IP in a small `.pesi-throttle` register, so discarding cookies does not reset the delay. The backoff starts at 2 seconds and doubles up to 256 seconds. Each attempt is reserved under a lock before the password is checked, so parallel requests do not get through together. If the register cannot be read or written, pesi refuses every sign-in (code `T15`) instead of running without it
 - A login POST without a valid CSRF token is rejected before the password check and does not count as a failed attempt, so a foreign form cannot lock the client out
-- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
+- The dashboard uses its own session cookie (`pesi_session`), so other PHP apps on the same domain cannot sign the client out
+- Sessions use secure cookie flags (`HttpOnly`, `SameSite=Lax`, `Secure` on HTTPS) and strict session-ID mode, and have an inactivity timeout and an absolute lifetime. The two limits apply independently, each with a minimum of one minute. Typing in an open form counts as activity, and before unsaved changes are sent the dashboard checks the session: if it has ended, the entries stay in the form and the client signs in again in a new tab. `session.gc_maxlifetime` is raised to the inactivity limit where it is lower. The session ID is regenerated on login; changing `PESI_PASSWORD` revokes existing sessions
 - Request parameters that arrive as arrays (`name[]=…`) are treated as empty instead of raising PHP warnings
-- CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY` and a `frame-ancestors 'none'` policy
-- `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save
+- CSRF tokens protect every form submission; the dashboard sends `X-Frame-Options: DENY`, a `frame-ancestors 'none'` policy and `Cache-Control: no-store`
+- `text`, `textarea`, `url`, `email`, `tel` and `image` output is HTML-escaped; the typed fields additionally validate their value before the complete save. `image` accepts internal paths and external `https://` addresses only
 - `richtext` is sanitized through a server-side allowlist before it is saved and on every render; PHP tags and HTML comments inside it are removed
 - Field values containing pesi structure markers are rejected before writing (code `S2`)
-- Image uploads are checked by real MIME type (`finfo`, falling back to `getimagesize()`), size and extension; SVG is deliberately not allowed; the upload folder must stay inside the project root
+- Image uploads are checked by their content (`finfo`, falling back to `getimagesize()`), not by their file name; the stored extension is derived from the detected type, and `PESI_UPLOAD_TYPES` only narrows the allowed types further. Size is limited; SVG is deliberately not allowed; the upload folder must stay inside the project root
 - Uploaded JPEG, PNG and WebP files lose their metadata before they are published, and an image whose structure cannot be read is rejected instead of published unchecked
 - Every write goes to a same-directory temporary file, is flushed and linted with `php -l` there, then atomically replaces the live page; a failed write never truncates the live page. If the check cannot run, nothing is published (`T7`)
 - The backup rotation and the live swap succeed or fail together: if any step fails, the previous backups are put back
@@ -615,7 +627,7 @@ pesi writes into live PHP source and ships an authenticated dashboard. What is p
 
 **Important:** always run pesi over HTTPS. The login password is sent via POST — over plain HTTP it would be readable in transit.
 
-**Behind a reverse proxy or CDN**, the web server must pass the real client address in `REMOTE_ADDR` (Apache `mod_remoteip`, Nginx `real_ip`, trusting only your proxy). pesi deliberately ignores `X-Forwarded-For`, since any client can set it. Without that server-side setup, every visitor shares the proxy's address and one failed login slows down everyone.
+**Behind a reverse proxy or CDN**, the web server must pass the real client address in `REMOTE_ADDR` (Apache `mod_remoteip`, Nginx `real_ip`, trusting only your proxy). pesi deliberately ignores `X-Forwarded-For`, since any client can set it. Without that server-side setup, every visitor shares the proxy's address and one failed login slows down everyone. If the proxy terminates HTTPS, list its addresses in `PESI_TRUSTED_PROXY_IPS`: only from those does pesi accept `X-Forwarded-Proto` and give the session cookie the `Secure` flag.
 
 **In production, set `display_errors = Off`** and log errors on the server instead. PHP messages show file paths.
 
@@ -648,7 +660,7 @@ define('PESI_PASSWORD_CHANGE', true);              // Client may change it in th
 define('BRAND_NAME',          'My Project');       // Shown in the sidebar and the browser tab
 define('BRAND_COLOR',         '#a3611b');          // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',          '');                 // Path to logo image — empty = pesi logo
-define('LANG',                'de');               // 'de' or 'en'
+define('LANG',                'en');               // 'en' (default) or 'de'
 define('PESI_BACKUP_ENABLED', true);               // Keep earlier states of every page
 define('PESI_BACKUP_COUNT',   5);                  // How many, 1–20 — listed under "Earlier versions"
 define('PESI_SYNTAX_CHECK',   true);               // php -l on the candidate before publishing
@@ -656,6 +668,7 @@ define('PESI_PHP_CLI',        '');                 // PHP CLI for that check; em
 define('PESI_SESSION_IDLE',   30 * 60);            // Sign out after inactivity
 define('PESI_SESSION_MAX',    12 * 60 * 60);       // Absolute session lifetime, independent of the idle limit
 define('PESI_GLOBALS_FILE',   'pesi-content.php'); // The shared-details file
+define('PESI_TRUSTED_PROXY_IPS', []);              // Reverse proxies allowed to send X-Forwarded-Proto
 
 define('PESI_UPLOAD_DIR',       'uploads');                       // Relative to the web root, no leading slash, no ..
 define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);                 // Capped by the host's upload_max_filesize / post_max_size
@@ -664,12 +677,12 @@ define('PESI_IMAGE_MAX_EDGE',   2560);                            // Longer edge
 define('PESI_IMAGE_SIZES',      '480,960,1600');                  // Widths of the smaller copies for pesi_srcset() (needs gd). '' = none
 
 $PESI_PAGES = [
-    PESI_GLOBALS_FILE => 'Stammdaten',
-    'index.php'       => 'Startseite',             // file => sidebar label
+    PESI_GLOBALS_FILE => 'Shared details',
+    'index.php'       => 'Home',                   // file => sidebar label
 ];
 
 // Optional: override single dashboard strings — see Language
-// $PESI_STRINGS = ['save_btn' => 'Übernehmen'];
+// $PESI_STRINGS = ['save_btn' => 'Publish'];
 ```
 
 ---
@@ -681,7 +694,7 @@ $PESI_PAGES = [
 - The login throttle keeps a **SHA-256 hash** of the client IP plus a counter, never the address, and drops entries an hour after they expire
 - Replaced images are deleted once the page and all of its backups no longer reference them — no orphaned portraits on the web space
 - Uploaded photos lose their camera metadata before they go online: GPS location, device, time of capture, author and comments. The only thing kept is the rotation, so portrait photos stay upright. This happens in plain PHP and does not depend on `gd`
-- No external requests at any time: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`
+- pesi loads nothing of its own from elsewhere: no CDN, no fonts, no update check. Quill is bundled inside `pesi.php`. An external image address entered in an image field does make the visitor's browser contact that host (see *External images*)
 
 ---
 
@@ -703,6 +716,15 @@ The PHP file remains the single source of truth, so developer changes and dashbo
 An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload both from the same release. `pesi-core.php` (your settings, your `$PESI_STRINGS`) and `pesi-content.php` (the client's shared details) are never part of an update, and your pages keep their `require_once 'pesi-core.php'`.
 
 Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
+
+### From 0.4 to 0.5
+
+Upload `pesi.php` and `pesi-lib.php` as usual; `pesi-core.php` needs no change. Worth knowing:
+
+- **The client signs in once more.** The dashboard now uses its own session cookie, so it no longer signs the client out of other PHP apps on the same domain (pima Analytics, a shop), and vice versa.
+- **Behind a reverse proxy that terminates HTTPS**, add its addresses to `PESI_TRUSTED_PROXY_IPS`. pesi no longer trusts `X-Forwarded-Proto` from anyone else, so without that line the session cookie loses its `Secure` flag; signing in keeps working.
+- **English is the default language** for new installs. Your `pesi-core.php` already sets `LANG`, so nothing changes for existing sites.
+- The version you run is now shown in the dashboard footer.
 
 ### From 0.3 to 0.4 (once)
 
@@ -732,6 +754,10 @@ The web server has no write permission on the PHP file or the folder. Set permis
 ### Richtext editor shows only an empty box, no toolbar
 
 Quill is bundled inside `pesi.php` — no CDN requests are made. The most likely cause is a strict **Content-Security-Policy** that disallows inline scripts (`script-src` without `'unsafe-inline'`). Look in your `.htaccess` or for a `<meta http-equiv="Content-Security-Policy">` tag. Add `'unsafe-inline'` or exclude the `/pesi` path from the policy.
+
+### An external image shows in the dashboard but not on the website
+
+The website's Content-Security-Policy blocks the image host. Allow it in `img-src`, see *External images* under Field types. The browser console names the blocked address.
 
 ### Uploads fail as "too large" well below 5 MB
 
@@ -777,7 +803,7 @@ On shared hosting `php` on the command line is often an older version than the w
 - **Toggles must not be nested** — a `pesi:toggle` inside another one disables switching for that page, and the dashboard says so
 - **Repeatable entries must not be nested** — a `pesi:item` inside another one disables add, duplicate, reorder and delete for that page (`S6`); the fields stay editable. A toggle may contain entries
 - **No multi-user system** — one password for everyone
-- **AVIF and GIF uploads are published as they are.** GIF cannot carry camera metadata; AVIF can, and pesi does not rewrite it. Ask clients to upload phone photos as JPEG. Scaled-down images also lose their colour profile, so wide-gamut photos can look slightly less saturated
+- **AVIF and GIF uploads are published as they are.** They get no structure check of their own: with `gd` they must decode, without `gd` only their file signature is checked. GIF cannot carry camera metadata; AVIF can, and pesi does not rewrite it. Ask clients to upload phone photos as JPEG. Scaled-down images also lose their colour profile, so wide-gamut photos can look slightly less saturated
 - **A short version history, not an archive.** pesi keeps the last `PESI_BACKUP_COUNT` states per page (5 by default, at most 20), counted in saves, not in days. That covers *"the text from this morning was better"*. A client who saves ten times on Monday has no Friday version of last week left — that is what your host's backups are for. Check that they are enabled before go-live, and tell the client where the boundary runs
 - **Don't rename field IDs after go-live** — doing so orphans the client's saved content
 - **Not meant for simultaneous heavy editing** — dashboard writes are lock-protected against each other. An FTP upload or deploy does not use that lock: pesi catches most overlaps and asks the editor to reload, but an upload that lands in the last milliseconds before a save is overwritten. Do not upload a page via FTP while the client may be saving it
