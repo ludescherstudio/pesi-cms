@@ -292,6 +292,32 @@ if ($auth) {
         } elseif (!_pesi_hash_matches($basePath . '/' . $page, $postedHash)) {
             $msg = $t['err_stale'];
             $msgType = 'error';
+        } elseif (preg_match('/^imgs:([a-z0-9_]+)$/', _pesi_param($_POST, 'pesi_block'), $bm)) {
+            // Mehrere Bilder als neue Einträge: erst alle Uploads prüfen und
+            // ablegen, dann ein einziger Commit. Scheitert eines, geht keines online.
+            $fp = $basePath . '/' . $page;
+            $paths = [];
+            $errs  = [];
+            foreach (_pesi_files_list($_FILES['pesi_many_' . $bm[1]] ?? null) as $f) {
+                $u = _pesi_store_upload($f, (string)($f['name'] ?? ''), $basePath);
+                if (isset($u['error'])) $errs[] = $u['error']; else $paths[] = $u['path'];
+            }
+            if ($errs || !$paths) {
+                _pesi_discard_uploads($basePath, $paths);
+                $msg = $errs ? implode(' ', $errs) : $t['err_no_changes'];
+                $msgType = $errs ? 'error' : 'info';
+            } else {
+                $expiredImages = _pesi_expiring_images($fp);
+                $r = _pesi_block_add_images($fp, $bm[1], $paths, $postedHash);
+                $msg = $r['msg'];
+                $msgType = $r['type'];
+                if ($msgType === 'success') {
+                    _pesi_cleanup_old($basePath, $expiredImages, $PESI_PAGES);
+                    $fields = _pesi_parse($fp);
+                } else {
+                    _pesi_discard_uploads($basePath, $paths);
+                }
+            }
         } elseif (preg_match('/^(dup|add|del|up|down):([a-z0-9_]+)(?::(\d+))?$/', _pesi_param($_POST, 'pesi_block'), $bm)) {
             $fp = $basePath . '/' . $page;
             $expiredImages = _pesi_expiring_images($fp);
@@ -542,10 +568,23 @@ function _pesi_scan(string $src): array {
  * Rückgabe: [Bild-ID => Alt-Feld-ID].
  */
 function _pesi_alt_pairs(array $fields): array {
+    return _pesi_image_pairs($fields, '_alt');
+}
+
+/**
+ * Fokuspunkt: ein text-Feld <bild-id>_focus hält „X% Y%“ für object-position.
+ * Das Dashboard setzt ihn per Klick ins Bild; gespeichert wird nur, was
+ * _pesi_safe_focus() annimmt. Rückgabe: [Bild-ID => Fokus-Feld-ID].
+ */
+function _pesi_focus_pairs(array $fields): array {
+    return _pesi_image_pairs($fields, '_focus');
+}
+
+function _pesi_image_pairs(array $fields, string $suffix): array {
     $out = [];
     foreach ($fields as $id => $f) {
-        if (($f['type'] ?? '') !== 'text' || substr((string)$id, -4) !== '_alt') continue;
-        $img = substr((string)$id, 0, -4);
+        if (($f['type'] ?? '') !== 'text' || substr((string)$id, -strlen($suffix)) !== $suffix) continue;
+        $img = substr((string)$id, 0, -strlen($suffix));
         if (($fields[$img]['type'] ?? '') === 'image') $out[$img] = (string)$id;
     }
     return $out;
@@ -937,6 +976,7 @@ function _pesi_save(string $file, array $fields, array $post, ?string $expectedH
     $blocked = [];
     $invalid = [];
     $invalidIds = [];
+    $focusIds = array_flip(_pesi_focus_pairs($fields));
     foreach ($fields as $id => $fld) {
         $k = 'pesi_field_' . $id;
         if (!isset($post[$k]) || !is_string($post[$k])) continue;
@@ -960,9 +1000,24 @@ function _pesi_save(string $file, array $fields, array $post, ?string $expectedH
             }
             $nv = $safe;
         }
-        if (in_array(($fld['type'] ?? ''), ['url', 'email', 'tel'], true)
+        if (in_array(($fld['type'] ?? ''), ['url', 'email', 'tel', 'date'], true)
             && function_exists('_pesi_safe_typed_value')) {
             $safe = _pesi_safe_typed_value($nv, $fld['type']);
+            if ($safe === null) {
+                $invalid[] = $fld['label'] ?: $id;
+                $invalidIds[] = $id;
+                continue;
+            }
+            $nv = $safe;
+        }
+        // Ein ungültiger Standardwert erscheint in <input type="date"> leer und
+        // käme so als '' zurück, ohne dass jemand das Feld angefasst hat.
+        if (($fld['type'] ?? '') === 'date' && $nv === '' && _pesi_safe_date((string)$fld['value']) === '') continue;
+        // Der Fokus steht in einem style-Attribut. Ein freier Text könnte dort
+        // eigenes CSS anhängen, also nur „X% Y%“. Ein unveränderter Wert der
+        // Integration ('center') blockiert das Speichern nicht.
+        if (isset($focusIds[$id]) && $nv !== $fld['value']) {
+            $safe = _pesi_safe_focus($nv);
             if ($safe === null) {
                 $invalid[] = $fld['label'] ?: $id;
                 $invalidIds[] = $id;
@@ -1098,26 +1153,7 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action, 
             $srcBlk = $target;
         }
         $newInst = max(array_column($grp, 'inst')) + 1;
-        $clone   = $srcBlk['text'];
-        // Feld-ID-Präfix '<group>_<inst>_' umschreiben — nur in echten
-        // pesi()-Aufrufen, über deren Token-Spannen. Ein Regex im Rohtext
-        // träfe auch ->pesi(), Kommentare und Beispieltext im Richtext.
-        $oldPre = $group . '_' . $srcBlk['inst'] . '_';
-        $newPre = $group . '_' . $newInst . '_';
-        $end    = $srcBlk['offset'] + strlen($clone);
-        foreach (array_reverse(_pesi_scan($src)['calls']) as $c) {
-            if ($c['idLen'] === 0 || $c['idAt'] < $srcBlk['offset'] || $c['idAt'] >= $end) continue;
-            if (strncmp($c['id'], $oldPre, strlen($oldPre)) !== 0) continue;
-            $q = $src[$c['idAt']];
-            $clone = substr_replace($clone, $q . $newPre . substr($c['id'], strlen($oldPre)) . $q,
-                $c['idAt'] - $srcBlk['offset'], $c['idLen']);
-        }
-        if (substr($clone, -1) !== "\n") $clone .= "\n";
-        // Marker-Instanz umschreiben
-        $clone = preg_replace(
-            '/(<!--\s*pesi:item\s+' . preg_quote($group, '/') . ':)' . $srcBlk['inst'] . '(\s*-->)/',
-            '${1}' . $newInst . '$2', $clone, 1
-        );
+        $clone   = _pesi_block_clone($src, $srcBlk, $group, $newInst);
         // Einfügeposition: 'dup' direkt hinter dem duplizierten Eintrag,
         // 'add' ans Ende der Gruppe.
         if ($action === 'dup') {
@@ -1153,6 +1189,122 @@ function _pesi_block_op(string $file, string $group, int $inst, string $action, 
     }
 
     return ['msg' => $t['blk_notfound'], 'type' => 'error'];
+}
+
+/**
+ * Kopie des Eintrags $srcBlk als Instanz $newInst: Feld-ID-Präfix
+ * '<group>_<inst>_' und Marker umgeschrieben, mit Zeilenende.
+ */
+function _pesi_block_clone(string $src, array $srcBlk, string $group, int $newInst): string {
+    $clone = $srcBlk['text'];
+    // Feld-ID-Präfix '<group>_<inst>_' umschreiben — nur in echten
+    // pesi()-Aufrufen, über deren Token-Spannen. Ein Regex im Rohtext
+    // träfe auch ->pesi(), Kommentare und Beispieltext im Richtext.
+    $oldPre = $group . '_' . $srcBlk['inst'] . '_';
+    $newPre = $group . '_' . $newInst . '_';
+    $end    = $srcBlk['offset'] + strlen($clone);
+    foreach (array_reverse(_pesi_scan($src)['calls']) as $c) {
+        if ($c['idLen'] === 0 || $c['idAt'] < $srcBlk['offset'] || $c['idAt'] >= $end) continue;
+        if (strncmp($c['id'], $oldPre, strlen($oldPre)) !== 0) continue;
+        $q = $src[$c['idAt']];
+        $clone = substr_replace($clone, $q . $newPre . substr($c['id'], strlen($oldPre)) . $q,
+            $c['idAt'] - $srcBlk['offset'], $c['idLen']);
+    }
+    if (substr($clone, -1) !== "\n") $clone .= "\n";
+    // Marker-Instanz umschreiben
+    return preg_replace(
+        '/(<!--\s*pesi:item\s+' . preg_quote($group, '/') . ':)' . $srcBlk['inst'] . '(\s*-->)/',
+        '${1}' . $newInst . '$2', $clone, 1
+    );
+}
+
+/**
+ * Vorlage einer Gruppe — der Eintrag, den „+ Eintrag hinzufügen“ klont — und
+ * das eine Bildfeld darin, als ID-Rest hinter '<group>_<inst>_'. Nur Gruppen
+ * mit genau einem Bild nehmen mehrere Bilder auf einmal an. null = keine.
+ */
+function _pesi_block_image_slot(string $src, array $grp): ?array {
+    $tpl = null;
+    foreach ($grp as $b) { if ($b['inst'] === 1) { $tpl = $b; break; } }
+    $tpl ??= $grp[0] ?? null;
+    if ($tpl === null) return null;
+    $pre = $tpl['group'] . '_' . $tpl['inst'] . '_';
+    $ids = [];
+    foreach (_pesi_scan($src)['calls'] as $c) {
+        if ($c['error'] !== '' || $c['idAt'] < $tpl['offset'] || $c['idAt'] >= $tpl['offset'] + $tpl['len']) continue;
+        if (strncmp($c['id'], $pre, strlen($pre)) === 0) $ids[substr($c['id'], strlen($pre))] = $c['type'];
+    }
+    $img = array_keys($ids, 'image', true);
+    if (count($img) !== 1) return null;
+    return ['tpl' => $tpl, 'image' => $img[0], 'alt' => ($ids[$img[0] . '_alt'] ?? '') === 'text' ? $img[0] . '_alt' : null];
+}
+
+/**
+ * Mehrere Bilder als neue Einträge ans Ende der Gruppe, in einem Commit. Jeder
+ * Eintrag ist eine Kopie der Vorlage wie bei 'add', mit seinem Bild. Die
+ * Bildbeschreibung der Vorlage passt zu keinem neuen Bild und wird geleert.
+ * $paths: Web-Pfade der schon gespeicherten Uploads.
+ */
+function _pesi_block_add_images(string $file, string $group, array $paths, ?string $expectedHash = null): array {
+    global $t;
+    $src = (string)file_get_contents($file);
+    if ($src === '') return ['msg' => $t['err_not_readable'], 'type' => 'error'];
+    if (_pesi_block_nested($file)) return ['msg' => $t['blk_nested'], 'type' => 'error'];
+    $srcHash = hash('sha256', $src);
+    if ($expectedHash !== null && !hash_equals($expectedHash, $srcHash)) {
+        return ['msg' => $t['err_stale'], 'type' => 'error'];
+    }
+    $grp  = array_values(array_filter(_pesi_block_parse($file), fn($b) => $b['group'] === $group));
+    $slot = $grp ? _pesi_block_image_slot($src, $grp) : null;
+    if ($slot === null || !$paths) return ['msg' => $t['blk_notfound'], 'type' => 'error'];
+
+    $inst  = max(array_column($grp, 'inst'));
+    $last  = $grp[count($grp) - 1];
+    $at    = $last['offset'] + $last['len'];
+    $added = '';
+    $ids   = [];
+    foreach ($paths as $p) {
+        $inst++;
+        $added .= _pesi_block_clone($src, $slot['tpl'], $group, $inst);
+        $ids[] = $group . '_' . $inst . '_';
+    }
+    $mod = substr($src, 0, $at) . $added . substr($src, $at);
+    foreach (array_values($paths) as $i => $p) {
+        $mod = _pesi_replace($mod, $ids[$i] . $slot['image'], (string)$p);
+        if ($slot['alt'] !== null) $mod = _pesi_replace($mod, $ids[$i] . $slot['alt'], '');
+    }
+    if ($c = _pesi_commit($file, $mod, $srcHash)) return $c;
+    $msg = count($paths) === 1 ? $t['blk_imgs_one'] : sprintf($t['blk_imgs_many'], count($paths));
+    return ['msg' => $msg . ($slot['alt'] !== null ? ' ' . $t['blk_imgs_alt'] : ''), 'type' => 'success'];
+}
+
+/**
+ * Dateien, die über das Web nie erreichbar sein dürfen und es ohne die
+ * pesi-Regeln in .htaccess wären (nginx, AllowOverride None): Passwort-Hash,
+ * Bremsregister, eine Sicherung mit Seitenquelltext. Das Dashboard ruft sie im
+ * Browser ab; kommt genau diese Dateigröße zurück, meldet es T21. Die Größe
+ * verrät nichts über den Inhalt und unterscheidet die Datei von einer
+ * Fehlerseite, die manche Hostings mit Status 200 ausliefern.
+ * Rückgabe: Liste von ['url' => '/…', 'name' => '…', 'size' => n].
+ */
+function _pesi_exposure_probes(string $basePath, array $pages, ?string $page): array {
+    $files = [_pesi_password_file(), _pesi_throttle_file()];
+    $order = array_keys($pages);
+    if ($page !== null && in_array($page, $order, true)) array_unshift($order, $page);
+    foreach (array_unique($order) as $pg) {
+        $b = _pesi_backup_files($basePath . '/' . $pg);
+        if ($b) { $files[] = reset($b); break; }
+    }
+    $root = rtrim(str_replace('\\', '/', $basePath), '/') . '/';
+    $out = [];
+    foreach ($files as $f) {
+        $f = str_replace('\\', '/', $f);
+        $size = is_file($f) ? (int)@filesize($f) : 0;
+        if ($size <= 0 || strncmp($f, $root, strlen($root)) !== 0) continue;
+        $rel = substr($f, strlen($root));
+        $out[] = ['url' => '/' . implode('/', array_map('rawurlencode', explode('/', $rel))), 'name' => $rel, 'size' => $size];
+    }
+    return $out;
 }
 
 // ── Wiederherstellen ─────────────────────────────────────────
@@ -1201,6 +1353,7 @@ function _pesi_version_text(?string $v, string $type): string {
     global $t;
     if ($v === null) return $t['vh_absent'];
     if ($type === 'image') return basename($v);
+    if ($type === 'date' && pesi_date($v) !== '') return html_entity_decode(pesi_date($v), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     if ($type === 'richtext') {
         $v = html_entity_decode(strip_tags(preg_replace('#<(br|/p|/li|/h[23])\b[^>]*>#i', ' ', $v)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
@@ -1852,6 +2005,60 @@ function _pesi_prepare_image(string $path, string $mime, ?int $maxEdge = null): 
     return @file_put_contents($path, $out) === strlen($out);
 }
 
+// Breiten aus PESI_IMAGE_SIZES, aufsteigend. '' oder '0' = keine Fassungen.
+function _pesi_image_sizes(): array {
+    $sizes = [];
+    foreach (explode(',', (string)(defined('PESI_IMAGE_SIZES') ? PESI_IMAGE_SIZES : '')) as $s) {
+        $s = (int)trim($s);
+        if ($s >= 100 && $s <= 10000) $sizes[$s] = true;
+    }
+    $sizes = array_keys($sizes);
+    sort($sizes);
+    return $sizes;
+}
+
+/**
+ * Legt neben einem vorbereiteten Upload verkleinerte Fassungen für srcset an
+ * (_pesi_variant_files() kennt das Namensschema). Die größte zuerst, jede
+ * weitere aus der vorigen: Jedes Dekodieren ist dann kleiner als das letzte.
+ * Best effort — ohne gd, bei Animation oder zu wenig Speicher bleibt es beim
+ * Original. Rückgabe: angelegte Dateien.
+ * $sizes überschreibt PESI_IMAGE_SIZES — nur für die Suite.
+ */
+function _pesi_make_variants(string $path, string $mime, ?array $sizes = null): array {
+    $sizes ??= _pesi_image_sizes();
+    $d = @file_get_contents($path);
+    $info = $d === false ? false : @getimagesizefromstring($d);
+    if (!$sizes || !is_array($info)) return [];
+    $made = [];
+    $ext  = pathinfo($path, PATHINFO_EXTENSION);
+    $base = substr($path, 0, -strlen($ext) - 1);
+    foreach (array_reverse($sizes) as $w) {
+        // Gewünscht ist eine Breite, _pesi_image_scale() kennt die längere Kante.
+        $iw = $info[0]; $ih = $info[1];
+        if ($mime === 'image/jpeg' && in_array(_pesi_jpeg_orientation($d), [5, 6, 7, 8], true)) [$iw, $ih] = [$ih, $iw];
+        if ($w >= $iw) continue;
+        $edge = $iw >= $ih ? $w : (int)ceil($ih * $w / $iw);
+        $out = _pesi_image_scale($d, $mime, $edge);
+        $out = $out === null ? null : match ($mime) {
+            'image/jpeg' => _pesi_jpeg_strip($out),
+            'image/png'  => _pesi_png_strip($out),
+            'image/webp' => _pesi_webp_strip($out),
+            default      => null,
+        };
+        $vi = $out === null ? false : @getimagesizefromstring($out);
+        if (!is_array($vi)) break;
+        $file = $base . '-' . $vi[0] . 'w.' . $ext;
+        if (file_exists($file)) break;   // nie eine fremde Datei überschreiben
+        if (@file_put_contents($file, $out) !== strlen($out)) { @unlink($file); break; }
+        @chmod($file, 0644);
+        $made[] = $file;
+        $d = $out;
+        $info = $vi;
+    }
+    return $made;
+}
+
 // $dir überschreibt die Konstante — nur damit die Suite die Ablehnungspfade
 // durchspielen kann. Produktivcode ruft immer ohne Argument auf.
 function _pesi_upload_dir(?string $dir = null): string {
@@ -1925,17 +2132,10 @@ function _pesi_post_dropped(array $server, array $post, array $files): bool {
  * @return array{post:array,errors:string[],old:array<string,string>}
  */
 function _pesi_handle_uploads(array $fields, array $files, array $post, string $basePath): array {
-    global $t;
     $originalPost = $post;
     $errors = [];
     $old    = [];
     $new    = [];
-    $map    = _pesi_upload_map();
-    $cfgExt = array_filter(array_map(
-        'trim',
-        explode(',', strtolower(defined('PESI_UPLOAD_TYPES') ? PESI_UPLOAD_TYPES : 'jpg,jpeg,png,webp,avif,gif'))
-    ));
-    $maxBytes = _pesi_upload_limit();
 
     foreach ($fields as $id => $fld) {
         if ($fld['type'] !== 'image') continue;
@@ -1944,74 +2144,12 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
         $f = $files[$fk];
 
         if (($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) continue; // kein neues Bild
-        // Vom Hosting abgewiesen (upload_max_filesize / MAX_FILE_SIZE) heißt
-        // „zu groß", nicht „noch einmal versuchen" — derselbe Versuch scheitert
-        // wieder. Darum dieselbe Meldung wie bei der eigenen Grenze.
-        $tooBig = in_array($f['error'], [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
-            || ($f['error'] === UPLOAD_ERR_OK && (($f['size'] ?? 0) <= 0 || $f['size'] > $maxBytes));
-        if ($tooBig) {
-            $errors[] = sprintf($t['up_err_size'], $fld['label'] ?: $id, _pesi_mb($maxBytes));
-            continue;
-        }
-        if ($f['error'] !== UPLOAD_ERR_OK) {
-            $errors[] = sprintf($t['up_err_failed'], $fld['label'] ?: $id);
-            continue;
-        }
-        if (!is_uploaded_file($f['tmp_name'])) {
-            $errors[] = sprintf($t['up_err_failed'], $fld['label'] ?: $id);
-            continue;
-        }
-
-        $mime = _pesi_image_mime($f['tmp_name']);
-        if (!isset($map[$mime])) {
-            $errors[] = sprintf($t['up_err_type'], $fld['label'] ?: $id);
-            continue;
-        }
-        // Endung aus dem erkannten MIME ableiten (nicht aus dem Dateinamen)
-        $ext = $map[$mime][0];
-        if (!in_array($ext, $cfgExt, true) && !array_intersect($map[$mime], $cfgExt)) {
-            $errors[] = sprintf($t['up_err_type'], $fld['label'] ?: $id);
-            continue;
-        }
-
-        $dir = _pesi_upload_dir();
-        if ($dir === '') {
-            $errors[] = $t['up_err_dir_invalid'];
-            continue;
-        }
-        $absDir = $basePath . '/' . $dir;
-        if (!is_dir($absDir) && !@mkdir($absDir, 0755, true)) {
-            $errors[] = sprintf($t['up_err_dir'], $dir);
-            continue;
-        }
-        $realBase = realpath($basePath);
-        $realDir  = realpath($absDir);
-        if ($realBase === false || $realDir === false || strncmp($realDir, $realBase . DIRECTORY_SEPARATOR, strlen($realBase) + 1) !== 0) {
-            $errors[] = $t['up_err_dir_invalid'];
-            continue;
-        }
-
-        // move_uploaded_file() überschreibt ein vorhandenes Ziel. 48 Bit Zufall
-        // plus Existenzprüfung, damit nie ein fremdes Bild ersetzt wird.
-        $dest = '';
-        for ($try = 0; $try < 5 && $dest === ''; $try++) {
-            $fname = _pesi_slug($f['name']) . '-' . bin2hex(random_bytes(6)) . '.' . $ext;
-            if (!file_exists($realDir . '/' . $fname)) $dest = $realDir . '/' . $fname;
-        }
-        if ($dest === '' || !move_uploaded_file($f['tmp_name'], $dest)) {
-            $errors[] = sprintf($t['up_err_failed'], $fld['label'] ?: $id);
-            continue;
-        }
-        @chmod($dest, 0644);
-        if (!_pesi_prepare_image($dest, $mime)) {
-            @unlink($dest);
-            $errors[] = sprintf($t['up_err_process'], $fld['label'] ?: $id);
-            continue;
-        }
+        $r = _pesi_store_upload($f, $fld['label'] ?: $id, $basePath);
+        if (isset($r['error'])) { $errors[] = $r['error']; continue; }
 
         $old['pesi_field_' . $id] = $fld['value'];
-        $post['pesi_field_' . $id] = '/' . $dir . '/' . $fname;
-        $new[] = '/' . $dir . '/' . $fname;
+        $post['pesi_field_' . $id] = $r['path'];
+        $new[] = $r['path'];
     }
 
     // Ein Klick erzeugt genau einen konsistenten Stand: Sobald ein Bild nicht
@@ -2022,6 +2160,83 @@ function _pesi_handle_uploads(array $fields, array $files, array $post, string $
         return ['post' => $originalPost, 'errors' => $errors, 'old' => [], 'new' => []];
     }
     return ['post' => $post, 'errors' => [], 'old' => $old, 'new' => $new];
+}
+
+/**
+ * Eine hochgeladene Datei prüfen, in den Upload-Ordner legen, bereinigen und
+ * verkleinerte Fassungen anlegen. $label steht in den Meldungen.
+ * Rückgabe: ['path' => '/uploads/…'] oder ['error' => Meldung].
+ */
+function _pesi_store_upload(array $f, string $label, string $basePath): array {
+    global $t;
+    $map    = _pesi_upload_map();
+    $cfgExt = array_filter(array_map(
+        'trim',
+        explode(',', strtolower(defined('PESI_UPLOAD_TYPES') ? PESI_UPLOAD_TYPES : 'jpg,jpeg,png,webp,avif,gif'))
+    ));
+    $maxBytes = _pesi_upload_limit();
+    $err = $f['error'] ?? UPLOAD_ERR_NO_FILE;
+
+    // Vom Hosting abgewiesen (upload_max_filesize / MAX_FILE_SIZE) heißt
+    // „zu groß", nicht „noch einmal versuchen" — derselbe Versuch scheitert
+    // wieder. Darum dieselbe Meldung wie bei der eigenen Grenze.
+    $tooBig = in_array($err, [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
+        || ($err === UPLOAD_ERR_OK && (($f['size'] ?? 0) <= 0 || $f['size'] > $maxBytes));
+    if ($tooBig) return ['error' => sprintf($t['up_err_size'], $label, _pesi_mb($maxBytes))];
+    if ($err !== UPLOAD_ERR_OK || !is_string($f['tmp_name'] ?? null) || !is_uploaded_file($f['tmp_name'])) {
+        return ['error' => sprintf($t['up_err_failed'], $label)];
+    }
+
+    $mime = _pesi_image_mime($f['tmp_name']);
+    if (!isset($map[$mime])) return ['error' => sprintf($t['up_err_type'], $label)];
+    // Endung aus dem erkannten MIME ableiten (nicht aus dem Dateinamen)
+    $ext = $map[$mime][0];
+    if (!in_array($ext, $cfgExt, true) && !array_intersect($map[$mime], $cfgExt)) {
+        return ['error' => sprintf($t['up_err_type'], $label)];
+    }
+
+    $dir = _pesi_upload_dir();
+    if ($dir === '') return ['error' => $t['up_err_dir_invalid']];
+    $absDir = $basePath . '/' . $dir;
+    if (!is_dir($absDir) && !@mkdir($absDir, 0755, true)) return ['error' => sprintf($t['up_err_dir'], $dir)];
+    $realBase = realpath($basePath);
+    $realDir  = realpath($absDir);
+    if ($realBase === false || $realDir === false || strncmp($realDir, $realBase . DIRECTORY_SEPARATOR, strlen($realBase) + 1) !== 0) {
+        return ['error' => $t['up_err_dir_invalid']];
+    }
+
+    // move_uploaded_file() überschreibt ein vorhandenes Ziel. 48 Bit Zufall
+    // plus Existenzprüfung, damit nie ein fremdes Bild ersetzt wird.
+    $dest = '';
+    for ($try = 0; $try < 5 && $dest === ''; $try++) {
+        $fname = _pesi_slug((string)($f['name'] ?? '')) . '-' . bin2hex(random_bytes(6)) . '.' . $ext;
+        if (!file_exists($realDir . '/' . $fname)) $dest = $realDir . '/' . $fname;
+    }
+    if ($dest === '' || !move_uploaded_file($f['tmp_name'], $dest)) return ['error' => sprintf($t['up_err_failed'], $label)];
+    @chmod($dest, 0644);
+    if (!_pesi_prepare_image($dest, $mime)) {
+        @unlink($dest);
+        return ['error' => sprintf($t['up_err_process'], $label)];
+    }
+    _pesi_make_variants($dest, $mime);
+    return ['path' => '/' . $dir . '/' . $fname];
+}
+
+/**
+ * $_FILES eines Mehrfach-Felds (name="x[]") als Liste einzelner Dateien im
+ * Format eines einfachen Felds. Leere Auswahl → [].
+ */
+function _pesi_files_list($f): array {
+    if (!is_array($f) || !isset($f['error'])) return [];
+    if (!is_array($f['error'])) return ($f['error'] === UPLOAD_ERR_NO_FILE) ? [] : [$f];
+    $out = [];
+    foreach (array_keys($f['error']) as $i) {
+        $one = [];
+        foreach (['name', 'type', 'tmp_name', 'error', 'size'] as $k) $one[$k] = $f[$k][$i] ?? null;
+        if (is_array($one['error']) || $one['error'] === UPLOAD_ERR_NO_FILE) continue;
+        $out[] = $one;
+    }
+    return $out;
 }
 
 /**
@@ -2043,6 +2258,8 @@ function _pesi_upload_list(string $basePath, int $limit = 60): array {
     foreach (scandir($abs) ?: [] as $f) {
         if ($f === '' || $f[0] === '.') continue;
         if (!in_array(strtolower(pathinfo($f, PATHINFO_EXTENSION)), $exts, true)) continue;
+        // Verkleinerte Fassung eines Uploads (…-a1b2c3d4e5f6-480w.jpg), kein eigenes Bild.
+        if (preg_match('/-[0-9a-f]{12}-[1-9]\d{1,4}w\.[a-z0-9]+$/', $f)) continue;
         $p = $abs . '/' . $f;
         if (is_link($p) || !is_file($p)) continue;
         $path = '/' . $dir . '/' . $f;
@@ -2064,6 +2281,7 @@ function _pesi_discard_uploads(string $basePath, array $paths): void {
         $target = realpath($basePath . '/' . $rel);
         if ($target === false) continue;
         if (strncmp($target, $absDir . DIRECTORY_SEPARATOR, strlen($absDir) + 1) !== 0) continue;
+        foreach (_pesi_variant_files($target) as $v) @unlink($v);
         @unlink($target);
     }
 }
@@ -2146,6 +2364,8 @@ function _pesi_cleanup_old(string $basePath, array $old, array $pages): void {
         $target = realpath($basePath . '/' . $rel);
         if ($target === false) continue;
         if (strncmp($target, $absDir . DIRECTORY_SEPARATOR, strlen($absDir) + 1) !== 0) continue; // kein Traversal
+        // Die verkleinerten Fassungen zeigen dasselbe Foto (DSGVO wie oben).
+        foreach (_pesi_variant_files($target) as $v) @unlink($v);
         @unlink($target);
     }
     $release();
@@ -2177,6 +2397,7 @@ function _pesi_strings(): array { return [
         'draft_kept'        => 'Ihre Eingaben stehen unten weiterhin im Formular. Gespeichert ist davon noch nichts.',
         'err_ambiguous'     => 'Diese Aktion war nicht eindeutig, deshalb wurde nichts geändert. Bitte laden Sie die Seite neu und versuchen Sie es noch einmal.',
         'url_ph'            => 'https://… oder /kontakt',
+        'url_pick'          => 'Oder eine Seite dieser Website wählen …',
         'saved_one'         => '1 Änderung gespeichert.',
         'saved_many'        => '%d Änderungen gespeichert.',
         'wrong_password'    => 'Das Passwort stimmt nicht.',
@@ -2216,7 +2437,7 @@ function _pesi_strings(): array { return [
         'warn_default_pw'   => 'Es ist kein eigenes Passwort gesetzt (leer oder noch das Auslieferungs-Passwort). In pesi-core.php ein eigenes PESI_PASSWORD eintragen, idealerweise als password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax-Check ist aktiv, aber php -l lässt sich nicht ausführen (exec() gesperrt oder kein PHP-CLI im PATH). Solange das so ist, lehnt pesi jedes Speichern ab. exec() und PHP-CLI verfügbar machen oder PESI_SYNTAX_CHECK bewusst auf false setzen. (Code T7)',
         'warn_lint_mismatch' => 'Der Syntax-Check lehnt die unveränderte Seite %s ab. Meist ist das PHP der Kommandozeile ein anderes als das der Website (Syntax-Check: %s, Website: PHP %s); seltener ist die Seite selbst fehlerhaft, dann zeigt auch die Website einen Fehler. Solange das so ist, lehnt pesi jedes Speichern ab. PESI_PHP_CLI in pesi-core.php auf ein PHP-CLI in der Version der Website setzen (Pfad beim Hosting erfragen) oder PESI_SYNTAX_CHECK bewusst auf false setzen. Meldung des Linters: %s (Code T7)',
-        'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Meist steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache —, oder der Feldtyp ist unbekannt (erlaubt: text, textarea, richtext, image, url, email, tel). (Code T13)',
+        'warn_unparsed'     => 'In %s werden diese Felder nicht erkannt und erscheinen deshalb nicht zum Bearbeiten: %s. Meist steht der Wert in doppelten statt einfachen Anführungszeichen — pesi() erwartet einfache —, oder der Feldtyp ist unbekannt (erlaubt: text, textarea, richtext, image, url, email, tel, date). (Code T13)',
         'warn_dup_ids'      => 'In %s kommen diese Feld-IDs mehrfach vor: %s. Solange das so ist, lässt sich die Seite nicht speichern. Jede ID darf pro Seite nur einmal stehen. (Code S7)',
         'warn_no_tokenizer' => 'Die PHP-Erweiterung tokenizer fehlt. Ohne sie findet pesi keine Felder, das Dashboard bleibt leer. (Code T16)',
         'warn_no_dom'       => 'Die PHP-Erweiterung dom fehlt. Formatierte Texte (richtext) werden nur angezeigt und nicht zum Bearbeiten angeboten, damit ihre Formatierung erhalten bleibt. (Code T17)',
@@ -2225,6 +2446,7 @@ function _pesi_strings(): array { return [
         'rt_no_dom'         => 'Dieser formatierte Text lässt sich auf diesem Server gerade nicht bearbeiten. Bitte melden Sie sich bei Ihrer Website-Betreuung. (Code T17)',
         'warn_brand_contrast' => 'Die Markenfarbe %s trägt weisse Schrift nur mit %s:1 Kontrast; WCAG AA verlangt 4,5:1. Betroffen sind der Speichern-Button und die Links im Dashboard. Bitte einen dunkleren Ton als BRAND_COLOR wählen. (Code T12)',
         'warn_upload_limit' => 'PESI_UPLOAD_MAX_BYTES erlaubt %s MB, das Hosting aber nur %s MB (upload_max_filesize %s, post_max_size %s). Größere Bilder werden abgelehnt — Limit im Hosting anheben oder PESI_UPLOAD_MAX_BYTES angleichen, damit die Kundin die echte Grenze sieht. (Code T14)',
+        'warn_exposed'      => 'Diese internen Dateien sind über das Web abrufbar: %s. Die pesi-Regeln aus der .htaccess greifen nicht (etwa unter nginx oder bei AllowOverride None). Sicherungen enthalten den Quelltext der Seiten, .pesi-password den Passwort-Hash. Regeln einrichten, siehe README, Step 3. (Code T21)',
         'up_err_failed'     => 'Das Bild für „%s“ konnte nicht hochgeladen werden. Bitte versuchen Sie es noch einmal.',
         'up_err_size'       => 'Das Bild für „%s“ ist zu groß (höchstens %s MB). Bitte wählen Sie ein kleineres.',
         'up_err_type'       => 'Das Bild für „%s“ hat ein Format, das nicht unterstützt wird. Möglich sind JPG, PNG, WebP, AVIF und GIF.',
@@ -2247,6 +2469,11 @@ function _pesi_strings(): array { return [
         'blk_min_one'       => 'Der letzte Eintrag lässt sich nicht löschen — es muss einer bestehen bleiben.',
         'blk_edge'          => 'Dieser Eintrag steht bereits ganz oben bzw. ganz unten.',
         'blk_notfound'      => 'Dieser Eintrag ließ sich nicht finden. Bitte laden Sie die Seite neu. Bleibt es dabei, melden Sie sich bitte bei Ihrer Website-Betreuung. (Code S3)',
+        'blk_imgs'          => 'Mehrere Bilder als neue Einträge hinzufügen — hierher ziehen oder klicken',
+        'blk_imgs_max'      => 'Bitte wählen Sie höchstens %d Bilder auf einmal.',
+        'blk_imgs_one'      => '1 Bild als neuer Eintrag hinzugefügt.',
+        'blk_imgs_many'     => '%d Bilder als neue Einträge hinzugefügt.',
+        'blk_imgs_alt'      => 'Bitte ergänzen Sie bei jedem neuen Bild die Bildbeschreibung.',
         'last_mod'          => 'zuletzt geändert: %s',
         'view_live'         => '↗ Seite ansehen',
         'saved_view'        => 'Gespeichert — Seite ansehen ↗',
@@ -2270,6 +2497,9 @@ function _pesi_strings(): array { return [
         'img_alt_help'      => 'Beschreibt das Bild für Menschen, die es nicht sehen können, und für Suchmaschinen. Ein kurzer Satz genügt.',
         'img_alt_check'     => 'Neues Bild gewählt: Passt die Beschreibung noch?',
         'img_alt_saved'     => 'Neues Bild bei %s: Bitte prüfen Sie, ob die Bildbeschreibung noch passt.',
+        'img_focus_label'   => 'Wichtigste Stelle im Bild',
+        'img_focus_help'    => 'Klicken Sie im Bild auf die Stelle, die immer sichtbar bleiben soll, etwa ein Gesicht. Schneidet die Website das Bild zu, bleibt diese Stelle im Ausschnitt.',
+        'img_focus_kbd'     => 'Wichtigste Stelle im Bild, mit den Pfeiltasten verschieben',
         'vh_title'          => '↩ Frühere Versionen (%d)',
         'vh_intro'          => 'Bei jedem Speichern hebt pesi den bisherigen Stand auf, die letzten %d pro Seite. Wiederherstellen sichert Ihren jetzigen Stand vorher, Sie können also jederzeit zurück.',
         'vh_state'          => 'Stand von %s',
@@ -2322,6 +2552,7 @@ function _pesi_strings(): array { return [
         'draft_kept'        => 'Your entries are still in the form below. None of them has been saved yet.',
         'err_ambiguous'     => 'This action was ambiguous, so nothing was changed. Please reload the page and try again.',
         'url_ph'            => 'https://… or /contact',
+        'url_pick'          => 'Or pick a page of this website …',
         'saved_one'         => '1 change saved.',
         'saved_many'        => '%d changes saved.',
         'wrong_password'    => 'That password is not correct.',
@@ -2361,7 +2592,7 @@ function _pesi_strings(): array { return [
         'warn_default_pw'   => 'No password of your own is set (empty, or still the shipped default). Set your own PESI_PASSWORD in pesi-core.php, ideally as a password_hash(). (Code T8)',
         'warn_no_exec'      => 'Syntax check is enabled, but php -l cannot run (exec() disabled or no PHP CLI in PATH). Until that is fixed, pesi refuses every save. Make exec() and the PHP CLI available, or set PESI_SYNTAX_CHECK to false knowingly. (Code T7)',
         'warn_lint_mismatch' => 'The syntax check rejects the unchanged page %s. Usually the command-line PHP differs from the website\'s PHP (syntax check: %s, website: PHP %s); less often the page itself is broken, and then the website shows an error too. Until that is fixed, pesi refuses every save. Set PESI_PHP_CLI in pesi-core.php to a PHP CLI of the website\'s version (ask the host for the path), or set PESI_SYNTAX_CHECK to false knowingly. Linter message: %s (Code T7)',
-        'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Usually the value is in double quotes instead of single ones — pesi() expects single quotes — or the field type is unknown (allowed: text, textarea, richtext, image, url, email, tel). (Code T13)',
+        'warn_unparsed'     => 'In %s these fields are not recognised and therefore never show up for editing: %s. Usually the value is in double quotes instead of single ones — pesi() expects single quotes — or the field type is unknown (allowed: text, textarea, richtext, image, url, email, tel, date). (Code T13)',
         'warn_dup_ids'      => 'In %s these field IDs occur more than once: %s. Until that is fixed the page cannot be saved. Each ID may appear only once per page. (Code S7)',
         'warn_no_tokenizer' => 'The PHP extension tokenizer is missing. Without it pesi finds no fields and the dashboard stays empty. (Code T16)',
         'warn_no_dom'       => 'The PHP extension dom is missing. Formatted texts (richtext) are shown read-only so their formatting is not lost. (Code T17)',
@@ -2370,6 +2601,7 @@ function _pesi_strings(): array { return [
         'rt_no_dom'         => 'This formatted text cannot be edited on this server right now. Please contact whoever looks after your website. (Code T17)',
         'warn_brand_contrast' => 'Brand colour %s carries white text at only %s:1; WCAG AA requires 4.5:1. This affects the Save button and the links in the dashboard. Please pick a darker BRAND_COLOR. (Code T12)',
         'warn_upload_limit' => 'PESI_UPLOAD_MAX_BYTES allows %s MB, but the hosting only %s MB (upload_max_filesize %s, post_max_size %s). Larger images are rejected — raise the hosting limit or align PESI_UPLOAD_MAX_BYTES so the client sees the real limit. (Code T14)',
+        'warn_exposed'      => 'These internal files can be downloaded over the web: %s. The pesi rules from .htaccess are not in effect (for example under nginx or with AllowOverride None). Backups contain the source of your pages, .pesi-password the password hash. Set up the rules, see README, Step 3. (Code T21)',
         'up_err_failed'     => 'The image for "%s" could not be uploaded. Please try again.',
         'up_err_size'       => 'The image for "%s" is too large (%s MB at most). Please choose a smaller one.',
         'up_err_type'       => 'The image for "%s" is in a format that is not supported. JPG, PNG, WebP, AVIF and GIF work.',
@@ -2392,6 +2624,11 @@ function _pesi_strings(): array { return [
         'blk_min_one'       => 'The last entry cannot be deleted — one has to remain.',
         'blk_edge'          => 'This entry is already at the top or the bottom.',
         'blk_notfound'      => 'This entry could not be found. Please reload the page. If it persists, contact whoever looks after your website. (Code S3)',
+        'blk_imgs'          => 'Add several images as new entries — drop them here or click',
+        'blk_imgs_max'      => 'Please choose at most %d images at once.',
+        'blk_imgs_one'      => '1 image added as a new entry.',
+        'blk_imgs_many'     => '%d images added as new entries.',
+        'blk_imgs_alt'      => 'Please add an image description for each new image.',
         'last_mod'          => 'last edited: %s',
         'view_live'         => '↗ View page',
         'saved_view'        => 'Saved — view page ↗',
@@ -2415,6 +2652,9 @@ function _pesi_strings(): array { return [
         'img_alt_help'      => 'Describes the image for people who cannot see it, and for search engines. One short sentence is enough.',
         'img_alt_check'     => 'New image selected: does the description still fit?',
         'img_alt_saved'     => 'New image for %s: please check that the image description still fits.',
+        'img_focus_label'   => 'Most important spot in the image',
+        'img_focus_help'    => 'Click the spot in the image that must always stay visible, such as a face. When the website crops the image, this spot stays in view.',
+        'img_focus_kbd'     => 'Most important spot in the image, move it with the arrow keys',
         'vh_title'          => '↩ Earlier versions (%d)',
         'vh_intro'          => 'Every save keeps the previous state, the last %d per page. Restoring backs up your current state first, so you can always go back.',
         'vh_state'          => 'State from %s',
@@ -2755,6 +2995,13 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .blk-add-wrap{margin:-6px 0 18px}
 .blk-add{font:inherit;font-size:13px;padding:8px 14px;border:1px dashed var(--bd);border-radius:6px;background:transparent;color:var(--tx2);cursor:pointer;width:100%}
 .blk-add:hover{border-color:var(--b);color:var(--b)}
+.blk-imgs{margin:-10px 0 18px}
+.url-pick{margin-top:6px;padding:.45rem .7rem;font-size:.82rem;color:var(--tx2);cursor:pointer}
+.fi-date{max-width:220px}
+.img-fp{position:relative;display:inline-block;line-height:0;cursor:crosshair;border-radius:6px}
+.img-fp .img-prev{display:block}
+.img-fp-d{position:absolute;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:var(--b);border:2px solid #fff;box-shadow:0 0 0 2px #1a1a1a,0 1px 4px rgba(0,0,0,.5);pointer-events:none}
+.img-fc-v{max-width:150px;font-size:.82rem;padding:.45rem .7rem}
 .top-m{font-size:.74rem;color:var(--tx3);margin-left:auto}
 .rst-b{font:inherit;font-size:.82rem;padding:.55rem 1rem;background:transparent;color:var(--tx2);border:1px solid var(--bd);border-radius:var(--r2);cursor:pointer;margin-right:.6rem}
 .rst-b:hover{border-color:var(--b);color:var(--b)}
@@ -3002,12 +3249,14 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
       if ($bcRatio < 4.5) {
           $diag[] = sprintf($t['warn_brand_contrast'], $bc, number_format($bcRatio, 2, ',', '.'));
       }
-      if ($diag):
+      // T21 prüft der Browser: Nur er sieht, was der Webserver wirklich ausliefert.
+      $probes = _pesi_exposure_probes($basePath, $PESI_PAGES, $page);
+      if ($diag || $probes):
     ?>
-      <details class="dg">
+      <details class="dg" id="dg"<?=$diag ? '' : ' hidden'?>>
         <summary><?=htmlspecialchars($t['diag_summary'])?></summary>
         <p class="dg-in"><?=htmlspecialchars($t['diag_intro'])?></p>
-        <ul class="dg-l">
+        <ul class="dg-l" id="dgL">
           <?php foreach ($diag as $d): ?><li><?=htmlspecialchars($d)?></li><?php endforeach; ?>
         </ul>
       </details>
@@ -3121,7 +3370,7 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                       if (strncmp($fid, $pre, strlen($pre)) === 0) $blockOf[$fid] = $key;
                   }
               }
-              $closeBlk = function (string $key) use ($blkMeta, $grpLast, $t) {
+              $closeBlk = function (string $key) use ($blkMeta, $grpLast, $t, &$imgGroups, &$maxUploads) {
                   $b = $blkMeta[$key];
                   echo '</div><div class="blk-foot">';
                   printf('<button class="blk-b" formnovalidate name="pesi_block" value="up:%1$s:%2$d">%3$s</button>', $b['group'], $b['inst'], $t['blk_up']);
@@ -3133,6 +3382,14 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   if (($grpLast[$b['group']] ?? null) === $key) {
                       printf('<div class="blk-add-wrap"><button class="blk-add" formnovalidate name="pesi_block" value="add:%1$s">%2$s</button></div>',
                           $b['group'], htmlspecialchars($t['blk_add']));
+                      // Mehrere Bilder auf einmal: Auswahl schickt die Aktion ab (JS).
+                      if (isset($imgGroups[$b['group']])) {
+                          printf('<div class="blk-imgs" data-blk-imgs data-max="%3$d"><label class="img-drop" data-img-drop>'
+                              . '<input type="file" multiple name="pesi_many_%1$s[]" accept="image/png,image/jpeg,image/webp,image/avif,image/gif" class="sr" data-nodirty>'
+                              . '<span>%2$s</span></label>'
+                              . '<button class="sr" tabindex="-1" aria-hidden="true" formnovalidate name="pesi_block" value="imgs:%1$s" data-blk-imgs-go>%2$s</button></div>',
+                              $b['group'], htmlspecialchars($t['blk_imgs']), $maxUploads);
+                      }
                   }
               };
               $curBlk = null;
@@ -3140,7 +3397,25 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
               $altOf  = _pesi_alt_pairs($fields);
               // Wiederverwendbare Bilder: einmal pro Seite, nur wenn es Bildfelder gibt.
               $uploadList = array_filter($fields, fn($f) => $f['type'] === 'image') ? _pesi_upload_list($basePath) : [];
-              $altFor = array_flip($altOf);
+              // Fokuspunkte stehen wie die Beschreibung in der Bildkarte.
+              $focusOf = _pesi_focus_pairs($fields);
+              $altFor = array_flip($altOf) + array_flip($focusOf);
+              // Seiten dieser Website für url-Felder. Die Stammdaten sind keine Seite.
+              $pageLinks = [];
+              foreach ($PESI_PAGES as $pf => $pl) {
+                  if (defined('PESI_GLOBALS_FILE') && $pf === PESI_GLOBALS_FILE) continue;
+                  $u = '/' . ltrim((string)$pf, '/');
+                  if (preg_match('#(^|/)index\.php$#', $u)) $u = substr($u, 0, -strlen('index.php'));
+                  if (_pesi_safe_link_url($u) === $u) $pageLinks[$u] = (string)$pl;
+              }
+              // Gruppen, die mehrere Bilder auf einmal als Einträge annehmen.
+              $pageSrcNow = (string)@file_get_contents($basePath . '/' . $page);
+              $imgGroups = [];
+              foreach (array_unique(array_column($blocks, 'group')) as $g) {
+                  $grpB = array_values(array_filter($blocks, fn($b) => $b['group'] === $g));
+                  if (_pesi_block_image_slot($pageSrcNow, $grpB) !== null) $imgGroups[$g] = true;
+              }
+              $maxUploads = (int)ini_get('max_file_uploads') ?: 20;
             ?>
             <?php foreach ($fields as $id => $fld):
               if (isset($altFor[$id])) continue;
@@ -3188,6 +3463,15 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
 
                 <?php elseif ($fld['type'] === 'url'): ?>
                   <input type="text" inputmode="url" autocomplete="url" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi" placeholder="<?=htmlspecialchars($t['url_ph'])?>">
+                  <?php if ($pageLinks): ?>
+                  <select class="fi url-pick" data-url-pick="<?=$fid?>" data-nodirty aria-label="<?=htmlspecialchars($t['url_pick'])?>">
+                    <option value=""><?=htmlspecialchars($t['url_pick'])?></option>
+                    <?php foreach ($pageLinks as $u => $pl): ?><option value="<?=htmlspecialchars($u)?>"><?=htmlspecialchars($pl)?></option><?php endforeach; ?>
+                  </select>
+                  <?php endif; ?>
+
+                <?php elseif ($fld['type'] === 'date'): ?>
+                  <input type="date" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi fi-date">
 
                 <?php elseif ($fld['type'] === 'email'): ?>
                   <input type="email" inputmode="email" autocomplete="email" id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" value="<?=htmlspecialchars($val)?>"<?=$fx?> class="fi">
@@ -3199,10 +3483,25 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                   <textarea id="<?=$fid?>" name="pesi_field_<?=htmlspecialchars($id)?>" class="fi" rows="4"<?=$fx?>><?=htmlspecialchars($val)?></textarea>
 
                 <?php elseif ($fld['type'] === 'image'): ?>
-                  <?php $hasImg = trim($fld['value']) !== ''; ?>
+                  <?php $hasImg = trim($fld['value']) !== '';
+                    $fcId = $focusOf[$id] ?? null;
+                    if ($fcId !== null) {
+                        $fcfid  = 'f_' . preg_replace('/[^A-Za-z0-9_]/', '', $fcId);
+                        $fcDraft = array_key_exists($fcId, $draft);
+                        $fcval  = $fcDraft ? $draft[$fcId] : (string)$fields[$fcId]['value'];
+                        $fcbad  = in_array($fcId, $invalidIds, true);
+                        $fcfx   = ($fcDraft ? ' data-saved="' . htmlspecialchars((string)$fields[$fcId]['value']) . '"' : '') . ($fcbad ? ' aria-invalid="true"' : '');
+                    } ?>
                   <div class="img-field" data-img>
                     <figure class="img-cur"<?=$hasImg?'':' hidden'?> data-img-fig>
+                      <?php if ($fcId !== null): ?>
+                      <span class="img-fp" data-img-fp="<?=$fcfid?>" tabindex="0" role="group" aria-label="<?=htmlspecialchars($t['img_focus_kbd'])?>" aria-describedby="<?=$fcfid?>_h">
+                        <img class="img-prev" src="<?=$hasImg?htmlspecialchars($fld['value']):''?>" alt="" data-img-prev>
+                        <span class="img-fp-d" aria-hidden="true"></span>
+                      </span>
+                      <?php else: ?>
                       <img class="img-prev" src="<?=$hasImg?htmlspecialchars($fld['value']):''?>" alt="" data-img-prev>
+                      <?php endif; ?>
                       <figcaption class="img-name"><?=htmlspecialchars($t['img_current'])?> <span data-img-name><?=$hasImg?htmlspecialchars(basename($fld['value'])):''?></span></figcaption>
                     </figure>
                     <label class="img-drop" data-img-drop>
@@ -3233,6 +3532,13 @@ body.dash .fc .ql-snow .ql-tooltip input[type=text]{background:#f5f5f5;border-co
                       <p class="img-hint" id="<?=$afid?>_h"><?=htmlspecialchars($t['img_alt_help'])?></p>
                       <input type="text" id="<?=$afid?>" name="pesi_field_<?=htmlspecialchars($aid)?>" value="<?=htmlspecialchars($aval)?>"<?=$afx?> class="fi" aria-describedby="<?=$afid?>_h">
                       <p class="img-alt-note" role="status" data-img-alt-note hidden><?=htmlspecialchars($t['img_alt_check'])?></p>
+                    </div>
+                    <?php endif; ?>
+                    <?php if ($fcId !== null): ?>
+                    <div class="img-alt img-fc">
+                      <label class="img-alt-l" for="<?=$fcfid?>"><?=htmlspecialchars($fields[$fcId]['label'] !== '' ? $fields[$fcId]['label'] : $t['img_focus_label'])?></label>
+                      <p class="img-hint" id="<?=$fcfid?>_h"><?=htmlspecialchars($t['img_focus_help'])?></p>
+                      <input type="text" id="<?=$fcfid?>" name="pesi_field_<?=htmlspecialchars($fcId)?>" value="<?=htmlspecialchars($fcval)?>"<?=$fcfx?> class="fi img-fc-v" placeholder="50% 50%" aria-describedby="<?=$fcfid?>_h" spellcheck="false">
                     </div>
                     <?php endif; ?>
                   </div>
@@ -3420,6 +3726,29 @@ function closeMobileNav(){
   });
 })();
 
+// ── Selbsttest: interne Dateien über das Web abrufbar? (T21) ──
+// Kommt eine Datei mit genau ihrer Größe zurück, liefert der Webserver sie
+// aus. Fehlerseiten, Weiterleitungen und Sperren fallen durch.
+(function(){
+  var P=<?=json_encode($probes ?? [], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
+  var MSG=<?=json_encode($t['warn_exposed'], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG)?>;
+  var dg=document.getElementById('dg'), l=document.getElementById('dgL');
+  if(!P.length||!dg||!l||!window.fetch) return;
+  Promise.all(P.map(function(p){
+    return fetch(p.url,{cache:'no-store',credentials:'same-origin'})
+      .then(function(r){ return r.ok ? r.arrayBuffer() : null; })
+      .then(function(b){ return b && b.byteLength===p.size ? p.name : null; })
+      .catch(function(){ return null; });
+  })).then(function(hit){
+    hit=hit.filter(Boolean);
+    if(!hit.length) return;
+    var li=document.createElement('li');
+    li.textContent=MSG.replace('%s',hit.join(', '));
+    l.appendChild(li);
+    dg.hidden=false;
+  });
+})();
+
 // ── Bild-Felder: Vorschau + Drag&Drop ──
 window.PESI_UPLOADS=<?=json_encode(array_values($uploadList ?? []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
 var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
@@ -3487,6 +3816,61 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   });
 })();
 
+// ── url-Felder: Seite dieser Website wählen ──
+// Setzt nur den Pfad ins Feld; die Auswahl selbst springt zurück.
+(function(){
+  document.querySelectorAll('[data-url-pick]').forEach(function(s){
+    var inp=document.getElementById(s.getAttribute('data-url-pick'));
+    if(!inp) return;
+    s.addEventListener('change',function(){
+      if(s.value==='') return;
+      inp.value=s.value;
+      s.value='';
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+      inp.focus();
+    });
+  });
+})();
+
+// ── Fokuspunkt: Klick ins Bild oder Pfeiltasten ──
+// Gleiches Format wie _pesi_safe_focus(): „X% Y%“, beide 0–100.
+(function(){
+  document.querySelectorAll('[data-img-fp]').forEach(function(fp){
+    var inp=document.getElementById(fp.getAttribute('data-img-fp')),
+        dot=fp.querySelector('.img-fp-d'), img=fp.querySelector('img');
+    if(!inp||!dot||!img) return;
+    function parse(){
+      var m=/^\s*(\d{1,3}(?:[.,]\d+)?)\s*%?\s*[ ,;]\s*(\d{1,3}(?:[.,]\d+)?)\s*%?\s*$/.exec(inp.value);
+      if(!m) return null;
+      var x=parseFloat(m[1].replace(',','.')), y=parseFloat(m[2].replace(',','.'));
+      return x<=100&&y<=100 ? [x,y] : null;
+    }
+    function draw(){
+      var p=parse();
+      dot.hidden=!p;
+      if(p){ dot.style.left=p[0]+'%'; dot.style.top=p[1]+'%'; }
+    }
+    function set(x,y){
+      x=Math.max(0,Math.min(100,Math.round(x))); y=Math.max(0,Math.min(100,Math.round(y)));
+      inp.value=x+'% '+y+'%';
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+    fp.addEventListener('click',function(e){
+      var r=img.getBoundingClientRect();
+      if(r.width&&r.height) set((e.clientX-r.left)/r.width*100,(e.clientY-r.top)/r.height*100);
+    });
+    fp.addEventListener('keydown',function(e){
+      var d={ArrowLeft:[-5,0],ArrowRight:[5,0],ArrowUp:[0,-5],ArrowDown:[0,5]}[e.key];
+      if(!d) return;
+      e.preventDefault();
+      var p=parse()||[50,50];
+      set(p[0]+d[0],p[1]+d[1]);
+    });
+    inp.addEventListener('input',draw);
+    draw();
+  });
+})();
+
 // ── Speichern: ungespeicherte Änderungen zählen + warnen ──
 (function(){
   var form=document.getElementById('pf'); if(!form) return;
@@ -3501,6 +3885,8 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   // der Entwurf im Feld und der gespeicherte Wert in data-saved — der Entwurf
   // zählt so weiter als ungespeichert und die Warnung vor dem Verlassen greift.
   form.querySelectorAll('input,textarea,select').forEach(function(el){
+    // Bedienelemente ohne eigenen Wert (Seitenauswahl, Mehrfach-Upload) zählen nicht.
+    if(el.hasAttribute('data-nodirty')) return;
     snap.set(el, el.type==='file' ? 0 : (el.hasAttribute('data-saved') ? el.getAttribute('data-saved') : el.value));
   });
   var rtDirty=new Set();
@@ -3527,7 +3913,7 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   document.addEventListener('input',refresh);
   document.addEventListener('change',refresh);
   form.addEventListener('submit',function(){leaving=true;});
-  form.querySelectorAll('button[name="pesi_block"],button[name="pesi_toggle"],button[name="pesi_restore"]').forEach(function(b){
+  form.querySelectorAll('button[name="pesi_block"]:not([data-blk-imgs-go]),button[name="pesi_toggle"],button[name="pesi_restore"]').forEach(function(b){
     b.addEventListener('click',function(e){
       var c=b.getAttribute('data-confirm');
       if(c && !confirm(c)){e.preventDefault();leaving=false;return;}
@@ -3537,6 +3923,33 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   window.addEventListener('beforeunload',function(e){
     if(count()>0 && !leaving){e.preventDefault();e.returnValue='';}
   });
+  // Mehrere Bilder als neue Einträge: Die Auswahl selbst ist die Aktion.
+  // PHP verwirft Dateien über max_file_uploads stillschweigend, darum vorher.
+  var IMAX=<?=json_encode($t['blk_imgs_max'], JSON_UNESCAPED_UNICODE)?>;
+  form.querySelectorAll('[data-blk-imgs]').forEach(function(w){
+    var inp=w.querySelector('input[type="file"]'), go=w.querySelector('[data-blk-imgs-go]'),
+        drop=w.querySelector('[data-img-drop]'), max=+w.getAttribute('data-max')||20;
+    if(!inp||!go) return;
+    function send(){
+      if(!inp.files||!inp.files.length) return;
+      if(inp.files.length>max){ alert(IMAX.replace('%d',max)); inp.value=''; return; }
+      if(count()>0 && !confirm(DISCARD)){ inp.value=''; return; }
+      if(form.requestSubmit) form.requestSubmit(go); else { leaving=true; go.click(); }
+    }
+    inp.addEventListener('change',send);
+    if(drop){
+      ['dragenter','dragover'].forEach(function(ev){
+        drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add('drag'); });
+      });
+      ['dragleave','drop'].forEach(function(ev){
+        drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove('drag'); });
+      });
+      drop.addEventListener('drop',function(e){
+        var f=e.dataTransfer&&e.dataTransfer.files;
+        if(f&&f.length){ try{ inp.files=f; }catch(_){ return; } send(); }
+      });
+    }
+  });
   // Enter in einem einzeiligen Feld heisst Speichern, nie eine Strukturaktion.
   // Der versteckte Standardknopf regelt das schon nach HTML-Spezifikation;
   // hier zusätzlich ausdrücklich, unabhängig von Browser-Eigenheiten.
@@ -3544,7 +3957,7 @@ var PESI_PICK=<?=json_encode($t['img_lib_pick'], JSON_UNESCAPED_UNICODE)?>;
   form.addEventListener('keydown',function(e){
     var el=e.target;
     if(e.key!=='Enter'||e.isComposing||e.defaultPrevented) return;
-    if(el.tagName!=='INPUT'||['text','url','email','tel','search','number'].indexOf(el.type)<0) return;
+    if(el.tagName!=='INPUT'||['text','url','email','tel','search','number','date'].indexOf(el.type)<0) return;
     var def=form.querySelector('button.sv-def');
     if(!def) return;
     e.preventDefault();

@@ -88,14 +88,34 @@ the same source and commit the same way.
 ## Feature surface (all in `pesi.php`)
 
 - Field types: `text`, `textarea`, `richtext` (Quill, heredoc), `image`,
-  `url`, `email`, `tel`
+  `url`, `email`, `tel`, `date`
   (upload + MIME/size validation + orphan cleanup; config in `pesi-core.php`).
+  `date` stores `YYYY-MM-DD`; `pesi_date()` in `pesi-lib.php` writes it out
+  in DE/EN without ext/intl. `url` cards offer the registered pages in a
+  nameless `<select>` (never submitted, `data-nodirty`).
 - **Images**: every upload loses EXIF/XMP/IPTC losslessly in plain PHP
   (`_pesi_jpeg_strip()` & co.) and, with gd, is scaled down to
   `PESI_IMAGE_MAX_EDGE`. A `text` field `<image-id>_alt` is the image's
   description and is shown in its card (`_pesi_alt_pairs()`). The card can
   pick a file already in the upload folder (`_pesi_upload_list()`), nothing
-  more — no renaming, deleting or cropping.
+  more — no renaming, deleting or cropping. A `text` field `<image-id>_focus`
+  is its focus point for `object-position` (`_pesi_focus_pairs()`); the saver
+  accepts only `X% Y%` (`_pesi_safe_focus()`), because the value lands in a
+  `style` attribute. With gd, `_pesi_make_variants()` writes smaller copies
+  `…-<12 hex>-<W>w.<ext>` (`PESI_IMAGE_SIZES`); `pesi_srcset()` lists them,
+  and discard/cleanup delete them with the original. `_pesi_variant_files()`
+  only matches pesi's own upload names, so a hand-placed `logo-20w.png` is
+  never taken for a copy.
+- **Several images as entries**: a `pesi:item` group whose template has
+  exactly one `image` field (`_pesi_block_image_slot()`) gets a drop zone.
+  `pesi_block=imgs:GROUP` stores every upload first, then
+  `_pesi_block_add_images()` appends one clone per image in a single commit;
+  any failed file discards all of them. Cloned `_alt` fields are emptied.
+- **Self-test (T21)**: `_pesi_exposure_probes()` lists `.pesi-password`,
+  `.pesi-throttle` and one backup with their sizes; the dashboard JS fetches
+  them and reports T21 only when exactly that many bytes come back, so a
+  soft-404 page does not count. Only the browser sees what the web server
+  really serves — do not move this check to PHP.
 - **Repeatable blocks**: `<!-- pesi:item GROUP:N -->…<!-- /pesi:item -->`,
   field IDs prefixed `GROUP_N_`. Dashboard offers duplicate / delete /
   reorder (↑↓) / add. See `_pesi_block_*`.
@@ -370,6 +390,13 @@ the sanitizer or the structural features:
 
 ```bash
 php dev/test-engine.php
+```
+
+The image scaling and variant tests need gd. A Windows CLI often ships it
+unloaded; run the suite a second time with it before touching images:
+
+```bash
+php -d extension=gd dev/test-engine.php
 ```
 
 It takes an optional path to the working copy under test

@@ -326,7 +326,7 @@ Shipped German uses formal address (*Sie*), which suits practices and firms; the
 |---|---|---|
 | 1 | `$id` | Unique field ID per file. snake_case, `[a-z0-9_]` only |
 | 2 | `$default` | The content. Until the client saves something, this text is shown. Once saved, the client's text replaces it directly in the source file |
-| 3 | `$type` | `text`, `textarea`, `richtext`, `image`, `url`, `email` or `tel` |
+| 3 | `$type` | `text`, `textarea`, `richtext`, `image`, `url`, `email`, `tel` or `date` |
 | 4 | `$label` | Display name in the dashboard. Keep it human — this is what the client sees. No `'` or `"` inside |
 
 **Single quotes around the value — never double.** `pesi("id", "Text", …)` renders normally but is invisible to the dashboard; the diagnostics panel reports it as code `T13`. Escape apostrophes as `\'`.
@@ -353,6 +353,18 @@ Shipped German uses formal address (*Sie*), which suits practices and firms; the
 <a href="tel:<?= pesi('phone', '+43 123 456789', 'tel', 'Phone') ?>">Call us</a>
 ```
 
+Under every `url` field the dashboard offers the pages registered in `$PESI_PAGES` (except the shared-details file). Picking one writes its path into the field — `/` for `index.php`, `/kontakt.php` for `kontakt.php` — and the client can still type any other link.
+
+**`date`** — A calendar day: course start, "closed until", the date of a notice. The dashboard shows a date picker; the source stores `YYYY-MM-DD`, and `pesi()` returns it unchanged, which also fits a `datetime` attribute. For visible text, `pesi_date()` writes it out in the site's language without ext/intl, optionally with a `date()` format whose month and day names (`F`, `M`, `l`, `D`) are translated too:
+
+```php
+<?php $start = pesi('course_start', '2026-09-14', 'date', 'Kursbeginn'); ?>
+<time datetime="<?= $start ?>"><?= pesi_date($start) ?></time>          <!-- 14. September 2026 -->
+<?= pesi_date($start, 'l, j. M Y') ?>                                     <!-- Montag, 14. Sept. 2026 -->
+```
+
+A default pesi cannot read as a date prints as nothing. An invalid value from the dashboard rejects the save like an invalid link.
+
 **`image`** — Page-bound image upload with real MIME and size validation. Before the image goes online, pesi strips camera metadata (EXIF, XMP, IPTC — including the GPS location a phone writes into every photo) and scales it down to `PESI_IMAGE_MAX_EDGE` pixels on the longer edge. The path is stored in the PHP source and is safe to use in `src`. Wrap only the path, never the whole `<img>` tag.
 
 ```php
@@ -367,6 +379,24 @@ Shipped German uses formal address (*Sie*), which suits practices and firms; the
 ```
 
 The dashboard shows it inside the image's card, directly under the image, with one line explaining what it is for. When the client picks a new image, the card asks whether the description still fits; saving a new image with an unchanged description repeats the question in the success message. Nothing is enforced. Give content images — portraits, team, projects — a description; leave decorative images at `alt=""` and without one. In a `pesi:item` entry, name it like the image (`team_1_foto` → `team_1_foto_alt`) so a duplicated entry brings its own.
+
+**Focus point.** A `text` field whose ID is the image ID plus `_focus` holds the spot that must stay visible when the layout crops the image. Put it in `object-position`:
+
+```php
+<img src="<?= pesi('hero', '/uploads/hero.jpg', 'image', 'Titelbild') ?>"
+     style="width:100%;height:60vh;object-fit:cover;object-position: <?= pesi('hero_focus', '50% 50%', 'text', 'Bildausschnitt') ?>" alt="">
+```
+
+The image card shows a marker on the preview; the client clicks the spot or moves the marker with the arrow keys. Only values of the form `X% Y%` (0–100) are saved, because the value ends up in a `style` attribute; an unchanged default such as `center` does not block saving.
+
+**Smaller copies for phones — `pesi_srcset()`.** With gd, every upload also gets copies at the widths in `PESI_IMAGE_SIZES` (480, 960 and 1600 px by default, only those smaller than the original), stripped of metadata like the original. `pesi_srcset()` lists them for a `srcset` attribute. Keep the value in a variable, because a field ID may only appear once per page:
+
+```php
+<img src="<?= $hero = pesi('hero', '/uploads/hero.jpg', 'image', 'Titelbild') ?>"
+     srcset="<?= pesi_srcset($hero) ?>" sizes="100vw" alt="">
+```
+
+Without copies — no gd, an external URL, a file placed by FTP — it returns an empty string and the browser uses `src`. The copies are deleted together with the original.
 
 **`richtext`** — WYSIWYG editor (Quill, bundled inline). Bold, italic, lists, links, headings h2/h3, blockquotes, multiple paragraphs. The output is wrapped in `<div class="pesi-richtext">` with default styles for lists and links. Only these tags survive the sanitizer, on save and on every render:
 
@@ -427,7 +457,7 @@ For any list the client should be able to grow or shrink: team members, services
 </section>
 ```
 
-The dashboard shows each entry as its own card with ↑ ↓ · Duplicate · Delete, plus one "+ Add entry" button under the group. Adding clones entry `:1` as the template; the last remaining entry cannot be deleted. Instance numbers are stable and never renumbered — after deleting `:2` you legitimately have `team:1` and `team:3`.
+The dashboard shows each entry as its own card with ↑ ↓ · Duplicate · Delete, plus one "+ Add entry" button under the group. An entry with exactly one `image` field (a gallery, a row of logos) also gets a drop zone for several images at once: each becomes a new entry cloned from `:1`, with its image and an empty `_alt` description, in one save. Adding clones entry `:1` as the template; the last remaining entry cannot be deleted. Instance numbers are stable and never renumbered — after deleting `:2` you legitimately have `team:1` and `team:3`.
 
 ### Visibility toggles — `pesi:toggle`
 
@@ -504,7 +534,7 @@ PESI, 'richtext', 'Legal notice content') ?>
 - The same text in two places gets two IDs: `company_header` and `company_footer`
 - Never rename an ID once the client has saved content — the saved value becomes invisible to the dashboard
 - Only real global `pesi()` calls in PHP code count. Commented-out calls, `->pesi()`, `Foo::pesi()`, similarly named functions and `pesi(…)` text inside a string, a nowdoc or plain HTML are not fields
-- The type must be one of `text`, `textarea`, `richtext`, `image`, `url`, `email`, `tel`. A typo like `urll` is reported as `T13` instead of showing a field that cannot be edited
+- The type must be one of `text`, `textarea`, `richtext`, `image`, `url`, `email`, `tel`, `date`. A typo like `urll` is reported as `T13` instead of showing a field that cannot be edited
 
 ---
 
@@ -516,12 +546,13 @@ The dashboard is built for the client — a therapist, a practice, an artist; ra
 - **Image cards** take a new upload by click or drag and drop, or *Choose an image you already uploaded* — the 60 newest files in the upload folder as thumbnails, one click to use one. No renaming or deleting; that stays out of the client's way
 - **Word count** under every `textarea` and `richtext` field, next to the count of the saved text (`142 Wörter · vorher 120`), so the client sees when a new text grows far beyond what the layout was built for
 - **Save** at the bottom, with a live count of unsaved changes and a warning before leaving the page or running a structural action
-- **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group
+- **Entries** with ↑ ↓ · Duplicate · Delete and "+ Add entry" for every `pesi:item` group; groups whose entry holds one image also take several images at once by drag and drop
+- **Links** to the site's own pages are picked from a list under every `url` field; **dates** use a date picker; a **focus point** is set by clicking into the image
 - **Visibility** panel with Show/Hide for every `pesi:toggle` group; fields of a hidden section say so on their card
 - **Earlier versions** lists the last `PESI_BACKUP_COUNT` states of the page (5 by default). Each entry says which fields differ from now, shows old and new values side by side, and restores with one click. The current state is backed up first, so a restore can itself be undone
 - **Preview** of the saved page next to the form on screens from 1280 px, sandboxed
 - **Technical view** toggle in the top bar shows field IDs and type badges; remembered per browser
-- **Diagnostics** for whoever looks after the site — default password, missing `php -l`, brand contrast, unparsable fields, upload limits — sit in one collapsed line, never in a red banner
+- **Diagnostics** for whoever looks after the site — default password, missing `php -l`, brand contrast, unparsable fields, upload limits — sit in one collapsed line, never in a red banner. The dashboard also requests `.pesi-password`, `.pesi-throttle` and one backup from the browser and reports `T21` if the web server hands them out
 
 Messages name the consequence, never the mechanism. Anything the client can fix alone (image too large, wrong format) says exactly that. Anything she cannot fix carries a short code and asks her to pass it on:
 
@@ -548,13 +579,14 @@ Messages name the consequence, never the mechanism. Anything the client can fix 
 | `T8` | No password of your own is set — `PESI_PASSWORD` is empty, missing or still the shipped default. Sign-in stays locked | Set a real `PESI_PASSWORD`, ideally a `password_hash()` value |
 | `T9` | The temporary candidate could not be written completely — almost always a full disk or exhausted quota. The live page was not touched | Free up space or raise the quota, then save again |
 | `T12` | `BRAND_COLOR` carries white text below the 4.5:1 WCAG AA needs, which affects the Save button and the dashboard links | Pick a darker shade. The message states the measured ratio |
-| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or an unknown field type | Use single quotes: `pesi('id', 'Text', …)`, and escape apostrophes in the value as `\'`. Use one of the seven documented types |
+| `T13` | A page contains `pesi()` calls the parser cannot read, so those fields never appear for the client. Almost always double quotes around the value, or an unknown field type | Use single quotes: `pesi('id', 'Text', …)`, and escape apostrophes in the value as `\'`. Use one of the eight documented types |
 | `T14` | `PESI_UPLOAD_MAX_BYTES` is higher than the hosting accepts (`upload_max_filesize` / `post_max_size`). Images between the two limits are rejected; the client is shown the smaller, effective limit | Raise the limits in the hosting (php.ini, `.user.ini` or `.htaccess`), or lower `PESI_UPLOAD_MAX_BYTES` to match |
 | `T15` | The login throttle register (`.pesi-throttle`, `.pesi-throttle-lock`) could not be opened, read or written. pesi then refuses every sign-in, because without it a new cookie per attempt would bypass the brute-force delay. The reason is also written to the PHP error log | Give the web server write access to the pesi directory and check owner and permissions of both files. A directory or other non-file under one of those names blocks it too |
 | `T16` | The PHP extension `tokenizer` is missing. pesi finds fields with the PHP tokenizer, so without it the dashboard shows no fields | Enable `ext/tokenizer` (on by default in PHP; some hosts compile it out) |
 | `T17` | The PHP extension `dom` is missing. `richtext` fields are shown read-only so saving cannot flatten their formatting to plain text; the public site shows them as plain text with line breaks | Enable `ext/dom` |
 | `T18` | The PHP extension `gd` is missing, so uploaded images go online at full size instead of being scaled down. Their metadata is still removed | Enable `ext/gd`, or set `PESI_IMAGE_MAX_EDGE` to 0 knowingly |
 | `T20` | The dashboard could not save a new password, or `.pesi-password` exists but holds no valid hash. A failed change keeps the previous password; a damaged file locks sign-in instead of silently falling back to `pesi-core.php` | Check write access to the web root. Delete a damaged `.pesi-password` via FTP; the password from `pesi-core.php` then applies |
+| `T21` | The web server delivers pesi's internal files — a backup with the page source, `.pesi-password` or `.pesi-throttle`. The dashboard checks this from the browser on every visit, comparing the exact file size so that an error page with status 200 does not count | Add the rules from Step 3; on nginx or with `AllowOverride None` the `.htaccess` is ignored and the server config needs equivalent `deny` rules. Reload the dashboard to check again |
 
 ---
 
@@ -600,7 +632,7 @@ Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY
 | `page.php.pesi-tmp-*` | during a save | The candidate that is linted and then renamed over the live page; removed on failure |
 | `.pesi-password` | when the client changes her password | `password_hash()` of the dashboard password; takes precedence over `PESI_PASSWORD`. Delete it to reset to `pesi-core.php` |
 | `.pesi-throttle`, `.pesi-throttle-lock` | on the first sign-in attempt | Login throttle register: SHA-256 of the client IP and a counter, entries dropped an hour after they expire |
-| `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file; replaced images are deleted once neither the page nor any of its backups references them |
+| `uploads/…` | on image upload | Uploaded images under a random name that never overwrites an existing file, plus smaller copies named `…-480w.jpg` etc. (with gd); replaced images are deleted together with their copies once neither the page nor any of its backups references them |
 
 All of these are covered by the `.pesi-` rule in Step 3 except the upload folder, which must stay public.
 
@@ -629,6 +661,7 @@ define('PESI_UPLOAD_DIR',       'uploads');                       // Relative to
 define('PESI_UPLOAD_MAX_BYTES', 5 * 1024 * 1024);                 // Capped by the host's upload_max_filesize / post_max_size
 define('PESI_UPLOAD_TYPES',     'jpg,jpeg,png,webp,avif,gif');    // SVG is excluded on purpose
 define('PESI_IMAGE_MAX_EDGE',   2560);                            // Longer edge in px; larger uploads are scaled down (needs gd). 0 = never
+define('PESI_IMAGE_SIZES',      '480,960,1600');                  // Widths of the smaller copies for pesi_srcset() (needs gd). '' = none
 
 $PESI_PAGES = [
     PESI_GLOBALS_FILE => 'Stammdaten',
