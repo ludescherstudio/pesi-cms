@@ -737,6 +737,10 @@ An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload 
 
 Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
 
+### From 0.6 to 0.7
+
+Upload `pesi.php` and `pesi-lib.php`; `pesi-core.php` and your pages need no change. New: **notices and events that expire by themselves** with `pesi_until()` and `pesi_upcoming()`, and a "past" mark for such dates in the dashboard — see [Field types](#field-types), `date`. Existing pages keep working; wrap a holiday notice or an event list in the helpers where it helps.
+
 ### From 0.6.0 to 0.6.1
 
 Upload `pesi.php` and `pesi-lib.php`. 0.6.1 fixes richtext editors that grew past their card in the dashboard once the form was wide enough for two columns. If you patched `pesi.php` by hand (`height:auto` on `.fc .ql-container`), the update replaces that patch with the same fix.
