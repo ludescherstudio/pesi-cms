@@ -2286,6 +2286,10 @@ ok('… mit Ziehgriff, für Screenreader verborgen', (bool)preg_match('/<span cl
 ok('kurze Felder nebeneinander: Titel und Link', (bool)preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_titel"/', $o)
     && (bool)preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_link"/', $o));
 ok('Bildfeld bleibt breit', !preg_match('/<div class="fc fc-half">\s*<label class="fc-label" for="f_bild"/', $o));
+// 0.6.1: Im Raster ist jede Karte gestreckt und hat eine feste Höhe. Quills
+// .ql-container{height:100%} bezog sich darauf, der Editor ragte aus der Karte.
+ok('Richtext-Editor nimmt seine Inhaltshöhe, nicht die der Karte',
+    (bool)preg_match('/\n\.fc \.ql-container\{height:auto;/', $o));
 ok('Verwerfen-Knopf: kein Submit, verborgen, lädt per GET', (bool)preg_match('/<button type="button" class="sv-x" id="svDiscard" data-href="\?page=index\.php" hidden>/', $o));
 $dlgAt = strpos($o, '<dialog class="dlg" id="dlg"');
 ok('Rückfrage-Dialog steht ausserhalb des Speicherformulars', $dlgAt !== false && $dlgAt > strpos($o, '</form>'));

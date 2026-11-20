@@ -298,7 +298,8 @@ tests, which is why the suite now also renders real dashboard responses:
 JS registries keyed by field ID use `Object.create(null)`: `__proto__` is a
 valid field ID.
 
-Three from the UI work (2026-10-29), each found or nearly found in the browser:
+Four from the UI work (2026-10-29), each found or nearly found in the browser
+(the last one only in a customer install, fixed in 0.6.1):
 
 - **The `<dialog>` must sit outside `#pf`.** It holds its own
   `<form method="dialog">`, and a form inside a form is dropped by the parser —
@@ -307,6 +308,11 @@ Three from the UI work (2026-10-29), each found or nearly found in the browser:
   `position: fixed`.** The toast is therefore rendered before it, not inside.
 - **Discard loads `?page=…` by GET, never `location.reload()`.** After a save
   the page is a POST response; reloading it would send the form again.
+- **In `.fgrid` every card is a stretched grid item with a definite height.**
+  Quill's own `.ql-container{height:100%}` then resolves against the whole
+  card, and the richtext editor overflows it by label, toolbar and word count.
+  `.fc .ql-container` sets `height:auto`. Any child sized in `%` inside a card
+  has the same problem.
 
 Two from the first live install (2026-09-26):
 
