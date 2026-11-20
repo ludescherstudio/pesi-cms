@@ -4,7 +4,7 @@
 // in pesi-core.php, which an update never touches. Documentation: README.md
 
 // pesi.php checks on start that it comes from the same release.
-if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.6.1');
+if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.7.0');
 
 // ── Defaults ─────────────────────────────────────────────────
 // Everything pesi-core.php does not set. New settings of later releases
@@ -363,6 +363,36 @@ if (!function_exists('pesi_date')) {
             }
         }
         return _pesi_e($out);
+    }
+}
+
+if (!function_exists('pesi_until')) {
+    /**
+     * Show something until a date, that day included. Checked on every page
+     * view, so a holiday notice disappears by itself, without a cron job:
+     *   <?php if (pesi_until(pesi('away_until', '2026-08-15', 'date', 'Show until'))): ?> … <?php endif; ?>
+     * Keep the pesi() call inside the parentheses: the dashboard looks for it
+     * there and marks the date as past. Empty or invalid → true (no end).
+     * "Today" follows the server's timezone (date.timezone).
+     */
+    function pesi_until(string $date): bool {
+        $d = _pesi_safe_date(html_entity_decode($date, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        return $d === '' || $d >= date('Y-m-d');
+    }
+}
+
+if (!function_exists('pesi_upcoming')) {
+    /**
+     * An event that has not ended: today counts as upcoming. With $end (an
+     * exhibition from … to …) it stays until the later of the two dates:
+     *   <?php if (pesi_upcoming($d = pesi('event_1_date', '2026-12-03', 'date', 'Date'))): ?> … <?php endif; ?>
+     * The same rules as pesi_until(); an empty or invalid date is ignored, both
+     * empty → true. The dashboard's "past" mark uses the same later date.
+     */
+    function pesi_upcoming(string $date, string $end = ''): bool {
+        $d = _pesi_safe_date(html_entity_decode($date, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $e = _pesi_safe_date(html_entity_decode($end, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        return pesi_until(max($d, $e));
     }
 }
 
