@@ -114,6 +114,40 @@ prints German month names without ext/intl (`15. August 2026`; `LANG` `en`:
 Convert an existing date to ISO for the default. A value pesi cannot read as a
 date prints as nothing, so check the page after converting.
 
+**News on these sites are dated.** A practice announces holidays, groups and
+talks; an artist an exhibition from … to …; a small club its meetings. Build
+them so they expire by themselves:
+
+- A notice with an end ("closed until 6 January", "two places left") goes in
+  `pesi_until()`.
+- A list of events is a `pesi:item` group, each entry wrapped in
+  `pesi_upcoming()`, with an optional end date for events over several days.
+
+```php
+<?php if (pesi_until(pesi('zu_bis', '2027-01-06', 'date', 'Hinweis anzeigen bis'))): ?>
+  <p class="notice"><?= pesi('zu_text', 'Die Praxis ist bis 6. Jänner geschlossen.', 'text', 'Hinweistext') ?></p>
+<?php endif; ?>
+
+<!-- pesi:item termin:1 -->
+<?php if (pesi_upcoming($d = pesi('termin_1_datum', '2026-12-04', 'date', 'Datum'),
+                        pesi('termin_1_bis', '', 'date', 'Bis (bei mehreren Tagen)'))): ?>
+<article>
+  <time datetime="<?= $d ?>"><?= pesi_date($d, 'j. M') ?></time>
+  <h3><?= pesi('termin_1_titel', 'Achtsamkeitsgruppe', 'text', 'Titel') ?></h3>
+  <?= pesi('termin_1_text', '<p>…</p>', 'richtext', 'Beschreibung') ?>
+</article>
+<?php endif; ?>
+<!-- /pesi:item -->
+```
+
+Keep each `pesi()` call of a date **inside** the parentheses of
+`pesi_until()`/`pesi_upcoming()` (an assignment like `$d = pesi(…)` there is
+fine). The dashboard finds them only there and then marks a past date as
+"vorbei", on its card and on the collapsed entry. Convert existing events
+newest-first or oldest-first as the site shows them; past ones that are still
+on the page can stay, they simply no longer render. A club that needs several
+logins, sign-ups or an archive over years is beyond pesi.
+
 ### Image type
 
 `image` stores the **image path** in the PHP file — exactly like a static `src`, just editable. The `pesi()` call wraps the path string; the actual file lives in the upload folder (`PESI_UPLOAD_DIR`, default `uploads/`).

@@ -1389,6 +1389,76 @@ function _pesi_exposure_probes(string $basePath, array $pages, ?string $page): a
     return $out;
 }
 
+/**
+ * Field IDs whose pesi() calls sit inside a pesi_until() or pesi_upcoming()
+ * call, one list per call, in source order. Only these dates expire; a
+ * "practice since 2015" date elsewhere on the page never counts as past.
+ * Uses the tokenizer like _pesi_scan(): text in comments, strings or HTML
+ * that merely looks like such a call is ignored.
+ */
+function _pesi_expiry_groups(string $src): array {
+    if (!function_exists('token_get_all')) return [];
+    try {
+        $raw = token_get_all($src);
+    } catch (Throwable $e) {
+        return [];
+    }
+    $tok = [];
+    $pos = 0;
+    foreach ($raw as $r) {
+        $text = is_array($r) ? $r[1] : $r;
+        $tok[] = [is_array($r) ? $r[0] : $r, $text, $pos];
+        $pos += strlen($text);
+    }
+    $skip = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+    $notCall = [T_OBJECT_OPERATOR, T_DOUBLE_COLON, T_FUNCTION, T_NEW, T_CONST];
+    if (defined('T_NULLSAFE_OBJECT_OPERATOR')) $notCall[] = T_NULLSAFE_OBJECT_OPERATOR;
+    $calls = _pesi_scan($src)['calls'];
+    $out = [];
+    $n = count($tok);
+    for ($i = 0; $i < $n; $i++) {
+        if ($tok[$i][0] !== T_STRING || !in_array($tok[$i][1], ['pesi_until', 'pesi_upcoming'], true)) continue;
+        for ($p = $i - 1; $p >= 0 && in_array($tok[$p][0], $skip, true); $p--);
+        if ($p >= 0 && in_array($tok[$p][0], $notCall, true)) continue;
+        for ($j = $i + 1; $j < $n && in_array($tok[$j][0], $skip, true); $j++);
+        if ($j >= $n || $tok[$j][1] !== '(') continue;
+        // Matching closing parenthesis
+        $depth = 0;
+        for ($k = $j; $k < $n; $k++) {
+            if ($tok[$k][1] === '(') $depth++;
+            elseif ($tok[$k][1] === ')' && --$depth === 0) break;
+        }
+        if ($k >= $n) continue;
+        $ids = [];
+        foreach ($calls as $c) {
+            if ($c['error'] === '' && $c['pos'] > $tok[$j][2] && $c['pos'] < $tok[$k][2]) $ids[] = $c['id'];
+        }
+        if ($ids) $out[] = $ids;
+    }
+    return $out;
+}
+
+/**
+ * Date fields that have expired: inside a pesi_until()/pesi_upcoming() call
+ * whose latest date lies before today. Same rule as on the website, so the
+ * dashboard marks exactly what the page no longer shows. Returns [id => true].
+ */
+function _pesi_past_ids(array $fields, string $src): array {
+    $out = [];
+    foreach (_pesi_expiry_groups($src) as $ids) {
+        $dates = [];
+        foreach ($ids as $id) {
+            if (($fields[$id]['type'] ?? '') !== 'date') continue;
+            $d = _pesi_safe_date((string)$fields[$id]['value']);
+            if ($d !== '') $dates[$id] = $d;
+        }
+        if ($dates && !pesi_until(max($dates))) {
+            foreach (array_keys($dates) as $id) $out[$id] = true;
+        }
+    }
+    return $out;
+}
+
 // ── Restore ──────────────────────────────────────────────────
 // Resets the file to generation $gen. This runs through
 // _pesi_commit(), so the current version moves into the rotation first and
@@ -2671,6 +2741,8 @@ function _pesi_strings(): array { return [
         'home_field'        => '1 Feld',
         'home_fields'       => '%d Felder',
         'blk_drag'          => 'Zum Sortieren ziehen',
+        'blk_past'          => 'vorbei',
+        'date_past'         => 'Dieses Datum ist vorbei.',
     ],
     'en' => [
         'err_not_readable'  => 'This page cannot be read right now. Your content is unchanged. Please contact whoever looks after your website. (Code T1)',
@@ -2853,6 +2925,8 @@ function _pesi_strings(): array { return [
         'home_field'        => '1 field',
         'home_fields'       => '%d fields',
         'blk_drag'          => 'Drag to reorder',
+        'blk_past'          => 'past',
+        'date_past'         => 'This date has passed.',
     ],
 ]; }
 
@@ -3071,6 +3145,8 @@ body.tech .fc-label{margin-bottom:.15rem}
    Dot colours as in the panel above, so both belong together. */
 .fc-cnt{font-size:var(--fs-xs);color:var(--tx2);text-align:right;margin-top:.35rem;font-variant-numeric:tabular-nums}
 .fc-tgl{display:flex;align-items:center;gap:.4rem;font-size:var(--fs-xs);color:var(--tx2);margin:-.1rem 0 .6rem}
+/* An expired date: the same amber as the image description note (AA on white). */
+.fc-past{display:block;font-size:var(--fs-xs);font-weight:600;color:#8a5a00;margin:-.1rem 0 .6rem}
 .fc-tgl-dot{width:8px;height:8px;border-radius:50%;background:#1f9d55;flex:0 0 auto}
 .fc-off{border-left:3px solid #9aa0a6}
 .fc-off .fc-tgl{color:#8a5a00;font-weight:600}
@@ -3177,6 +3253,7 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .blk-drag:hover{color:var(--b);background:var(--bg2)}
 .blk-thumb{width:2rem;height:2rem;flex:0 0 auto;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--bd);background:var(--bg2)}
 .blk-head{font-weight:600;font-size:var(--fs-sm);color:var(--tx);white-space:nowrap}
+.blk-past{flex:0 0 auto;font-size:var(--fs-xs);font-weight:600;color:#8a5a00;background:#8a5a0012;border:1px solid #8a5a0040;border-radius:var(--r-sm);padding:0 var(--sp-2)}
 .blk-prev{flex:1 1 auto;min-width:0;font-size:var(--fs-sm);color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .blk-fields{padding:var(--sp-4)}
 .blk-foot{display:flex;gap:var(--sp-2);flex-wrap:wrap;padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--bd)}
@@ -3670,6 +3747,9 @@ body.tech .pc-f{display:block}
                   if (_pesi_block_image_slot($pageSrcNow, $grpB) !== null) $imgGroups[$g] = true;
               }
               $maxUploads = (int)ini_get('max_file_uploads') ?: 20;
+              // Dates in pesi_until()/pesi_upcoming() that lie before today: the
+              // card and the collapsed entry say so, the client decides.
+              $pastIds = _pesi_past_ids($fields, $pageSrcNow);
               // Short fields side by side in pairs when there is room (CSS grid).
               // Only two consecutive ones in the same entry, otherwise a gap would
               // remain next to a single short field.
@@ -3692,7 +3772,8 @@ body.tech .pc-f{display:block}
               foreach ($fields as $fid => $f) {
                   $k = $blockOf[$fid] ?? null;
                   if ($k === null) continue;
-                  $blkSum[$k] ??= ['img' => '', 'text' => '', 'force' => false];
+                  $blkSum[$k] ??= ['img' => '', 'text' => '', 'force' => false, 'past' => false];
+                  if (isset($pastIds[$fid])) $blkSum[$k]['past'] = true;
                   if ($f['type'] === 'image' && $blkSum[$k]['img'] === '') $blkSum[$k]['img'] = _pesi_safe_asset_url((string)$f['value']);
                   if (in_array($f['type'], ['text', 'textarea', 'richtext'], true) && !isset($altFor[$fid]) && $blkSum[$k]['text'] === '') {
                       $blkSum[$k]['text'] = _pesi_version_text((string)$f['value'], $f['type']);
@@ -3711,13 +3792,14 @@ body.tech .pc-f{display:block}
                 if ($bk !== null):
                   $bm = $blkMeta[$bk];
             ?>
-              <?php $bs = $blkSum[$bk] ?? ['img' => '', 'text' => '', 'force' => false];
+              <?php $bs = $blkSum[$bk] ?? ['img' => '', 'text' => '', 'force' => false, 'past' => false];
                 $bOpen = $bs['force'] || ($grpCount[$bm['group']] ?? 0) <= 3; ?>
               <details class="blk" data-group="<?=htmlspecialchars($bm['group'])?>" data-inst="<?=(int)$bm['inst']?>"<?=$bOpen ? ' open' : ''?><?=$bs['force'] ? ' data-force' : ''?>>
                 <summary class="blk-sum">
                   <span class="blk-drag" title="<?=htmlspecialchars($t['blk_drag'])?>" aria-hidden="true">⠿</span>
                   <?php if ($bs['img'] !== ''): ?><img class="blk-thumb" src="<?=htmlspecialchars($bs['img'])?>" alt="" loading="lazy"><?php endif; ?>
                   <h2 class="blk-head"><?=htmlspecialchars(_pesi_human($bm['group']))?> · <?=$t['blk_entry']?> <?=$bm['inst']?></h2>
+                  <?php if ($bs['past']): ?><span class="blk-past"><?=htmlspecialchars($t['blk_past'])?></span><?php endif; ?>
                   <?php if ($bs['text'] !== ''): ?><span class="blk-prev"><?=htmlspecialchars($bs['text'])?></span><?php endif; ?>
                 </summary>
                 <div class="blk-fields fgrid">
@@ -3744,6 +3826,9 @@ body.tech .pc-f{display:block}
                       $ft['visible'] ? $t['fc_in_section'] : $t['fc_in_hidden'],
                       _pesi_human($ft['group'])
                   ))?></span>
+                <?php endif; ?>
+                <?php if (isset($pastIds[$id])): ?>
+                  <span class="fc-past"><?=htmlspecialchars($t['date_past'])?></span>
                 <?php endif; ?>
                 <div class="fc-meta">
                   <span class="fc-id"><?=htmlspecialchars($id)?></span>

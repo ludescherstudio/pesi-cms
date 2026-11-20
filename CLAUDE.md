@@ -99,6 +99,13 @@ the same source and commit the same way.
   `date` stores `YYYY-MM-DD`; `pesi_date()` in `pesi-lib.php` writes it out
   in DE/EN without ext/intl. `url` cards offer the registered pages in a
   nameless `<select>` (never submitted, `data-nodirty`).
+- **Dated content** (notices, events): `pesi_until($date)` and
+  `pesi_upcoming($date, $end)` in `pesi-lib.php` decide on every page view;
+  both use the later valid date, empty means no end. The dashboard finds the
+  `pesi()` calls *inside* their parentheses with the tokenizer
+  (`_pesi_expiry_groups()`) and marks past dates (`_pesi_past_ids()`), on the
+  card and on the collapsed entry — the same rule as the website, so both
+  always agree. Only these dates are marked; nothing is deleted.
 - **Images**: every upload loses EXIF/XMP/IPTC losslessly in plain PHP
   (`_pesi_jpeg_strip()` & co.) and, with gd, is scaled down to
   `PESI_IMAGE_MAX_EDGE`. A `text` field `<image-id>_alt` is the image's

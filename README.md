@@ -365,6 +365,26 @@ Under every `url` field the dashboard offers the pages registered in `$PESI_PAGE
 
 A default pesi cannot read as a date prints as nothing. An invalid value from the dashboard rejects the save like an invalid link.
 
+**Dates that expire — `pesi_until()` and `pesi_upcoming()`.** A holiday notice or a list of events should disappear by itself once its day has passed. Both helpers are checked on every page view, so no cron job is needed:
+
+```php
+<?php if (pesi_until(pesi('closed_until', '2027-01-06', 'date', 'Show notice until'))): ?>
+  <p class="notice"><?= pesi('closed_text', 'The practice is closed until 6 January.', 'text', 'Notice') ?></p>
+<?php endif; ?>
+
+<!-- pesi:item event:1 -->
+<?php if (pesi_upcoming($d = pesi('event_1_date', '2026-12-04', 'date', 'Date'),
+                        pesi('event_1_end', '', 'date', 'Until (several days)'))): ?>
+<article>
+  <time datetime="<?= $d ?>"><?= pesi_date($d) ?></time>
+  <h3><?= pesi('event_1_title', 'Mindfulness group', 'text', 'Title') ?></h3>
+</article>
+<?php endif; ?>
+<!-- /pesi:item -->
+```
+
+`pesi_until()` shows until that day, the day included. `pesi_upcoming()` shows an event until it has ended, using the later of start and end. An empty or invalid date means no end. "Today" follows the server's timezone (`date.timezone`). Keep the `pesi()` call inside the parentheses: the dashboard looks for it there and marks a date that has passed as such, on its card and on the collapsed entry. Nothing is deleted automatically; the client removes old entries when she wants. Another `date` field on the page, such as "in practice since 2015", is never marked.
+
 **`image`** — Page-bound image upload with real MIME and size validation. Before the image goes online, pesi strips camera metadata (EXIF, XMP, IPTC — including the GPS location a phone writes into every photo) and scales it down to `PESI_IMAGE_MAX_EDGE` pixels on the longer edge. The path is stored in the PHP source and is safe to use in `src`. Wrap only the path, never the whole `<img>` tag.
 
 ```php

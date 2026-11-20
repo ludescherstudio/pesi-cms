@@ -2388,6 +2388,24 @@ ok('… Diagnose-Bereich ist vorhanden, die Meldung kommt aus der Sprachtabelle'
 $kpReset();
 @unlink($kp);
 
+// Termine im Dashboard: vergangene Daten sind markiert, auch im eingeklappten Eintrag.
+grp('Dashboard — Termine „vorbei“');
+$tp = $ctl . '/site/privacy.php';
+$gestern = date('Y-m-d', strtotime('-1 day')); $morgen = date('Y-m-d', strtotime('+1 day'));
+file_put_contents($tp, "<?php require_once __DIR__ . '/pesi-core.php'; ?>\n"
+    . "<?php if (pesi_until(pesi('zu_bis', '$gestern', 'date', 'Hinweis bis'))): ?><p>x</p><?php endif; ?>\n"
+    . "<p><?= pesi('seit', '2015-03-01', 'date', 'Seit') ?></p>\n"
+    . "<!-- pesi:item termin:1 -->\n<?php if (pesi_upcoming(\$d = pesi('termin_1_datum', '$gestern', 'date', 'Datum'))): ?><p><?= pesi('termin_1_titel', 'Alt', 'text', 'Titel') ?></p><?php endif; ?>\n<!-- /pesi:item -->\n"
+    . "<!-- pesi:item termin:2 -->\n<?php if (pesi_upcoming(\$d = pesi('termin_2_datum', '$morgen', 'date', 'Datum'))): ?><p><?= pesi('termin_2_titel', 'Neu', 'text', 'Titel') ?></p><?php endif; ?>\n<!-- /pesi:item -->\n");
+$o = $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET', 'get' => ['page' => 'privacy.php']])['out'];
+$pastLine = '<span class="fc-past">' . htmlspecialchars($GLOBALS['t']['date_past']) . '</span>';
+ok('Hinweis und alter Termin tragen „vorbei“, sonst nichts', substr_count($o, $pastLine) === 2, (string)substr_count($o, $pastLine));
+ok('… die Zeile steht in der Karte des Datums', (bool)preg_match('/for="f_zu_bis"[^>]*>[^<]*<\/label>\s*' . preg_quote($pastLine, '/') . '/', $o));
+ok('eingeklappter Eintrag 1 sagt „vorbei“, Eintrag 2 nicht',
+    (bool)preg_match('/data-inst="1"[^>]*>.*?<span class="blk-past">' . preg_quote(htmlspecialchars($GLOBALS['t']['blk_past']), '/') . '<\/span>.*?<\/summary>/s', $o)
+    && !preg_match('/data-inst="2"[^>]*>(?:(?!<\/summary>).)*blk-past/s', $o));
+@unlink($tp);
+
 $ctlClean();
 
 // ── Zeitangabe in der Wiederherstellen-Rückfrage ─────────────
@@ -2432,6 +2450,34 @@ $r = _pesi_save($dp, _pesi_parse($dp), ['pesi_field_kurs' => '', 'pesi_field_t' 
 ok('ungültiger Standardwert, leer zurückgeschickt → bleibt, anderes Feld speichert',
     $r['type'] === 'success' && strpos((string)file_get_contents($dp), "'15.08.2026'") !== false
     && strpos((string)file_get_contents($dp), "'b'") !== false, $r['msg']);
+
+// ── Termine: pesi_until(), pesi_upcoming(), Markierung „vorbei“ ──
+grp('Termine — Helfer und Markierung');
+$heute = date('Y-m-d'); $gestern = date('Y-m-d', strtotime('-1 day')); $morgen = date('Y-m-d', strtotime('+1 day'));
+ok('pesi_until: heute zählt noch, gestern nicht, morgen schon',
+    pesi_until($heute) && !pesi_until($gestern) && pesi_until($morgen));
+ok('pesi_until: leer oder ungültig → ohne Ende sichtbar', pesi_until('') && pesi_until('15.08.2026'));
+ok('pesi_until nimmt die escapte Ausgabe von pesi()', !pesi_until(pesi('x', $gestern, 'date')));
+ok('pesi_upcoming: vergangener Tag weg, mit Ende morgen noch da',
+    !pesi_upcoming($gestern) && pesi_upcoming($gestern, $morgen) && !pesi_upcoming($gestern, ''));
+ok('pesi_upcoming: das spätere Datum zählt, auch wenn „bis“ vor dem Beginn liegt',
+    pesi_upcoming($morgen, $gestern) && pesi_upcoming('', $morgen) && pesi_upcoming('', ''));
+$xSrc = "<?php require '" . $scratch . "/core.php'; ?>\n"
+    . "<?php if (pesi_until(pesi('zu_bis', '$gestern', 'date', 'Bis'))): ?><p>HINWEIS</p><?php endif; ?>\n"
+    . "<?php if (pesi_upcoming(\$d = pesi('t_von', '$gestern', 'date', 'Von'), pesi('t_bis', '$morgen', 'date', 'Bis'))): ?><p>LAUFEND</p><?php endif; ?>\n"
+    . "<?php if (pesi_upcoming(pesi('alt', '$gestern', 'date', 'Alt'))): ?><p>ALT</p><?php endif; ?>\n"
+    . "<p>Seit <?= pesi('seit', '2015-03-01', 'date', 'Seit') ?></p>\n"
+    . "<?php // pesi_until(pesi('kommentar', '$gestern', 'date', 'K')) ?>\n"
+    . "<?php \$s = \"pesi_until(\"; \$o = null; if (false) { \$o->pesi_until(pesi('methode', '$gestern', 'date', 'M')); } ?>\n";
+$xp = page($xSrc);
+ok('Erkennung: nur echte Aufrufe, je Aufruf seine Felder',
+    _pesi_expiry_groups($xSrc) === [['zu_bis'], ['t_von', 't_bis'], ['alt']], json_encode(_pesi_expiry_groups($xSrc)));
+$past = _pesi_past_ids(_pesi_parse($xp), $xSrc);
+ok('vorbei: Hinweis und alter Termin, nicht der laufende, nicht „seit 2015“',
+    array_keys($past) === ['zu_bis', 'alt'], json_encode(array_keys($past)));
+$out = render($xp);
+ok('Website zeigt nur, was noch gilt', strpos($out, 'HINWEIS') === false && strpos($out, 'LAUFEND') !== false
+    && strpos($out, 'ALT') === false, $out);
 
 // ── Fokuspunkt: <bild-id>_focus ──────────────────────────────
 grp('Fokuspunkt — Zuordnung und Prüfung');
