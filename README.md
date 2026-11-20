@@ -286,7 +286,7 @@ define('BRAND_LOGO', '/assets/logo.svg');
 define('BRAND_LOGO', 'https://yourdomain.com/assets/logo.png');
 ```
 
-Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and in the sidebar. Leave empty to show the pesi logo instead.
+Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and in the sidebar. Leave empty to show the pesi logo instead. If white text on your brand colour falls below 4.5:1 contrast, the dashboard reports it as code `T12` — pick a darker shade.
 
 **Light and dark backgrounds.** The login card is white, the sidebar is dark. `BRAND_LOGO` is the logo for light backgrounds — usually the one on the website — and that is all you need: in the sidebar pesi shows it on a small white plate, so a dark logo stays readable. If you have a light version of the logo (for example from a dark website footer), add it and the sidebar uses it instead of the plate:
 
@@ -295,7 +295,7 @@ define('BRAND_LOGO',      '/assets/logo.svg');        // dark logo, for the whit
 define('BRAND_LOGO_DARK', '/assets/logo-white.svg');  // light version, for the dark sidebar
 ```
 
-pesi never inverts a logo's colours automatically: a dark blue logo would turn orange. If white text on your brand colour falls below 4.5:1 contrast, the dashboard reports it as code `T12` — pick a darker shade.
+pesi never inverts a logo's colours automatically: a dark blue logo would turn orange.
 
 ---
 
