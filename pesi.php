@@ -23,7 +23,7 @@ require_once $corePath;
 // (only one of the two replaced) or a pesi-core.php from 0.3 that does not
 // load pesi-lib.php yet would otherwise end in a fatal error somewhere. The
 // public website is not affected; it does not need pesi.php.
-$pesiVersion = '0.6.0';
+$pesiVersion = '0.6.1';
 if (!defined('PESI_VERSION') || PESI_VERSION !== $pesiVersion) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -3093,7 +3093,7 @@ textarea.fi{resize:vertical;min-height:85px;line-height:1.65}
 .fc .ql-toolbar .ql-active .ql-stroke{stroke:var(--b)!important}
 .fc .ql-toolbar button:hover .ql-fill,
 .fc .ql-toolbar .ql-active .ql-fill{fill:var(--b)!important}
-.fc .ql-container{background:var(--bg3)!important;border-color:var(--bd)!important;border-radius:0 0 var(--r2) var(--r2);color:var(--tx);font-family:system-ui,-apple-system,sans-serif;font-size:var(--fs-md)}
+.fc .ql-container{height:auto;background:var(--bg3)!important;border-color:var(--bd)!important;border-radius:0 0 var(--r2) var(--r2);color:var(--tx);font-family:system-ui,-apple-system,sans-serif;font-size:var(--fs-md)}
 .fc .ql-editor{min-height:110px;line-height:1.7}
 .fc .ql-editor.ql-blank::before{color:var(--tx3)!important;font-style:normal!important}
 .fc .ql-editor a{color:var(--b)}
