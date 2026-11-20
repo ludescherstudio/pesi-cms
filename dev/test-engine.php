@@ -2406,6 +2406,34 @@ ok('eingeklappter Eintrag 1 sagt „vorbei“, Eintrag 2 nicht',
     && !preg_match('/data-inst="2"[^>]*>(?:(?!<\/summary>).)*blk-past/s', $o));
 @unlink($tp);
 
+// Logo: die Anmeldekarte ist weiss, die Seitenleiste dunkel (0.7.1).
+grp('Logo — helle und dunkle Hintergründe');
+$coreFile = $ctl . '/site/pesi-core.php';
+$coreOrig = (string)file_get_contents($coreFile);
+$setLogo = function (string $light, string $dark) use ($coreFile, $coreOrig) {
+    $s = preg_replace_callback("/define\('BRAND_LOGO',[^\n]*\n/", fn() => "define('BRAND_LOGO', " . var_export($light, true) . ");\n", $coreOrig, 1, $n1);
+    $s = preg_replace_callback("/define\('BRAND_LOGO_DARK',[^\n]*\n/", fn() => "define('BRAND_LOGO_DARK', " . var_export($dark, true) . ");\n", $s, 1, $n2);
+    file_put_contents($coreFile, $s);
+    return $n1 === 1 && $n2 === 1;
+};
+$dash  = fn() => $ctlRun(['sid' => $a['sid'], 'ip' => '192.0.2.60', 'method' => 'GET'])['out'];
+$login = fn() => $ctlRun(['ip' => '192.0.2.71', 'method' => 'GET'])['out'];
+ok('pesi-core.php kennt BRAND_LOGO und BRAND_LOGO_DARK', $setLogo('/logo-dunkel.svg', ''));
+$o = $dash(); $l = $login();
+ok('nur ein Logo: Seitenleiste zeigt es auf der weissen Fläche',
+    (bool)preg_match('/<img src="\/logo-dunkel\.svg" [^>]*class="S-logo S-logo-plate">/', $o), substr($o, 0, 200));
+ok('… Anmeldekarte zeigt es ohne Fläche', (bool)preg_match('/<img src="\/logo-dunkel\.svg" [^>]*class="L-logo">/', $l));
+$setLogo('/logo-dunkel.svg', '/logo-hell.svg');
+$o = $dash(); $l = $login();
+ok('zwei Logos: Seitenleiste zeigt die helle Fassung, ohne Fläche',
+    (bool)preg_match('/<img src="\/logo-hell\.svg" [^>]*class="S-logo">/', $o) && strpos($o, 'S-logo-plate">') === false);
+ok('… Anmeldekarte bleibt beim Logo für helle Hintergründe',
+    strpos($l, 'src="/logo-dunkel.svg"') !== false && strpos($l, 'logo-hell.svg') === false);
+$setLogo('', '');
+$o = $dash();
+ok('kein Logo: das pesi-Logo, ohne Fläche', (bool)preg_match('/<img src="data:image\/svg\+xml;base64,[^"]+" alt="pesi CMS" class="S-logo">/', $o));
+file_put_contents($coreFile, $coreOrig);
+
 $ctlClean();
 
 // ── Zeitangabe in der Wiederherstellen-Rückfrage ─────────────

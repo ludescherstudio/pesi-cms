@@ -23,7 +23,7 @@ require_once $corePath;
 // (only one of the two replaced) or a pesi-core.php from 0.3 that does not
 // load pesi-lib.php yet would otherwise end in a fatal error somewhere. The
 // public website is not affected; it does not need pesi.php.
-$pesiVersion = '0.7.0';
+$pesiVersion = '0.7.1';
 if (!defined('PESI_VERSION') || PESI_VERSION !== $pesiVersion) {
     http_response_code(500);
     header('Content-Type: text/plain; charset=utf-8');
@@ -2959,6 +2959,11 @@ if (preg_match('/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i', $bc, $m)) {
 if (!preg_match('/^#[0-9a-f]{6}$/i', $bc)) $bc = '#a3611b';
 $sn   = defined('BRAND_NAME')  ? BRAND_NAME  : 'pesi CMS';
 $logo = defined('BRAND_LOGO') && BRAND_LOGO ? BRAND_LOGO : null;
+// The login card is always white, the sidebar always dark. BRAND_LOGO is the
+// logo for light backgrounds; BRAND_LOGO_DARK an optional light version for
+// the sidebar. Without it the sidebar puts BRAND_LOGO on a white plate, so a
+// dark logo never disappears. No colour inversion: it ruins brand colours.
+$logoDark = defined('BRAND_LOGO_DARK') && BRAND_LOGO_DARK ? BRAND_LOGO_DARK : null;
 // Richtext needs ext/dom: without it only plain text would be left after saving.
 // Then no editor but a read-only view with a notice (T17).
 $rtEditable = class_exists('DOMDocument');
@@ -3063,6 +3068,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:v
 .S{width:250px;background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:20;transition:transform .3s ease}
 .S-head{padding:1.3rem 1.3rem .25rem}
 .S-logo{display:block;height:28px;width:auto}
+/* A logo for light backgrounds on the dark sidebar: a white plate around it. */
+.S-logo-plate{box-sizing:content-box;max-width:calc(100% - 2 * var(--sp-2));padding:var(--sp-1) var(--sp-2);background:#ffffff;border-radius:var(--r-sm)}
 .S-site{padding:0 1.3rem;font-size:var(--fs-xs);color:var(--tx2);margin-bottom:1.8rem}
 .S-lbl{padding:0 1.3rem;font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin-bottom:.4rem}
 
@@ -3487,8 +3494,10 @@ body.tech .pc-f{display:block}
 <div class="A">
   <nav class="S" id="sidebar">
     <div class="S-head">
-      <?php if ($logo): ?>
-      <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="S-logo">
+      <?php if ($logoDark): ?>
+      <img src="<?=htmlspecialchars($logoDark)?>" alt="<?=htmlspecialchars($sn)?>" class="S-logo">
+      <?php elseif ($logo): ?>
+      <img src="<?=htmlspecialchars($logo)?>" alt="<?=htmlspecialchars($sn)?>" class="S-logo S-logo-plate">
       <?php else: ?>
       <img src="<?=$PESI_LOGO?>" alt="pesi CMS" class="S-logo">
       <?php endif; ?>

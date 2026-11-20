@@ -286,7 +286,16 @@ define('BRAND_LOGO', '/assets/logo.svg');
 define('BRAND_LOGO', 'https://yourdomain.com/assets/logo.png');
 ```
 
-Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and in the sidebar. Leave empty to show the pesi logo instead. If white text on your brand colour falls below 4.5:1 contrast, the dashboard reports it as code `T12` — pick a darker shade.
+Supported formats: SVG, PNG, JPG, WebP. The logo appears on the login screen and in the sidebar. Leave empty to show the pesi logo instead.
+
+**Light and dark backgrounds.** The login card is white, the sidebar is dark. `BRAND_LOGO` is the logo for light backgrounds — usually the one on the website — and that is all you need: in the sidebar pesi shows it on a small white plate, so a dark logo stays readable. If you have a light version of the logo (for example from a dark website footer), add it and the sidebar uses it instead of the plate:
+
+```php
+define('BRAND_LOGO',      '/assets/logo.svg');        // dark logo, for the white login card
+define('BRAND_LOGO_DARK', '/assets/logo-white.svg');  // light version, for the dark sidebar
+```
+
+pesi never inverts a logo's colours automatically: a dark blue logo would turn orange. If white text on your brand colour falls below 4.5:1 contrast, the dashboard reports it as code `T12` — pick a darker shade.
 
 ---
 
@@ -680,6 +689,7 @@ define('PESI_PASSWORD_CHANGE', true);              // Client may change it in th
 define('BRAND_NAME',          'My Project');       // Shown in the sidebar and the browser tab
 define('BRAND_COLOR',         '#a3611b');          // Any CSS hex color — dashboard accent (4.5:1 against white)
 define('BRAND_LOGO',          '');                 // Path to logo image — empty = pesi logo
+define('BRAND_LOGO_DARK',     '');                 // Optional light version for the dark sidebar — empty = BRAND_LOGO on a white plate
 define('LANG',                'en');               // 'en' (default) or 'de'
 define('PESI_BACKUP_ENABLED', true);               // Keep earlier states of every page
 define('PESI_BACKUP_COUNT',   5);                  // How many, 1–20 — listed under "Earlier versions"
@@ -736,6 +746,10 @@ The PHP file remains the single source of truth, so developer changes and dashbo
 An update replaces exactly two files: **`pesi.php` and `pesi-lib.php`**. Upload both from the same release. `pesi-core.php` (your settings, your `$PESI_STRINGS`) and `pesi-content.php` (the client's shared details) are never part of an update, and your pages keep their `require_once 'pesi-core.php'`.
 
 Settings added in a later release take their default automatically, so an update never requires editing `pesi-core.php`. If `pesi.php` and `pesi-lib.php` come from different releases, the dashboard refuses to start and says so; the public website is not affected.
+
+### To 0.7.1
+
+Upload `pesi.php` and `pesi-lib.php`. A dark `BRAND_LOGO` no longer disappears in the dark sidebar: pesi shows it on a white plate there. If you have a light version of your logo, add `define('BRAND_LOGO_DARK', '/path/to/logo-white.svg');` to `pesi-core.php`; without the line the plate applies.
 
 ### From 0.6 to 0.7
 

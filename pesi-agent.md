@@ -339,7 +339,7 @@ exposes this file as **Shared details** (name it **Stammdaten** in `$PESI_PAGES`
    contains `$`, which is safe in single quotes.)
 2. **`BRAND_NAME`** — the client/project name shown in the dashboard header and login screen.
 3. **`BRAND_COLOR`** — try to match the site's primary color. Scan the main CSS file for a dominant `--primary`, `--accent`, or hex value used in headings and buttons. If unclear, leave the default `#a3611b`. White text sits on the colour and must reach 4.5:1 contrast; otherwise the dashboard reports code T12 — open the diagnostics panel after the first login and check.
-4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo.
+4. **`BRAND_LOGO`** — if the site has a logo at a predictable path (e.g. `/assets/logo.svg`, `/img/logo.png`), set it. Otherwise leave empty — the dashboard shows the pesi logo. Use the version for light backgrounds; the sidebar shows it on a white plate. Set **`BRAND_LOGO_DARK`** only if the site really has a light version (often in a dark footer or header); never make one by inverting colours.
 5. **`LANG`** — `'en'` is the default. Set `'de'` when the site or the client is German-speaking; the German dashboard uses formal address (*Sie*). Name the pages in `$PESI_PAGES` (Step 7) in the same language.
 
 Leave these alone unless the site needs it — the defaults are sane:

@@ -4,7 +4,7 @@
 // in pesi-core.php, which an update never touches. Documentation: README.md
 
 // pesi.php checks on start that it comes from the same release.
-if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.7.0');
+if (!defined('PESI_VERSION')) define('PESI_VERSION', '0.7.1');
 
 // ── Defaults ─────────────────────────────────────────────────
 // Everything pesi-core.php does not set. New settings of later releases
@@ -14,6 +14,7 @@ foreach ([
     'BRAND_NAME'            => 'pesi',
     'BRAND_COLOR'           => '#a3611b',
     'BRAND_LOGO'            => '',
+    'BRAND_LOGO_DARK'       => '',
     'LANG'                  => 'de',
     'PESI_BACKUP_ENABLED'   => true,
     'PESI_BACKUP_COUNT'     => 5,

@@ -13,6 +13,7 @@ define('PESI_PASSWORD_CHANGE', true);   // client may change it in the dashboard
 define('BRAND_NAME',  'My Website');
 define('BRAND_COLOR', '#a3611b');          // any hex value; white text needs 4.5:1 (diagnostic T12)
 define('BRAND_LOGO',  '');                 // e.g. '/assets/logo.svg' — empty = pesi logo
+define('BRAND_LOGO_DARK', '');            // optional light version for the dark sidebar; empty = BRAND_LOGO on a white plate
 // Dashboard language: 'en' = English, 'de' = Deutsch (formal "Sie").
 define('LANG',        'en');
 define('PESI_BACKUP_ENABLED', true);
